@@ -391,6 +391,8 @@ only) is what limits where it works from.
    after each boot. It is **advisory**: root on the VM can defeat it, so the
    idle poweroff is the real backstop. Set `max_run_duration=` (empty) to turn
    either off.
+   With `test_runner` on (the default for KubeVirt), the pinned test toolchain
+   is installed here too; see [The test runner](#the-test-runner).
 4. **Tailnet.** With the OAuth client: delete an *offline* device with the same
    hostname and `tag:worker` (so the new node is not renamed `NAME-1`; an
    untagged device is never touched), then mint a **single-use, pre-authorized,
@@ -418,6 +420,35 @@ only) is what limits where it works from.
 Sign in with `worker login NAME claude` (and `codex`), then use comebye as
 usual. Git push credentials are yours to arrange (a per-repo deploy key, or a
 temporary `gh auth login --web` on the VM).
+
+## The test runner
+
+A worker can run comebye's heavy suites (`go test ./internal/...`, `tools/ci/browser.sh`)
+itself, so they do not load the desktop host. `test_runner=true` (the default for
+`provider=kubevirt`, off for the clouds, refused for OpenShell sandboxes) installs, as root,
+right after the packages in step 3:
+
+- **Go** at `go.mod`'s toolchain version, in `/usr/local/go`;
+- **Node** at CI's major version, in `/usr/local/lib/node-vX-linux-x64`;
+- **Chrome for Testing** (a fixed build at a fixed URL, unlike the stable channel's deb), in
+  `/opt/chrome-for-testing/VERSION`, as `google-chrome` on `PATH`;
+- Chrome's libraries (its `deb.deps`, with Debian 13's `t64` names where they apply), fonts
+  (Liberation, DejaVu, Noto Color Emoji), `python3` and `gnupg` for `tools/uitest/run.sh`.
+
+All three are pinned by version **and sha256** in `tools/worker/testrunner.go`; a download that
+does not match is refused before it is unpacked. Bump them on purpose: a test fails if Go stops
+matching `go.mod`/CI or Node's major stops matching CI's. The links live in `/usr/local/bin`
+and the versions in `/etc/comebye-worker/test-runner`. x86_64 only (Chrome for Testing has no
+Linux arm64 build). `npm ci` for `tools/uitest` happens on the first run of a suite, as anywhere.
+
+- `worker toolchain NAME` installs (or upgrades to) the pins on an **existing** VM and does
+  nothing else: no tailnet step, no service restart, `/data` untouched. Re-running it is a
+  no-op when the versions already match.
+- `worker testcheck NAME [--remote-repo REPO] [--quick]` proves the VM runs the tests: the
+  pinned versions answer, then `go test -p 4 ./internal/...` and `tools/ci/browser.sh smoke`
+  pass in `/data/code/REPO` (default `comebye`), with the output streamed. `--quick` checks
+  the versions only. It runs the pinned tools first on `PATH` (pi's mise Node is not CI's) and
+  with `GOTOOLCHAIN=local`.
 
 ## Bringing a branch back from a worker that cannot push
 
@@ -560,6 +591,7 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # vm_memory=32Gi                        # request = limit
 # boot_disk_gb=40
 # data_disk_gb=150
+# test_runner=true                      # the pinned Go, Node and Chrome (see The test runner)
 ```
 
 `project`, `zone` and `ssh_source_cidr` do not apply. The tool never reads or prints the

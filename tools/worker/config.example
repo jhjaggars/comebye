@@ -57,6 +57,10 @@ hub_peer_url=https://hub.your-tailnet.ts.net
 # pi is pinned; bump it on purpose.
 # pi_version=1.5.0
 
+# The test runner: Go, Node and Chrome for Testing, pinned by version and sha256 (tools/worker/testrunner.go),
+# so the worker can run go test ./internal/... and tools/ci/browser.sh. Default: true for kubevirt, false elsewhere.
+# test_runner=true
+
 # LLM gateway (LiteLLM on the tailnet). Off unless llm_gateway_url is set. Each worker then
 # gets its OWN virtual key (alias worker-NAME) with the limits below, delivered over ssh
 # stdin into pi's auth.json (mode 600), and deleted again by destroy. The provisioning key
