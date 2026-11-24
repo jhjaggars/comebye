@@ -207,7 +207,7 @@
       display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-10); padding: var(--sp-10) var(--sp-12); min-width: 0;
       color: inherit; text-decoration: none;
     }
-    .rc-card:hover, .pgs-card:hover, .pgs-hit:hover, .pr-card:hover { background: var(--panel2); }
+    @media (hover: hover) { .rc-card:hover, .pgs-card:hover, .pgs-hit:hover, .pr-card:hover { background: var(--panel2); } }
     .rc-card:focus-visible, .pgs-card:focus-visible, .pgs-hit:focus-visible, .pr-card:focus-visible { outline-offset: -1px; }
     .rc-card.current, .pgs-card.current, .pgs-hit.current, .pr-card.current { border-color: var(--blue); }
     /* Chip: one shape and a set of tones. A chip class adds only what is its own (layout, truncation).
@@ -534,7 +534,7 @@
       font: inherit; font-size: var(--fs-14); cursor: pointer;
       padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); -webkit-tap-highlight-color: transparent;
     }
-    .tr-line:hover { color: var(--text); }
+    @media (hover: hover) { .tr-line:hover { color: var(--text); } }
     /* The chat scrolls, so the one focus ring sits inside the line (an outer one would be clipped at the edge). */
     .tr-line:focus-visible, .tr-row:focus-visible { outline-offset: -2px; color: var(--text); }
     .tr-pre:focus-visible, .sa-steps:focus-visible { outline-offset: 1px; }
@@ -564,7 +564,7 @@
       font: inherit; font-size: var(--fs-13); cursor: pointer;
       padding: var(--sp-4) var(--sp-6); min-height: var(--hit-32); -webkit-tap-highlight-color: transparent;
     }
-    .tr-row:hover { background: var(--panel2); }
+    @media (hover: hover) { .tr-row:hover { background: var(--panel2); } }
     .tr-v { flex: none; }
     .tr-o { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: var(--fs-12) var(--ff-code); }
     .tr-st { flex: none; margin-left: auto; font-size: var(--fs-11); font-variant-numeric: tabular-nums; }
@@ -697,7 +697,7 @@
       font-size: var(--fs-14); color: var(--muted);
     }
     @media (pointer: coarse) { .activity { min-height: var(--hit-44); } }
-    .activity:hover { color: var(--text); }
+    @media (hover: hover) { .activity:hover { color: var(--text); } }
     .activity:focus-visible { outline-offset: -2px; color: var(--text); }
     .activity .dot { flex: none; width: 8px; height: 8px; }
     .activity .dot.working { animation-duration: 1.2s; }
@@ -1185,7 +1185,7 @@
     .agent .sub .lg-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
     .us-chip { display: inline-block; max-width: 100%; padding-top: 0; padding-bottom: 0; font-weight: 400; line-height: 20px; text-decoration: none; }
     a.us-chip { min-height: calc(var(--hit-32) - var(--sp-8)); } /* 24px: the least a link target may be (WCAG 2.5.8); coarse pointers get a bigger area below */
-    a.us-chip:hover { text-decoration: underline; }
+    @media (hover: hover) { a.us-chip:hover { text-decoration: underline; } }
 
     .d-usage { margin-top: var(--sp-2); }
     /* Context usage next to the status word: a chip whose tone is the fill (muted, warning from 80%, danger from 95%). */
@@ -1555,7 +1555,7 @@
     /* The open item: the question in full, then its body, the answer box and the buttons. */
     .td-item.open { border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: var(--r-12); margin-block: var(--sp-4); }
     .td-item.open > .td-row { align-items: baseline; padding: var(--sp-10) var(--sp-12) var(--sp-4); }
-    .td-item.open > .td-row:hover { background: none !important; }
+    @media (hover: hover) { .td-item.open > .td-row:hover { background: none !important; } }
     .td-item.open .td-q { order: 4; flex: 1 1 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; font-size: var(--fs-15); font-weight: 600; }
     .td-item.open .td-rm { order: 2; flex: 1 1 auto; }
     .td-item.open .td-chev { order: 3; }
@@ -1713,7 +1713,7 @@
       position: relative; display: flex; align-items: center; justify-content: center; flex: 1 1 0; min-width: var(--hit-36); min-height: var(--hit-36); padding: var(--sp-4);
       background: none; border: 0; border-radius: var(--r-10); color: var(--text); font: inherit; cursor: pointer;
     }
-    .nv:hover { background: var(--bg-hover); }
+    @media (hover: hover) { .nv:hover { background: var(--bg-hover); } }
     .nv.on { background: var(--bg-sel); box-shadow: inset 0 0 0 1px var(--blue); }
     .nv:focus-visible { outline-offset: -1px; }
     .nv svg { width: 20px; height: 20px; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -1977,7 +1977,7 @@
         grid-column: 1; grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-10);
         padding: var(--sp-14) 0; min-width: 0; border: 0; border-radius: 0; background: var(--bg); color: var(--muted); font: inherit; cursor: pointer;
       }
-      body.list-collapsed #list-rail:hover { color: var(--text); background: var(--panel); }
+      @media (hover: hover) { body.list-collapsed #list-rail:hover { color: var(--text); background: var(--panel); } }
       #list-rail:focus-visible { outline-offset: -2px; }
       .lr-badge { min-width: 24px; padding: 1px var(--sp-6); border-radius: var(--r-pill); font-size: var(--fs-12); font-weight: 650; line-height: 1.4; text-align: center; color: var(--bg); }
       .lr-need { background: var(--orange); }
@@ -1987,7 +1987,7 @@
       #list header { background: transparent; }
       #detail, #detail-empty, .page, .screen, #review { background: var(--bg); }
       body.list-collapsed #list-rail { background: var(--nav-bg); }
-      body.list-collapsed #list-rail:hover { background: var(--panel); }
+      @media (hover: hover) { body.list-collapsed #list-rail:hover { background: var(--panel); } }
       /* The footer is part of the column (no lighter strip on the recessed nav); the host filter's pills and the rail's hover stay --panel, one step above it. */
       body {
         display: grid; height: 100vh; height: 100dvh; overflow: hidden;
@@ -2101,7 +2101,7 @@
     .rc-made { display: flex; flex-wrap: wrap; gap: var(--sp-6); }
     .rc-madeline { margin-top: var(--sp-4); }
     .rc-pchip { display: inline-block; max-width: 100%; font-size: var(--fs-12); padding: var(--sp-2) var(--sp-8); border-radius: var(--r-6); background: var(--chip-purple); color: var(--purple); text-decoration: none; overflow-wrap: anywhere; }
-    a.rc-pchip:hover { text-decoration: underline; }
+    @media (hover: hover) { a.rc-pchip:hover { text-decoration: underline; } }
     a.rc-pchip:focus-visible { outline-offset: 1px; }
     .rc-openat { margin-left: auto; color: var(--blue); }
     .rc-prod .rc-title .rc-tag { margin-right: var(--sp-4); }
@@ -2385,7 +2385,7 @@
     .pgs-tray .btn { flex: none; }
     .pgs-tray #pgs-sendc { position: sticky; bottom: 0; }
     .pgs-cmtq.link { display: block; width: 100%; padding: 0; background: none; border: 0; font: inherit; text-align: left; cursor: pointer; }
-    .pgs-cmtq.link:hover { color: var(--text); }
+    @media (hover: hover) { .pgs-cmtq.link:hover { color: var(--text); } }
     .pgs-cmtmeta { display: flex; align-items: center; gap: var(--sp-8); margin-top: var(--sp-6); color: var(--muted); font-size: var(--fs-12); }
     .pgs-senth { margin-top: var(--sp-8); }
     .pgs-cmt.sent { background: var(--panel); }
@@ -2483,7 +2483,7 @@
     /* Prices: a read-only browser of the instance types a provisioner can build, with what each would cost. */
     .pr-browse { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-8); margin: 0 0 var(--sp-10); padding: var(--sp-10) var(--sp-12); min-height: var(--hit-44); border: 1px solid var(--border); border-radius: var(--r-12); background: var(--panel); color: var(--text); text-decoration: none; font-size: var(--fs-14); font-weight: 600; }
     .pr-browse span { color: var(--muted); font-weight: 400; font-size: var(--fs-13); }
-    .pr-browse:hover { background: var(--panel2); } .pr-browse:focus-visible { outline-offset: -1px; }
+    @media (hover: hover) { .pr-browse:hover { background: var(--panel2); } } .pr-browse:focus-visible { outline-offset: -1px; }
     .pz-wrap { display: flex; flex-direction: column; gap: var(--sp-12); max-width: 1240px; margin: 0 auto; min-width: 0; }
     .pz-card { display: flex; flex-direction: column; gap: var(--sp-8); padding: var(--sp-12); min-width: 0; }
     .pz-card h3 { margin: 0; font-size: var(--fs-12); font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
@@ -2511,7 +2511,7 @@
     .pz-item { border: 1px solid var(--border); border-radius: var(--r-10); background: var(--panel); min-width: 0; }
     .pz-item.off { opacity: 0.72; }
     .pz-row { width: 100%; padding: var(--sp-8) var(--sp-12); min-height: var(--hit-44); font: inherit; font-size: var(--fs-14); color: var(--text); background: none; border: 0; text-align: left; cursor: pointer; border-radius: var(--r-10); }
-    .pz-row:hover { background: var(--panel2); } .pz-row:focus-visible { outline-offset: -2px; }
+    @media (hover: hover) { .pz-row:hover { background: var(--panel2); } } .pz-row:focus-visible { outline-offset: -2px; }
     .pz-type { font-weight: 600; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-8); align-items: baseline; }
     .pz-tag { font-weight: 400; font-size: var(--fs-12); padding: 1px var(--sp-8); border-radius: var(--r-8); border: 1px solid var(--border); color: var(--muted); }
     .pz-cell { display: block; text-align: right; font-variant-numeric: tabular-nums; min-width: 0; }
@@ -2862,7 +2862,8 @@
     #sp .doc h1 { font-size: var(--fs-20); margin: 0 0 var(--sp-8); } #sp .doc h2 { font-size: var(--fs-16); margin: var(--sp-20) 0 var(--sp-6); } #sp .doc h3 { font-size: var(--fs-15); margin: var(--sp-14) 0 var(--sp-4); }
     #sp .doc :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 8px; position: relative; border-radius: var(--r-6); }
     #sp .doc .anchor { margin-left: var(--sp-6); color: var(--muted); text-decoration: none; opacity: 0; font-weight: 400; }
-    #sp .doc :is(h1, h2, h3, h4, h5, h6):hover .anchor, #sp .doc .anchor:focus-visible { opacity: 1; }
+    #sp .doc .anchor:focus-visible { opacity: 1; }
+    @media (hover: hover) { #sp .doc :is(h1, h2, h3, h4, h5, h6):hover .anchor { opacity: 1; } }
     @media (hover: none) { #sp .doc .anchor { display: none; } }
     #sp .doc .cited { background: var(--mark-bg); padding: var(--sp-2) var(--sp-6); margin-left: -6px; }
     #sp .doc .flash, #sp .df.flash { animation: spflash 1.6s ease-out; }
@@ -2934,7 +2935,8 @@
       #detail.sp-open > #sp { grid-column: 2; grid-row: 2; }
       #detail.sp-open > #d-menu, #detail.sp-open > #subview { grid-row: 1; }
       #detail.sp-open #sp-grip { display: block; position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize; z-index: var(--z-raised); touch-action: none; }
-      #detail.sp-open #sp-grip:hover, #detail.sp-open.sp-drag #sp-grip, #sp-grip:focus-visible { background: var(--blue); opacity: .4; outline: 0; }
+      #detail.sp-open.sp-drag #sp-grip, #sp-grip:focus-visible { background: var(--blue); opacity: .4; outline: 0; }
+      @media (hover: hover) { #detail.sp-open #sp-grip:hover { background: var(--blue); opacity: .4; outline: 0; } }
       #detail.sp-drag { user-select: none; }
     }
     @media (max-width: 1099px) {

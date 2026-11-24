@@ -1,7 +1,8 @@
 // The press layer (#135): every tappable kind shows a pressed look while a finger is down, at phone size, driven with
 // real touch input (CDP Input.dispatchTouchEvent, which fires pointer events as a phone does). Checks, per kind: the
 // layer is there while held, still there just after a quick release (the 100 ms minimum), gone after the fade. Then: a
-// scroll gesture never shows it, a held row inside a scroller waits ~60 ms, and reduced motion drops the fade.
+// scroll gesture never shows it, a held row inside a scroller waits ~60 ms, reduced motion drops the fade, and no
+// highlight stays on a card after a tap on a device without hover (every :hover rule sits in @media (hover: hover)).
 //
 //   node press.mjs BASE OUT_DIR      (env: SCHEME; COMEBYE_BIN + COMEBYE_STATE_DIR to publish a page for the Pages card)
 import { launch } from "./lib.mjs";
@@ -237,6 +238,54 @@ await check("iOS: a passive touchstart listener is registered, so :active applie
     .then((r) => cdp.send("DOMDebugger.getEventListeners", { objectId: r.result.objectId }))
     .then((r) => r.listeners.filter((l) => l.type === "touchstart" && l.passive).length);
   if (!n) throw new Error("no passive touchstart listener on window");
+});
+
+// ---- hover does not stick (slice 2) ----
+await check("hover: every :hover rule is inside @media (hover: hover)", async () => {
+  const bare = await page.evaluate(() => {
+    const out = [];
+    const walk = (rules, gated) => {
+      for (const r of rules) {
+        if (r.media || r.conditionText !== undefined) { const g = gated || /\(\s*(any-)?hover\s*:\s*hover\s*\)/.test(r.conditionText || r.media?.mediaText || ""); walk(r.cssRules, g); continue; }
+        if (r.cssRules && !r.selectorText) { walk(r.cssRules, gated); continue; }
+        if (r.selectorText && /:hover/.test(r.selectorText) && !gated && !/::-webkit-scrollbar/.test(r.selectorText)) out.push(r.selectorText);
+      }
+    };
+    for (const s of document.styleSheets) { try { walk(s.cssRules, false); } catch {} }
+    return out;
+  });
+  if (bare.length) throw new Error("bare :hover rules (they stick after a tap):\n" + bare.join("\n"));
+});
+async function noStick(name, hash, sel) {
+  await check(`hover: a tapped ${name} is not left highlighted`, async () => {
+    await go(hash, sel);
+    const h = await page.locator(sel).first().elementHandle();
+    await h.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await page.waitForTimeout(150);
+    const bg0 = await h.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const b = await h.boundingBox();
+    await page.touchscreen.tap(b.x + 40, b.y + b.height / 2);
+    await page.waitForTimeout(500);
+    const [bg1, hov] = await h.evaluate((el) => [getComputedStyle(el).backgroundColor, el.matches(":hover")]);
+    if (bg1 !== bg0) throw new Error(`background ${bg0} at rest, ${bg1} after the tap (:hover ${hov})`);
+  });
+}
+await noStick("Peers card", "#/peers", ".pr-card");
+if (process.env.COMEBYE_BIN) await noStick("Pages card", "#/pages", ".pgs-card");
+
+await check("hover: with a mouse (1280 px, hover: hover) a card still lights up under the pointer", async () => {
+  const d = await launch({ width: 1280, height: 800, dark });
+  try {
+    await d.page.goto(base + "/#/peers", { waitUntil: "load" });
+    const c = d.page.locator(".pr-card").first();
+    await c.waitFor({ state: "visible" });
+    await d.page.mouse.move(5, 5);
+    const bg0 = await c.evaluate((el) => getComputedStyle(el).backgroundColor);
+    await c.hover();
+    await d.page.waitForTimeout(250);
+    const bg1 = await c.evaluate((el) => getComputedStyle(el).backgroundColor);
+    if (bg1 === bg0) throw new Error("no hover highlight with a mouse: " + bg0);
+  } finally { await d.browser.close(); }
 });
 
 if (errors.length) { failed++; console.log("FAIL page errors:\n     " + errors.join("\n     ")); }
