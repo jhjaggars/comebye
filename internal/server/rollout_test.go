@@ -1287,3 +1287,29 @@ func TestRolloutCatchesUpAnOfflineHostWhenItIsBack(t *testing.T) {
 	r2.tick()
 	r2.want("done a=ok b=ok c=skipped")
 }
+
+// A stopped KubeVirt worker the rollout could not start (the wake rate
+// limit) comes up later on the old version, when someone starts it: a woken
+// VM does not pick up a release by itself, so the loop upgrades it then.
+func TestRolloutCatchesUpAStoppedWorkerWokenLater(t *testing.T) {
+	r := newRolloutRig(t, "a", "kv1")
+	r.canary = ""
+	r.e.soak, r.e.catchUpEvery = 0, 0
+	r.f.set("kv1", func(h *relHost) { h.Status = "down" })
+	r.f.wakeAs = map[string]wakeVerdict{"kv1": {Kind: wakeRefused, Reason: "kv1 woke 3 times this hour"}}
+	r.start()
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok kv1=skipped")
+	if j, _ := r.e.Get(); !j.Plan[1].CatchUp {
+		t.Fatalf("%+v", j.Plan[1])
+	}
+	r.f.set("kv1", func(h *relHost) { h.Status = "ok" }) // started from Peers, still on v0.6.3
+	r.tick()
+	r.tick()
+	r.want("running a=ok kv1=upgrading")
+	r.f.finish("kv1", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok kv1=ok")
+}
