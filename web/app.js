@@ -3398,11 +3398,19 @@ function roConfirmHtml(d) {
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
 }
 
+// The hosts "Roll out again" would take: skipped by the done job, and ones the
+// plan can act on now (not one the app may not upgrade, nor the hub wave's).
+function roAgain(d, job) {
+  if (!job || job.state !== "done") return [];
+  const can = new Set((d.rollout_plan || []).filter((st) => st.phase !== "skipped" && st.wave !== "hub").map((st) => st.host));
+  return (job.plan || []).filter((st) => st.phase === "skipped" && can.has(st.host)).map((st) => st.host);
+}
+
 // Roll out to all / Roll out again: next to the card's other buttons.
 function roButtonHtml(d, green) {
   const job = roJob(d);
   if (!d.rollout_enabled || !green || roLive(job) || !d.rollout_plan || !d.rollout_plan.length || (d.rollout && d.rollout.complete)) return "";
-  const again = !!job && job.state === "done" && (job.plan || []).some((x) => x.phase === "skipped");
+  const again = roAgain(d, job).length > 0;
   const label = again ? "Roll out again" : "Roll out to all";
   return `<div class="rl-roll"><button type="button" class="rel-up rel-roll" data-rel="${again ? "rollout-again" : "rollout"}"${rls.busy || rls.confirm ? " disabled" : ""}>${label}</button></div>`;
 }
@@ -3679,9 +3687,8 @@ async function relClick(act, host) {
     case "cancel": rls.confirm = null; break;
     case "rollout": rls.confirm = { k: "rollout", order: (d.rollout_plan || []).filter((st) => st.wave !== "hub").map((st) => st.host), hub: (d.rollout_plan || []).some((st) => st.wave === "hub") }; break;
     case "rollout-again": {
-      // Only the hosts the last rollout skipped, still behind.
-      const job = roJob(d), behind = new Set((d.hosts || []).filter((x) => !x.current).map((x) => x.name));
-      const order = (job ? job.plan : []).filter((st) => st.phase === "skipped" && st.wave !== "hub" && behind.has(st.host)).map((st) => st.host);
+      // Only the hosts the last rollout skipped, still behind (the plan lists only those).
+      const order = roAgain(d, roJob(d));
       rls.confirm = { k: "rollout", order, hub: (d.rollout_plan || []).some((st) => st.wave === "hub") };
       break;
     }

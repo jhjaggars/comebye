@@ -638,7 +638,7 @@ func TestAppRolloutToAllCoversTheHubAndItsPeers(t *testing.T) {
 	var js strings.Builder
 	js.WriteString("const rls = { confirm: null, busy: false };\n")
 	for _, name := range []string{"esc", "escAttr", "cpOut", "relShort", "relRecordText", "relDeployText", "relDeployOut", "relWhen",
-		"roJob", "roLive", "RO_PHASE", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
+		"roJob", "roLive", "RO_PHASE", "roAgain", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
 		b := regexp.MustCompile(`\n(function ` + name + `\(.*\}|const ` + name + ` = .*;)\n`).Find(src) // a one-liner
 		if b == nil {
 			b = regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)
@@ -684,6 +684,9 @@ const got = {
   stepSkip: roStepText(job.plan[1], job),
   gates: /hub deployed/.test(roGatesHtml({ host: "prov", mode: "with_hub", phase: "verifying" }, "v1.2.3")),
   band: /data-catch-up>Offline hosts are upgraded by themselves when they are back: c\./.test(roBandHtml(d, job)),
+  // Roll out again takes only what the plan can act on: b (not allowed) never.
+  again: roAgain({ ...d, rollout_plan: [{ host: "c", wave: "peers", phase: "pending" }, d.rollout_plan[1]] }, { ...job, plan: [...job.plan, { host: "b", wave: "peers", phase: "skipped" }] }).join(),
+  noAgain: roAgain(d, { ...job, plan: [{ host: "b", wave: "peers", phase: "skipped" }] }).length,
 };
 console.log(JSON.stringify(got));
 `)
@@ -691,7 +694,7 @@ console.log(JSON.stringify(got));
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
-	want := `{"button":true,"withHubLi":true,"skippedB":true,"count":true,"order":true,"provRow":true,"provOffline":true,"aRow":true,"stepPending":"upgraded with the hub, after it","stepOk":"upgraded with the hub","stepSkip":"skipped · offline for 2m0s · upgrades when it is back","gates":true,"band":true}`
+	want := `{"button":true,"withHubLi":true,"skippedB":true,"count":true,"order":true,"provRow":true,"provOffline":true,"aRow":true,"stepPending":"upgraded with the hub, after it","stepOk":"upgraded with the hub","stepSkip":"skipped · offline for 2m0s · upgrades when it is back","gates":true,"band":true,"again":"c","noAgain":0}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}
