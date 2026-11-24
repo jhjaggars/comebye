@@ -51,6 +51,7 @@ setfreetext 4
 archived 4
 refused 3
 quietmark 3
+press 25
 reportage 2
 notes 2
 falseblocked 2

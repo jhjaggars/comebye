@@ -163,6 +163,8 @@ if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; f
 if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The press layer (#135): every tappable kind shows a pressed look under real touch input; a scroll is not a press.
+if want press; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node press.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
