@@ -158,6 +158,8 @@ if want origins; then node origins.mjs "http://127.0.0.1:$port" "$out" || rc=1 ;
 if want decisionsets; then node decisionsets.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want setfreetext; then node setfreetext.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Agent chat on a phone in landscape (with the notch insets) uses the width; portrait and desktop unchanged.
+if want landscape; then node landscape.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Archived screen (#/archived): list, filter, Unarchive/Resume/Propose removal, the board footer and the links.
 if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

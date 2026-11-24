@@ -75,7 +75,7 @@
     header {
       position: sticky; top: 0; z-index: var(--z-bar);
       display: flex; align-items: center; gap: var(--sp-10);
-      padding: var(--sp-12) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) var(--sp-12) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+      padding: var(--sp-12) max(var(--sp-16), env(safe-area-inset-right, 0px)) var(--sp-12) max(var(--sp-16), env(safe-area-inset-left, 0px));
       padding-top: calc(var(--sp-12) + env(safe-area-inset-top, 0px));
       background: var(--bg);
       border-bottom: 1px solid var(--border);
@@ -366,6 +366,12 @@
     #detail main {
       flex: 1; min-height: 0; width: 100%; box-sizing: border-box;
       display: flex; flex-direction: column;
+      /* The pane is never capped at the list's 640px: between 601 and 1099px (a phone in landscape, a tablet) that left
+         wide empty gutters. The chat's own --col reading column keeps the line length. In landscape the notch side
+         gets its safe-area inset instead of our 12px, not on top of it. */
+      max-width: none;
+      padding-left: max(var(--sp-12), env(safe-area-inset-left, 0px));
+      padding-right: max(var(--sp-12), env(safe-area-inset-right, 0px));
       /* The home indicator needs only the bottom ~13px of its 34px inset:
          sit the input just above it rather than above the whole inset. */
       padding-bottom: max(8px, calc(var(--safe-bottom) - 12px));
@@ -391,6 +397,9 @@
     html[data-col="wide"] { --col: 1120px; }
     html[data-col="wider"] { --col: 1480px; }
     html[data-col="full"] { --col: 100%; }
+    /* A phone in landscape (short and touch): the default column is the whole pane. Its widest usable width is under
+       ~900px, so a column there only adds gutters; a reading width the user picked still applies. */
+    @media (pointer: coarse) and (max-height: 500px) { html:not([data-col]) { --col: 100%; } }
     /* The text size: Settings > Appearance sets <html data-rs>. It scales the conversation only (#chat, #sv-chat, the
        composer's text, the Appearance preview): those redefine --fs-11..18 from --rs, so every font-size in them
        follows with no per-rule work. The header, the list and the menus keep the root tokens and their tap targets. */
@@ -2061,7 +2070,7 @@
       #detail-empty b { color: var(--text); font-weight: 650; }
       #detail-empty kbd { font: var(--fs-12) var(--ff-code); border: 1px solid var(--border); border-radius: var(--r-6); padding: 1px var(--sp-6); background: var(--panel); }
       #detail header .back { display: none; }
-      #detail main { max-width: none; margin: 0; } /* the agent pane fills the space beside the list */
+      #detail main { margin: 0; } /* the agent pane fills the space beside the list */
     }
     /* Transcripts */
     /* A screen (.screen: Search, Pages, Peers, Usage and Ready to remove) is a full-window overlay on a phone. From 1100px

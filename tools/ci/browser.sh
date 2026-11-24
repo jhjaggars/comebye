@@ -22,7 +22,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
 suite="${1:?suite: smoke|drive|rest|visual|full|changed}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"; shard="${4:-}"
 
-VISUAL="shapes appearance starters depth"
+VISUAL="shapes appearance starters depth landscape"
 # Every script run.sh knows (its "want NAME" lines), so a script added there is in "rest" and "full" without editing this file.
 ALL="$(grep -o 'want [a-z]*;' "$here/../uitest/run.sh" | awk '{print $2}' | tr -d ';' | tr '\n' ' ')"
 rest=""
