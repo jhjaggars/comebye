@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Build the release archives: static binaries for 4 targets, the version stamped in, and SHA256SUMS.
+# Also the worker tool for linux/amd64 as a bare binary, comebye-worker_linux_amd64 (the in-cluster
+# provisioner downloads it at the release version and checks it against SHA256SUMS).
 #
 #   tools/ci/crossbuild.sh VERSION OUT_DIR
 #
@@ -19,5 +21,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   cp LICENSE README.md deploy/comebye.service deploy/comebye-gpg-watch.service "$build/$name/"
   tar -C "$build" -czf "$dist/$name.tar.gz" "$name"
 done
-(cd "$dist" && sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS)
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+  -o "$dist/comebye-worker_linux_amd64" ./tools/worker
+(cd "$dist" && sha256sum ./*.tar.gz ./comebye-worker_linux_amd64 | sed 's| \./| |' > SHA256SUMS)
 cat "$dist/SHA256SUMS"

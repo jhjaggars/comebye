@@ -380,6 +380,17 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("deployment.yaml: missing %q", want)
 		}
 	}
+	// fsGroup makes a seeded worker key 0660, which ssh refuses: every start
+	// puts it back to 0600, as the user that owns it, on the claim's path.
+	if !strings.Contains(d, "chmod 600 /var/lib/comebye-worker/id_ed25519") || !strings.Contains(d, "- name: key-mode") {
+		t.Error("deployment.yaml: the worker key's mode is not reset to 0600 on start")
+	}
+	if !strings.Contains(d, "fsGroupChangePolicy: OnRootMismatch") {
+		t.Error("deployment.yaml: fsGroup should change modes on the first mount only")
+	}
+	if strings.Count(d, "image: registry.example.com/comebye-provisioner:CHANGE-ME") != 2 {
+		t.Error("deployment.yaml: the key-mode step and the comebye container use the same image")
+	}
 	if strings.Contains(d, "\n            - -provision-create") {
 		t.Error("deployment.yaml turns -provision-create on: it ships off")
 	}

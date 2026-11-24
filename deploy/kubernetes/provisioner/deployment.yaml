@@ -26,6 +26,25 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         fsGroup: 1000
+        # Change the volume's group and modes only when its root does not
+        # match yet (the first mount), not on every start.
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        # fsGroup leaves the volume group-writable, so a worker key copied in
+        # (docs/workers.md, seeding the state volume) is 0660, and ssh ignores
+        # it as "UNPROTECTED": a wake then hangs at ssh. Put the key back to
+        # 0600 on every start. The tool writes each worker's own files 0600.
+        - name: key-mode
+          image: registry.example.com/comebye-provisioner:CHANGE-ME # the same image as below
+          command: [sh, -c, "[ ! -f /var/lib/comebye-worker/id_ed25519 ] || chmod 600 /var/lib/comebye-worker/id_ed25519"]
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: worker, mountPath: /var/lib/comebye-worker}
       containers:
         - name: comebye
           # CHANGE-ME: the image built from Dockerfile in this directory

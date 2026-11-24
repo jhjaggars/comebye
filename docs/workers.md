@@ -932,8 +932,11 @@ The user does these; nothing in this repository touches the cluster.
    `comebye-provisioner-tailscale-oauth` (key `tailscale-oauth`, mounted read-only, mode 0400, in this
    pod only), then uncomment `-provision-create` in `deployment.yaml`. Remove it to go back to dry
    runs. See [Create and destroy from the pod](#create-and-destroy-from-the-pod).
-7. Version bumps: the hub's bump script edits one manifest; point it at this Deployment's image too
-   (a follow-up in the homelab repo).
+7. Version bumps: every release ships the worker tool as `comebye-worker_linux_amd64`, listed in its
+   `SHA256SUMS`, next to the comebye tarballs. A pod that downloads comebye at the release version (as
+   the hub's manifest does) can take the worker tool from the same release, checked against the same
+   `SHA256SUMS`, so one version bump moves both. This directory's image builds both from the tree
+   instead.
 8. To wake and stop workers that another host created (their ssh key lives in *that* host's
    `~/.local/state/comebye-worker/`), seed the pod's state volume before its first start. `start` rewrites
    each worker's `ssh_config` and `known_hosts` from the KubeVirt API, but it cannot ssh without the key the

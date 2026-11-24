@@ -20,7 +20,8 @@ Installing and running Comebye on a host, notifications, several hosts, and ever
 
 Each [release](https://github.com/jhjaggars/comebye/releases) has static
 binaries for Linux and macOS (amd64, arm64), packed with the systemd units,
-and a `SHA256SUMS` file:
+the worker tool for Linux amd64 as a bare binary (`comebye-worker_linux_amd64`,
+see [Worker VMs](workers.md)), and a `SHA256SUMS` file covering all of them:
 
 ```sh
 os=$(uname -s | tr A-Z a-z); arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
