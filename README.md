@@ -3,32 +3,43 @@
 Your [herdr](https://herdr.dev) coding agents, on your phone.
 
 Comebye is a small web app you install on your phone's home screen. It shows
-every agent herdr is running, live: which ones are working, which are done,
-and which are waiting on you. Open one to read its conversation as a chat,
-send it a message (or a screenshot), answer its questions with a tap, or stop
-it. You get a push notification when an agent finishes or needs input.
+every agent herdr is running, on every machine you connect, live: which ones
+are working, which are done, and which are waiting on you. Open one to read
+its conversation as a chat, send it a message (or a screenshot), answer its
+questions with a tap, or stop it. You get a push notification when an agent
+finishes or needs input.
 
 It is a single Go binary that talks to herdr's local socket, so your phone and
-your terminal drive the **same** agents; there is nothing to sync. It is
+your terminal drive the **same** agents; there is nothing to sync. One machine
+is the hub and the others join it, so the whole fleet is one list. It is
 reached over your private [Tailscale](https://tailscale.com) network, never
 the public internet.
 
 Beyond watching agents, it can:
 
-- **start new agents** in any project directory, from the phone;
-- **hand work to workers**, each on its own branch in its own git worktree,
-  and keep track of what they finished;
-- **clean up** finished sessions after you confirm, keeping their branches;
-- **span several machines** in one list, with one of them acting as the hub;
-- let a **coordinator** agent (Claude Code, Pi or others) organize work for
-  you and tell you where things stand when you ask;
-- keep a **to-do list** of the questions and decisions waiting on you, with
-  context, and answer them from the app;
-- read the **pages** agents publish: `comebye publish report.html` (or
-  Markdown) from any agent, shown in the app inside a sandbox. Agents learn
-  to make good ones (mockups, diagrams, charts in the app's theme) from the
-  `comebye-pages` skill: `comebye skill install`, `comebye pages new`. Page source is not
-  committed; the published page is the deliverable.
+- **start new agents** on any host and in any project directory, from the phone;
+- **hand work to workers**, each on its own branch in its own git worktree;
+  the hub keeps a **ledger** of every handoff and, once you OK it, has the
+  worker land its own work;
+- keep a **To do list** of what waits on you: questions, decisions (one at a
+  time, or a **decision set** for a whole plan), actions and releases,
+  answered from the app;
+- read the **Pages** agents publish: `comebye publish report.html` (or
+  Markdown) from any agent, shown in a sandbox. Agents learn to make good ones
+  from the `comebye-pages` skill (`comebye skill install`, `comebye pages new`);
+- show a **side panel** beside a chat with the agent's Doc, Diff, Status and
+  Pages, and a **Status** screen of what needs you, what runs and what landed;
+- let a **coordinator** agent (Claude Code, Pi or others) organize work and
+  tell you where things stand when you ask, and a **steward** check PRs, plans
+  and stuck work on a standing loop;
+- **clean up**: sweeps remove finished sessions with nothing to lose (asking
+  you about the rest, keeping branches) and archive stale work;
+- run workers on **VMs** (GCE, AWS or KubeVirt), started when work arrives and
+  stopped when idle, and send heavy test runs to a pool of test VMs;
+- **roll out releases** to every host from the app (`comebye upgrade` on one);
+- keep an encrypted **archive** of every agent session, searchable with
+  `comebye recall`;
+- be scripted: `comebye api` runs read-only Python scripts against the hub.
 
 Chat view works for Claude Code and Pi; other agents show their terminal output.
 
@@ -114,7 +125,7 @@ node --check web/app.js web/sw.js
 go run . -insecure-no-auth       # local only: http://127.0.0.1:8741, needs herdr running
 ```
 
-The server is Go with two module dependencies, both for the transcript archive (`filippo.io/age` and `klauspost/compress`, see `docs/archive.md`); the web app is plain
+The server is Go with four module dependencies: `filippo.io/age` and `klauspost/compress` for the transcript archive (see `docs/archive.md`), `golang.org/x/net` for page previews and `golang.org/x/sys` for agent sign-in; the web app is plain
 HTML/CSS/JS in `web/` with no build step, embedded into the binary. See
 [CONTRIBUTING.md](CONTRIBUTING.md) before sending changes.
 
