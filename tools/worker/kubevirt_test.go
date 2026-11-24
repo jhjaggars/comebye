@@ -115,7 +115,7 @@ func TestKubeGate(t *testing.T) {
 	need := 32*gib + podOverheadBytes
 
 	// node-a has room: chosen first even though node-d has more.
-	g := kubeGate(c, []kubeNode{node("node-d.x", 94, 20), node("node-a.x", 63, 8), node("node-b.x", 63, 21), node("node-c.x", 126, 94)}, true)
+	g := kubeGate(c, gateInput{Nodes: []kubeNode{node("node-d.x", 94, 20), node("node-a.x", 63, 8), node("node-b.x", 63, 21), node("node-c.x", 126, 94)}, UsageKnown: true})
 	if g.Chosen != "node-a.x" || g.Err() != nil || g.Need != need {
 		t.Fatalf("chose %q (%v)", g.Chosen, g.Err())
 	}
@@ -127,7 +127,7 @@ func TestKubeGate(t *testing.T) {
 
 	// the floor is exact: 63 - used - 32.5 must be >= 12 on node-a.
 	roz := func(used int64) gateResult {
-		return kubeGate(c, []kubeNode{{Name: "node-a", Alloc: 63 * gib, Requested: used, KVM: true, Ready: true}}, true)
+		return kubeGate(c, gateInput{Nodes: []kubeNode{{Name: "node-a", Alloc: 63 * gib, Requested: used, KVM: true, Ready: true}}, UsageKnown: true})
 	}
 	edge := 63*gib - need - 12*gib
 	if roz(edge).Chosen == "" {
@@ -138,24 +138,24 @@ func TestKubeGate(t *testing.T) {
 	}
 
 	// node-a too full: fall back to node-b, whose floor is 8.
-	g = kubeGate(c, []kubeNode{node("node-a", 63, 30), node("node-b", 63, 22)}, true)
+	g = kubeGate(c, gateInput{Nodes: []kubeNode{node("node-a", 63, 30), node("node-b", 63, 22)}, UsageKnown: true})
 	if g.Chosen != "node-b" { // 63-22-32.5 = 8.5 >= 8, but < 12
 		t.Errorf("node-b fallback with the 8 GiB floor: chose %q", g.Chosen)
 	}
 	// ... and the same free memory on node-a (floor 12) is refused.
-	g = kubeGate(c, []kubeNode{node("node-a", 63, 22)}, true)
+	g = kubeGate(c, gateInput{Nodes: []kubeNode{node("node-a", 63, 22)}, UsageKnown: true})
 	if g.Chosen != "" || g.Err() == nil || !strings.Contains(g.Err().Error(), "under the 12.0 GiB floor") {
 		t.Errorf("node-a at 8.5 GiB after: %q %v", g.Chosen, g.Err())
 	}
 	// node-b under its own floor is refused.
-	if g = kubeGate(c, []kubeNode{node("node-b", 63, 23)}, true); g.Chosen != "" {
+	if g = kubeGate(c, gateInput{Nodes: []kubeNode{node("node-b", 63, 23)}, UsageKnown: true}); g.Chosen != "" {
 		t.Errorf("node-b at 7.5 GiB after was accepted")
 	}
 
 	// measured use beats the requests
 	n := node("node-a", 63, 5)
 	n.Usage = 50 * gib
-	if g = kubeGate(c, []kubeNode{n}, true); g.Chosen != "" {
+	if g = kubeGate(c, gateInput{Nodes: []kubeNode{n}, UsageKnown: true}); g.Chosen != "" {
 		t.Error("measured use ignored")
 	}
 
@@ -167,22 +167,22 @@ func TestKubeGate(t *testing.T) {
 	} {
 		n := node("node-a", 63, 1)
 		mut(&n)
-		if g = kubeGate(c, []kubeNode{n}, true); g.Chosen != "" || g.Err() == nil {
+		if g = kubeGate(c, gateInput{Nodes: []kubeNode{n}, UsageKnown: true}); g.Chosen != "" || g.Err() == nil {
 			t.Errorf("%s: node accepted", name)
 		}
 	}
 	// a node the config does not list is never chosen while prefer is set
-	if g = kubeGate(c, []kubeNode{node("other", 500, 0)}, true); g.Chosen != "" {
+	if g = kubeGate(c, gateInput{Nodes: []kubeNode{node("other", 500, 0)}, UsageKnown: true}); g.Chosen != "" {
 		t.Error("unlisted node chosen")
 	}
 	// with no prefer list, any node but the avoided: most free first
 	c2 := *c
 	c2.KubeNodePrefer = nil
-	g = kubeGate(&c2, []kubeNode{node("a", 63, 30), node("b", 63, 2), node("node-d", 99, 0)}, true)
+	g = kubeGate(&c2, gateInput{Nodes: []kubeNode{node("a", 63, 30), node("b", 63, 2), node("node-d", 99, 0)}, UsageKnown: true})
 	if g.Chosen != "b" {
 		t.Errorf("no prefer list: chose %q", g.Chosen)
 	}
-	if kubeGate(c, nil, true).Err() == nil {
+	if kubeGate(c, gateInput{Nodes: nil, UsageKnown: true}).Err() == nil {
 		t.Error("an empty cluster was not refused")
 	}
 }
@@ -213,6 +213,14 @@ type kubeWorld struct {
 	pods     string
 	metrics  string // "" = the API is absent
 	noServer bool
+
+	vm         string            // `get vm NAME -o json`; "" = NotFound
+	podMetrics string            // one pod's metrics; "" = the API does not answer
+	classes    map[string]string // storage class name -> its JSON; absent = NotFound
+	longhorn   string            // Longhorn's node list; "" = the resource type is absent
+	lhSettings map[string]string // Longhorn setting -> value
+	limits     string            // the namespace's LimitRanges; "" = none
+	quotas     string            // the namespace's ResourceQuotas; "" = none
 }
 
 func (w *kubeWorld) fake() *fakeRunner {
@@ -237,6 +245,37 @@ func (w *kubeWorld) fake() *fakeRunner {
 			return w.nodes, "", nil
 		case strings.HasPrefix(line, "get pods"):
 			return w.pods, "", nil
+		case strings.HasPrefix(line, "get --raw /apis/metrics.k8s.io/v1beta1/namespaces/"):
+			if w.podMetrics == "" {
+				return "", "the server could not find the requested resource", errors.New("exit 1")
+			}
+			return w.podMetrics, "", nil
+		case strings.Contains(line, "get vm ") && strings.HasSuffix(line, "-o json"):
+			if w.vm == "" {
+				return "", `Error from server (NotFound): virtualmachines.kubevirt.io "x" not found`, errors.New("exit 1")
+			}
+			return w.vm, "", nil
+		case strings.HasPrefix(line, "get storageclass ") && strings.HasSuffix(line, "-o json"):
+			name := strings.Fields(line)[2]
+			if j, ok := w.classes[name]; ok {
+				return j, "", nil
+			}
+			return "", fmt.Sprintf(`Error from server (NotFound): storageclasses.storage.k8s.io %q not found`, name), errors.New("exit 1")
+		case strings.Contains(line, "get nodes.longhorn.io"):
+			if w.longhorn == "" {
+				return "", `error: the server doesn't have a resource type "nodes"`, errors.New("exit 1")
+			}
+			return w.longhorn, "", nil
+		case strings.Contains(line, "get settings.longhorn.io"):
+			v, ok := w.lhSettings[strings.Fields(line)[4]]
+			if !ok {
+				return "", "NotFound", errors.New("exit 1")
+			}
+			return v, "", nil
+		case strings.Contains(line, "get limitrange -o json"):
+			return orEmptyList(w.limits), "", nil
+		case strings.Contains(line, "get resourcequota -o json"):
+			return orEmptyList(w.quotas), "", nil
 		case strings.HasPrefix(line, "get --raw /apis/metrics"):
 			if w.metrics == "" {
 				return "", "the server could not find the requested resource", errors.New("exit 1")
@@ -266,6 +305,13 @@ func (w *kubeWorld) fake() *fakeRunner {
 		}
 		return "", "", fmt.Errorf("unexpected %s", line)
 	}}
+}
+
+func orEmptyList(s string) string {
+	if s == "" {
+		return `{"items":[]}`
+	}
+	return s
 }
 
 func goodWorld() *kubeWorld {
@@ -301,7 +347,7 @@ func withPath(t *testing.T, missing string) {
 func TestKubeNodesReads(t *testing.T) {
 	e, _, _, _ := kubeEnv(t, goodWorld())
 	k := &kubeCLI{r: e.Run, cfg: e.Cfg}
-	nodes, usage, err := k.kubeNodes(context.Background())
+	nodes, usage, err := k.kubeNodes(context.Background(), "")
 	if err != nil || !usage || len(nodes) != 3 {
 		t.Fatalf("%v %v %v", nodes, usage, err)
 	}

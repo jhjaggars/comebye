@@ -188,7 +188,7 @@ func (p *kubevirtProv) Create(ctx context.Context, name, pubKey string) error {
 	if _, err := p.ownedOrAbsent(ctx, "secret", cloudInitName(name)); err != nil {
 		return err
 	}
-	g, err := p.Gate(ctx)
+	g, err := p.Gate(ctx, name)
 	if err != nil {
 		return fmt.Errorf("capacity gate: %w", err)
 	}

@@ -197,6 +197,15 @@ func (e *env) createVM(ctx context.Context, name string, o createOpts) error {
 	}
 
 	e.begin(3, "3/8 data disk\n")
+	// The capacity gate first: a disk made for a VM that cannot fit is a
+	// disk to clean up (a create once sat in Provisioning on a full node).
+	if cc, ok := pv.(interface {
+		CheckCapacity(ctx context.Context, name string, w logf) error
+	}); ok {
+		if err := cc.CheckCapacity(ctx, name, w); err != nil {
+			return err
+		}
+	}
 	if err := pv.EnsureDataDisk(ctx, name, w); err != nil {
 		return err
 	}

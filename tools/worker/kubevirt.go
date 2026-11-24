@@ -153,6 +153,12 @@ func (k *kubeCLI) exists(ctx context.Context, args ...string) (bool, error) {
 // parseQty reads a Kubernetes quantity as a number of units (bytes for
 // memory). Only the forms a node or pod reports are understood.
 func parseQty(s string) (int64, error) {
+	f, err := parseQtyF(s)
+	return int64(f), err
+}
+
+// parseQtyF is parseQty without the rounding: "4015m" CPUs is 4.015.
+func parseQtyF(s string) (float64, error) {
 	s = strings.TrimSpace(s)
 	mult := map[string]float64{"Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40,
 		"k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "m": 1e-3, "": 1}
@@ -165,7 +171,7 @@ func parseQty(s string) (int64, error) {
 	if !ok || err != nil || i == 0 {
 		return 0, fmt.Errorf("unreadable quantity %q", s)
 	}
-	return int64(f * m), nil
+	return f * m, nil
 }
 
 // kubeNode is what the gate needs to know of a node.
@@ -177,6 +183,14 @@ type kubeNode struct {
 	KVM       bool  // exposes devices.kubevirt.io/kvm
 	Ready     bool
 	Blocked   string // why no pod can go here (cordoned, tainted), or ""
+
+	// The VM's own virt-launcher pod, when the VM already runs (a resumed
+	// create): the parts of Requested and Usage that are the VM itself, which
+	// the gate does not count against it.
+	OwnRequested int64
+	OwnUsage     int64
+
+	Longhorn []lhDisk // its schedulable Longhorn disks, when Longhorn was read
 }
 
 func shortNode(n string) string {
@@ -202,9 +216,14 @@ func nodeIndex(list []string, n string) int {
 	return -1
 }
 
+// vmPodLabel names the VM a virt-launcher pod runs.
+const vmPodLabel = "vm.kubevirt.io/name"
+
 // kubeNodes reads the nodes, their pods' memory requests and, when the
-// metrics API answers, their use. All reads.
-func (k *kubeCLI) kubeNodes(ctx context.Context) (nodes []kubeNode, usageKnown bool, err error) {
+// metrics API answers, their use. own, when set, is a VM of ours that may
+// already run: its pod's request and use are noted apart, so the gate does
+// not count the VM against itself. All reads.
+func (k *kubeCLI) kubeNodes(ctx context.Context, own string) (nodes []kubeNode, usageKnown bool, err error) {
 	out, _, err := k.kubectl(ctx, "get", "nodes", "-o", "json")
 	if err != nil {
 		return nil, false, fmt.Errorf("could not list the nodes: %w", err)
@@ -262,6 +281,10 @@ func (k *kubeCLI) kubeNodes(ctx context.Context) (nodes []kubeNode, usageKnown b
 	}
 	var pl struct {
 		Items []struct {
+			Metadata struct {
+				Name, Namespace string
+				Labels          map[string]string
+			} `json:"metadata"`
 			Spec struct {
 				NodeName   string `json:"nodeName"`
 				Containers []struct {
@@ -276,11 +299,13 @@ func (k *kubeCLI) kubeNodes(ctx context.Context) (nodes []kubeNode, usageKnown b
 	if err := json.Unmarshal([]byte(out), &pl); err != nil {
 		return nil, false, fmt.Errorf("the pod list was not JSON: %w", err)
 	}
+	ownPods := map[string]*kubeNode{} // pod name -> its node
 	for _, p := range pl.Items {
 		n := byName[p.Spec.NodeName]
 		if n == nil {
 			continue
 		}
+		mine := own != "" && p.Metadata.Namespace == k.cfg.KubeNamespace && p.Metadata.Labels[vmPodLabel] == own
 		var sum, maxInit int64
 		for _, c := range p.Spec.Containers {
 			q, _ := parseQty(c.Resources.Requests["memory"])
@@ -295,6 +320,10 @@ func (k *kubeCLI) kubeNodes(ctx context.Context) (nodes []kubeNode, usageKnown b
 			sum = maxInit
 		}
 		n.Requested += sum
+		if mine {
+			n.OwnRequested += sum
+			ownPods[p.Metadata.Name] = n
+		}
 	}
 
 	// Requests understate a node whose pods run past them, so the measured use
@@ -315,7 +344,36 @@ func (k *kubeCLI) kubeNodes(ctx context.Context) (nodes []kubeNode, usageKnown b
 			}
 		}
 	}
+	if usageKnown {
+		for pod, n := range ownPods {
+			n.OwnUsage += k.podUsage(ctx, pod, n.OwnRequested)
+		}
+	}
 	return nodes, usageKnown, nil
+}
+
+// podUsage is the measured memory of one of our pods, from the metrics API.
+// When that does not answer it is the pod's request: the VM's memory limit
+// equals its request, so the pod holds at most that much.
+func (k *kubeCLI) podUsage(ctx context.Context, pod string, req int64) int64 {
+	out, _, err := k.kubectl(ctx, "get", "--raw", "/apis/metrics.k8s.io/v1beta1/namespaces/"+k.cfg.KubeNamespace+"/pods/"+pod)
+	if err != nil {
+		return req
+	}
+	var pm struct {
+		Containers []struct {
+			Usage map[string]string `json:"usage"`
+		} `json:"containers"`
+	}
+	if json.Unmarshal([]byte(out), &pm) != nil || len(pm.Containers) == 0 {
+		return req
+	}
+	var sum int64
+	for _, c := range pm.Containers {
+		q, _ := parseQty(c.Usage["memory"])
+		sum += q
+	}
+	return sum
 }
 
 // ---- the capacity gate ----
@@ -337,6 +395,21 @@ type gateResult struct {
 	Chosen     string // "" when refused
 	Need       int64  // guest memory plus the pod overhead
 	UsageKnown bool
+	Pinned     string     // the existing VM's node, the only one looked at
+	Own        int64      // memory of the VM's own pod, not counted against it
+	Disks      []diskNeed // the disks still to be made
+	Notes      []string   // what could not be checked, and why
+	Quota      []string   // the namespace's LimitRange or ResourceQuota misfits: a refusal on any node
+}
+
+// gateInput is what the gate reads from the cluster.
+type gateInput struct {
+	Nodes      []kubeNode
+	UsageKnown bool
+	Pinned     string     // an existing VM's node: it stays there, so only that node is looked at
+	Disks      []diskNeed // the disks a create still has to make (an existing disk costs nothing more)
+	Notes      []string
+	Quota      []string
 }
 
 func (c *Config) floorBytes(node string) int64 {
@@ -351,18 +424,37 @@ func (c *Config) floorBytes(node string) int64 {
 
 // kubeGate decides where the VM may go: only a node the config allows, with
 // KVM, schedulable, and left with at least its floor of free memory after
-// the VM (guest memory plus the pod overhead). Pure: it reads nothing.
-func kubeGate(c *Config, nodes []kubeNode, usageKnown bool) gateResult {
-	g := gateResult{Need: c.vmMemoryBytes() + podOverheadBytes, UsageKnown: usageKnown}
-	for _, n := range nodes {
+// the VM (guest memory plus the pod overhead), with Longhorn room for the
+// disks still to be made, in a namespace whose LimitRange and ResourceQuota
+// take it. A VM that exists already is looked at on its own node only, and
+// its own pod is not counted against it. Pure: it reads nothing.
+func kubeGate(c *Config, in gateInput) gateResult {
+	g := gateResult{Need: c.vmMemoryBytes() + podOverheadBytes, UsageKnown: in.UsageKnown, Pinned: in.Pinned,
+		Disks: in.Disks, Notes: in.Notes, Quota: in.Quota}
+	for _, n := range in.Nodes {
 		r := gateRow{Node: n.Name, Floor: c.floorBytes(n.Name), Preference: nodeIndex(c.KubeNodePrefer, n.Name)}
-		used := n.Requested
-		if n.Usage > used {
-			used = n.Usage
+		used := n.Requested - n.OwnRequested
+		if u := n.Usage - n.OwnUsage; u > used {
+			used = u
 		}
+		g.Own += n.OwnRequested
 		r.Free = n.Alloc - used
 		r.After = r.Free - g.Need
 		switch {
+		case in.Pinned != "" && n.Name != in.Pinned:
+			r.Preference, r.Reason = -1, "the VM exists, pinned to "+shortNode(in.Pinned)
+		case in.Pinned != "" && n.Name == in.Pinned && !n.Ready:
+			r.Candidate, r.Reason = true, "not Ready"
+		case in.Pinned != "" && n.Name == in.Pinned && n.Blocked != "":
+			r.Candidate, r.Reason = true, n.Blocked
+		case in.Pinned != "" && n.Name == in.Pinned:
+			// the config's prefer/avoid lists and KVM were settled when it was placed
+			r.Candidate = true
+			if r.After < r.Floor {
+				r.Reason = fmt.Sprintf("would leave %s free, under the %s floor", fmtGiB(r.After), fmtGiB(r.Floor))
+			} else {
+				r.OK = true
+			}
 		case nodeIn(c.KubeNodeAvoid, n.Name):
 			r.Reason = "avoided (kube_node_avoid)"
 		case len(c.KubeNodePrefer) > 0 && r.Preference < 0:
@@ -378,6 +470,11 @@ func kubeGate(c *Config, nodes []kubeNode, usageKnown bool) gateResult {
 		default:
 			r.Candidate, r.OK = true, true
 		}
+		if r.OK {
+			if why := fitDisks(n, in.Disks); why != "" {
+				r.OK, r.Reason = false, why
+			}
+		}
 		g.Rows = append(g.Rows, r)
 	}
 	sort.SliceStable(g.Rows, func(i, j int) bool {
@@ -391,7 +488,7 @@ func kubeGate(c *Config, nodes []kubeNode, usageKnown bool) gateResult {
 		return a.Free > b.Free
 	})
 	for _, r := range g.Rows {
-		if r.OK {
+		if r.OK && len(g.Quota) == 0 {
 			g.Chosen = r.Node
 			break
 		}
@@ -408,6 +505,9 @@ func fmtGiB(b int64) string {
 
 // Err is the refusal, naming each node's reason, or nil when a node was chosen.
 func (g gateResult) Err() error {
+	if len(g.Quota) > 0 {
+		return fmt.Errorf("capacity gate: the namespace cannot take the VM: %s", strings.Join(g.Quota, "; "))
+	}
 	if g.Chosen != "" {
 		return nil
 	}
@@ -434,6 +534,20 @@ func (g gateResult) print(w logf) {
 		}
 		w("     %s %-10s %s\n", mark, shortNode(r.Node), why)
 	}
+	if g.Pinned != "" {
+		w("     the VM exists on %s: only that node is looked at, and its own pod (%s) is not counted against it\n", shortNode(g.Pinned), fmtGiB(g.Own))
+	}
+	for _, d := range g.Disks {
+		if d.Longhorn {
+			w("     %s to make: %s on %s (Longhorn, disks tagged %s), checked on the node\n", d.What, fmtGiB(d.Bytes), d.Class, orDash(strings.Join(d.Selector, ",")))
+		}
+	}
+	for _, q := range g.Quota {
+		w("     namespace: %s\n", q)
+	}
+	for _, n := range g.Notes {
+		w("     (%s)\n", n)
+	}
 	if !g.UsageKnown {
 		w("     (the metrics API did not answer: free memory counts the pods' requests only)\n")
 	}
@@ -454,13 +568,39 @@ func newKubeVirt(r Runner, c *Config) *kubevirtProv {
 
 func (p *kubevirtProv) Kind() string { return "kubevirt" }
 
-// Gate reads the cluster and decides the node. It changes nothing.
-func (p *kubevirtProv) Gate(ctx context.Context) (gateResult, error) {
-	nodes, usage, err := p.k.kubeNodes(ctx)
+// Gate reads the cluster and decides the node for the VM name, which may
+// exist already (a resumed create). It changes nothing.
+func (p *kubevirtProv) Gate(ctx context.Context, name string) (gateResult, error) {
+	inst, err := p.Describe(ctx, name)
 	if err != nil {
 		return gateResult{}, err
 	}
-	return kubeGate(p.cfg, nodes, usage), nil
+	nodes, usage, err := p.k.kubeNodes(ctx, name)
+	if err != nil {
+		return gateResult{}, err
+	}
+	in := gateInput{Nodes: nodes, UsageKnown: usage}
+	if inst != nil {
+		in.Pinned = inst.Node
+	}
+	if in.Disks, err = p.diskNeeds(ctx, name, &in.Notes); err != nil {
+		return gateResult{}, err
+	}
+	p.readLonghorn(ctx, &in)
+	in.Quota = p.quotaFit(ctx, inst, in.Disks, &in.Notes)
+	return kubeGate(p.cfg, in), nil
+}
+
+// CheckCapacity runs the gate before anything is made, prints it and returns
+// its refusal: create calls it before the data disk.
+func (p *kubevirtProv) CheckCapacity(ctx context.Context, name string, w logf) error {
+	g, err := p.Gate(ctx, name)
+	if err != nil {
+		return fmt.Errorf("capacity gate: %w", err)
+	}
+	w("  capacity gate:\n")
+	g.print(w)
+	return g.Err()
 }
 
 // PlanErr is the gate's refusal found by Plan, for a dry run to fail on.
@@ -479,7 +619,7 @@ func (p *kubevirtProv) Plan(name, pub string, w logf) {
 	w("   kubectl context %s, namespace %s; every object below carries %s=%s and the tool touches nothing without it\n", ctxName, c.KubeNamespace, labelKey, labelVal)
 	w("   capacity gate (read-only: kubectl get nodes, pods, and the metrics API):\n")
 	node := "<node chosen by the gate>"
-	g, err := p.Gate(ctx)
+	g, err := p.Gate(ctx, name)
 	switch {
 	case err != nil:
 		w("     could not read the cluster: %v\n", err)
@@ -730,12 +870,12 @@ func (e *env) pfKubeVirt(ctx context.Context) pfCheck {
 	if d := c.dataStorageClass(); d != c.KubeStorageClass {
 		check("data disk storage class "+d, "storageclass", d)
 	}
-	nodes, _, nerr := k.kubeNodes(cctx)
+	nodes, _, nerr := k.kubeNodes(cctx, "")
 	cands := 0
 	if nerr != nil {
 		errs = append(errs, "the nodes could not be read")
 	} else {
-		for _, r := range kubeGate(c, nodes, false).Rows {
+		for _, r := range kubeGate(c, gateInput{Nodes: nodes}).Rows {
 			if r.Candidate && r.Reason != "no devices.kubevirt.io/kvm" {
 				cands++
 			}

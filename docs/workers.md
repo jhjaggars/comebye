@@ -793,7 +793,22 @@ second hint after a failed ssh) is not granted; the guest console log (`kubectl 
   be at least the floor (12 GiB, or the node's own `kube_node_floor`, such as `node-b=8`).
   Only nodes in `kube_node_prefer` are candidates when it is set; cordoned, tainted, not-Ready
   and no-`devices.kubevirt.io/kvm` nodes are skipped; the first allowed node in preference order
-  wins, and the VM is pinned to it.
+  wins, and the VM is pinned to it. `create` runs the gate before it makes the data disk, so a
+  VM that cannot fit leaves nothing behind.
+  - **A VM that exists already** (a resumed `create`) is looked at on its own node only, and its
+    own virt-launcher pod (its request, and its measured use when the metrics API answers) is not
+    counted against it; nor are disks that exist already.
+  - **Longhorn room**: for each disk still to be made on a Longhorn class, the node must have a
+    schedulable Longhorn disk carrying the class's `diskSelector` tags with room for it (the
+    claim is the disk's size plus about 6% for CDI's filesystem overhead). Room follows
+    Longhorn's own rules: the disk's scheduled total stays within its maximum less the reserve,
+    times `storage-over-provisioning-percentage`, and its available space stays above
+    `storage-minimal-available-percentage` of the maximum.
+  - **The namespace**: its LimitRange (the largest container, pod and claim) and ResourceQuota
+    (memory, CPU, pods, VMs, claims, storage) must take what the VM adds; a VM that runs already
+    adds only its new disks.
+  - What it cannot read (Longhorn absent or forbidden, a storage class, the quota) is a note in
+    its output, not a refusal.
 - **`preflight`** adds a `kubevirt` line (JSON: `"kubevirt"`, present only for this provider):
   `kubectl` and `virtctl` on PATH, the cluster answers, KubeVirt and CDI are `Deployed`, the
   namespace, service account, golden image and storage class exist, and a node may take a VM.
