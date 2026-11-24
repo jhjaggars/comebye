@@ -77,8 +77,14 @@ async function api(path, opts = {}) {
       headers: { "Content-Type": "application/json", ...(init.headers || {}) },
     });
   } catch (e) {
-    if (e && e.name === "TimeoutError") throw new Error("timed out — check the connection");
-    if (e && e.name === "AbortError") { e.aborted = true; }
+    if (e && e.name === "TimeoutError") { const t = new Error("timed out — check the connection"); t.timeout = true; throw t; }
+    if (e && e.name === "AbortError") { e.aborted = true; throw e; }
+    // fetch's own words ("Failed to fetch", "Load failed", "NetworkError when…") say nothing: say what happened.
+    if (e instanceof TypeError) {
+      const n = new Error(navigator.onLine === false ? "offline — check the connection" : "can't reach the hub — check the connection");
+      n.network = true;
+      throw n;
+    }
     throw e;
   }
   // An "immutable" response (a page's preview for one version) is kept by the browser for a year and
@@ -402,6 +408,7 @@ function hostStatus(name) { return state.hosts.find((h) => h.name === name); }
 const AGENT_STATUSES = new Set(["idle", "working", "blocked", "done", "unknown"]);
 
 function setAgents(d) {
+  srcOk(agentsSrc);
   state.agents = Array.isArray(d.agents) ? d.agents : [];
   for (const a of state.agents) {
     if (!AGENT_STATUSES.has(a.agent_status)) a.agent_status = "unknown";
@@ -1259,6 +1266,94 @@ function emptyHtml(title, hint, act) {
   return `<div class="empty"><b>${esc(title)}</b>${hint ? `<span>${hint}</span>` : ""}${act ? `<button type="button" class="empty-act" data-act="${escAttr(act[1])}">${esc(act[0])}</button>` : ""}</div>`;
 }
 
+/* ---------- honest loading: has the hub answered yet? ---------- */
+//
+// Each list a screen draws comes from a source: { at, err, since }. at is when the hub last answered
+// (0: not yet in this visit), err is why the last try failed, since is when the current wait began.
+// A screen draws its rows when it has them; its empty state only once the hub has answered (at > 0);
+// and otherwise srcWaitHtml: skeleton rows while trying, then "Can't reach the hub" with Try again
+// after a failure or SRC_GIVEUP_MS without an answer. A failed poll after an answer changes nothing
+// on screen: the rows already loaded stay. (The offline strip and saved state build on these records.)
+const SRC_GIVEUP_MS = 10000;
+const srcs = new Map(); // name -> source, for the Try again buttons
+
+// srcNew makes (or, for the same name, replaces) a source. retry asks again; redraw repaints the screens that show it.
+// The wait counts from now, or for a lazy source (read only when its screen opens) from its first read (srcStart).
+function srcNew(name, retry, redraw, lazy) {
+  const s = { name, at: 0, err: "", since: Date.now(), started: !lazy, retry, redraw, timer: null };
+  const old = srcs.get(name);
+  if (old) clearTimeout(old.timer);
+  srcs.set(name, s);
+  return s;
+}
+function srcStart(s) { if (!s.started) { s.started = true; s.since = Date.now(); srcArm(s); } }
+// srcArm repaints when the wait runs out, so a screen never sits on its skeleton.
+function srcArm(s) {
+  if (s.timer || !s.started || s.at || !s.redraw) return;
+  s.timer = setTimeout(() => { s.timer = null; if (!s.at) s.redraw(); }, Math.max(0, s.since + SRC_GIVEUP_MS - Date.now()) + 50);
+}
+function srcOk(s) { s.at = Date.now(); s.err = ""; clearTimeout(s.timer); s.timer = null; }
+function srcFail(s, e) { s.err = hubErrText(e); }
+// srcDown: nothing has come from the hub, and the last try failed or has taken too long.
+function srcDown(s) { return !s.at && (!!s.err || (s.started && Date.now() - s.since >= SRC_GIVEUP_MS)); }
+// srcAgain: Try again. The wait starts over, so the skeleton shows while the new try is out.
+function srcAgain(s) {
+  s.err = ""; s.since = Date.now(); s.started = true;
+  clearTimeout(s.timer); s.timer = null;
+  if (s.redraw) s.redraw();
+  if (s.retry) s.retry();
+}
+
+// hubErrText is why a request to the hub failed, in words (never a bare "Failed to fetch").
+function hubErrText(e) {
+  if (!e) return navigator.onLine === false ? "This device is offline." : "The connection to the hub failed.";
+  if (e.status === 401) return UNAUTHORIZED_MSG;
+  if (e.network) return navigator.onLine === false ? "This device is offline." : "The connection to the hub failed.";
+  if (e.timeout) return "The hub did not answer in time.";
+  if (e.status >= 500) return `The hub answered ${e.status}${e.message && e.message !== String(e.status) ? ": " + e.message : ""}.`;
+  return String((e && e.message) || e || "failed");
+}
+
+// srcWaitHtml is what a screen shows while it has nothing from s: skeleton rows, or, once the wait is over, why and Try again.
+// title (optional) names what is waited for ("Opening alpha…"); rows is how many skeleton rows (3).
+function srcWaitHtml(s, title, rows = 3) {
+  if (srcDown(s)) {
+    return `<div class="empty src-down" role="alert" data-src-state="down"><b>Can’t reach the hub</b><span>${esc(s.err || `No answer in ${SRC_GIVEUP_MS / 1000} seconds.`)}</span>` +
+      `<button type="button" class="empty-act src-retry" data-src="${escAttr(s.name)}">Try again</button></div>`;
+  }
+  srcArm(s);
+  const row = `<div class="skel-row"><i></i><span><b></b><b></b></span></div>`;
+  // It shows 300 ms into the wait (a quick answer never flashes it), however often the screen is redrawn meanwhile.
+  const delay = Math.max(0, 300 - (Date.now() - s.since));
+  return `<div class="src-wait" role="status" data-src-state="wait" style="animation-delay:${delay}ms">${title ? `<div class="src-title">${esc(title)}</div>` : ""}${row.repeat(rows)}<div class="src-note">Reaching the hub…</div></div>`;
+}
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest("button.src-retry[data-src]");
+  const s = b && srcs.get(b.dataset.src);
+  if (!s) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  srcAgain(s);
+});
+
+// The agents list (and the hosts with it): the event stream, and /api/agents on open and resume.
+const agentsSrc = srcNew("agents", () => {
+  state.retryDelay = 1000;
+  connectEvents();
+  refreshAgents().catch(agentsFailed);
+}, () => { renderList(); if (prs.route) renderPeers(); });
+// The ledger (Status, Archived, roles) and the To do list, which is read once the ledger has answered.
+const ledgerSrc = srcNew("ledger", () => { ledger.loadedAt = 0; loadLedger(); }, () => renderStatus());
+const todosSrc = srcNew("todos", () => { todos.loadedAt = 0; if (ledger.on === true) loadTodos(); else loadLedger(); }, () => renderTodos(true));
+// agentsFailed notes why the agents could not be read, while none have come yet.
+function agentsFailed(e) {
+  setConn(false);
+  if (agentsSrc.at) return;
+  srcFail(agentsSrc, e);
+  agentsSrc.redraw();
+}
+
 function renderListRows() {
   const wrap = $("agents");
   renderHostFilter();
@@ -1326,6 +1421,12 @@ function renderListRows() {
   renderPlans();
   renderNav();
   renderStatus();
+  if (!agents.length && !state.unauthorized && !agentsSrc.at) {
+    // Nothing from the hub yet: never "No agents running" before it has said so. A link to an agent says which.
+    const r = state.pendingRoute;
+    wrap.innerHTML = srcWaitHtml(agentsSrc, r ? `Opening ${r.pane}…` : "");
+    return;
+  }
   if (!agents.length) {
     const f = hostSel();
     const hubOnly = state.hosts.some((h) => h.local && h.no_agents);
@@ -1514,6 +1615,7 @@ async function loadLedger() {
   ledger.inflight = true;
   try {
     setLedger(await api("/api/ledger"));
+    srcOk(ledgerSrc);
     if (!arch.data && !arch.err) loadArchived(); // the board footer and Recently closed need it
     if (Date.now() - todos.loadedAt > 8000) loadTodos();
     loadUsageChips();
@@ -1526,7 +1628,14 @@ async function loadLedger() {
       ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, 3000);
     }
   } catch (e) {
-    if (e.status === 503) { ledger.on = false; } // no state directory: no handoffs or marks here
+    if (e.status === 503) { ledger.on = false; srcOk(ledgerSrc); srcOk(todosSrc); renderTodos(); } // no state directory: no handoffs or marks here
+    else if (ledger.on !== true) {
+      // Nothing read yet: Status, To do and Archived say they cannot reach the hub (a later failed poll keeps what they show).
+      srcFail(ledgerSrc, e);
+      if (todos.on !== true) { srcFail(todosSrc, e); renderTodos(); }
+      if (!arch.data) { srcFail(archSrc, e); renderArchived(); }
+      renderStatus();
+    }
   } finally {
     ledger.inflight = false;
     ledger.loadedAt = Date.now();
@@ -1936,10 +2045,12 @@ function saveTodoDrafts() { lsSet(TODO_DRAFTS_KEY, JSON.stringify(Object.fromEnt
 function todoDraft(id) { const d = todos.drafts.get(id); return d ? d.text : ""; }
 
 async function loadTodos() {
-  if (todos.inflight || ledger.on !== true) { if (ledger.on !== true) { todos.on = false; renderTodos(); if (ledger.on === false) todoDeepResolve(); } return; }
+  // No ledger here (it answered 503): no To do either. Not read yet: wait for it (todos.on stays unknown).
+  if (todos.inflight || ledger.on !== true) { if (ledger.on === false) { todos.on = false; renderTodos(); todoDeepResolve(); } return; }
   todos.inflight = true;
   try {
     const d = await api("/api/todos");
+    srcOk(todosSrc);
     todos.on = true;
     todos.items = Array.isArray(d.todos) ? d.todos : [];
     todos.open = d.open | 0;
@@ -1948,7 +2059,8 @@ async function loadTodos() {
     if (todos.pin && todos.openId === todos.pin.id && !todos.items.some((x) => x.id === todos.pin.id)) todos.items.push(todos.pin);
     todoReapply();
   } catch (e) {
-    if (e.status === 503 || e.status === 404) todos.on = false;
+    if (e.status === 503 || e.status === 404) { todos.on = false; srcOk(todosSrc); }
+    else if (todos.on !== true) srcFail(todosSrc, e);
     // Otherwise keep what we had: a failed poll should not make the panel blink.
   } finally {
     todos.inflight = false;
@@ -2298,11 +2410,12 @@ function renderSplit(force) {
   rsPlace();
   if (!pgs.loaded) {
     // pgs.pagesUrl (a separate origin for pages, if any) comes with the Pages list.
-    if (!rs.loading) { rs.loading = true; pagesLoad().finally(() => { rs.loading = false; renderSplit(true); }); }
-    if (el.hidden) {
-      if (!(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href); // Back closes it even while the Pages load
-      el.hidden = false; el.innerHTML = `<div class="pgs-pick">Loading…</div>`; rs.key = "";
-    }
+    // A failed read is not tried again by itself (Try again does): no loop of requests to a hub that is not answering.
+    if (!rs.loading && !srcDown(pagesSrc)) { rs.loading = true; pagesLoad().finally(() => { rs.loading = false; renderSplit(true); }); }
+    if (el.hidden && !(history.state && history.state.rs)) history.pushState({ rs: true }, "", location.href); // Back closes it even while the Pages load
+    const w = `<div class="pgs-pick">${srcWaitHtml(pagesSrc)}</div>`;
+    if (el.hidden || el._wait !== w) { el._wait = w; el.innerHTML = w; }
+    el.hidden = false; rs.key = "";
     rsPlace();
     return;
   }
@@ -2819,8 +2932,17 @@ function renderTodos(force) {
   // A forced redraw, or one that moves to another item, goes ahead even while the user types.
   const again = !!force || moved || todos.follow;
   const show = todos.on === true && (todos.items.length > 0 || todoOrphans().length > 0 || !!todos.notice);
-  if (main) main.hidden = !show;
-  if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
+  // Not read yet (todos.on unknown, and the hub keeps a ledger): the phone's card and the page say so, never "nothing".
+  const wait = todos.on == null && ledger.on !== false;
+  const waitHtml = wait ? srcWaitHtml(todosSrc, "", isDesktop() ? 3 : 1) : "";
+  if (main) { main.hidden = !show && !wait; main.classList.toggle("td-wait", wait); }
+  if (wait && main) {
+    const wsig = "wait:" + waitHtml;
+    if (main.dataset.sig !== wsig) {
+      main.dataset.sig = wsig;
+      main.innerHTML = `<div class="td-head"><span class="td-toggle"><span class="td-title">To do</span></span></div><div class="td-list">${waitHtml}</div>`;
+    }
+  } else if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
   const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
     todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.approval && t.approval.id, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
@@ -2840,10 +2962,10 @@ function renderTodos(force) {
     $("pt-count").textContent = show ? todoCountText() : "";
     const keys = $("pt-keys");
     if (keys) keys.hidden = !show;
-    const psig = show ? "p" + sig : "empty";
+    const psig = show ? "p" + sig : wait ? "wait:" + waitHtml : "empty";
     if (again || (page.dataset.sig !== psig && !typing(page))) {
       page.dataset.sig = psig;
-      todoPaint(page, show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : emptyHtml("Nothing is waiting on you", "When a coordinator needs an answer, the question appears here."));
+      todoPaint(page, wait && !show ? waitHtml : show ? `<div class="td-list">${todoListHtml("tdp")}</div><div class="tds-none"><b>${todos.open ? `${todos.open} waiting on you` : "Nothing is waiting on you"}</b><span>Pick a question on the left, or press <kbd>j</kbd>.</span>${todos.nxt ? `<button type="button" class="td-start">Start with the first</button>` : ""}</div>` : emptyHtml("Nothing is waiting on you", "When a coordinator needs an answer, the question appears here."));
     }
   }
   renderSplit(!!force);
@@ -3078,15 +3200,20 @@ function todoCopy(ta) {
 const RELEASES_HASH = "#/peers/~releases";
 const PRICES_HASH = "#/peers/~prices";
 const rls = { data: null, err: "", loadedAt: 0, inflight: false, confirm: null, busy: false };
+const rlsSrc = srcNew("releases", () => loadReleases(false), () => renderPeers(), true);
 
 async function loadReleases(refresh) {
   if (rls.inflight) return;
   rls.inflight = true;
+  srcStart(rlsSrc);
   try {
     rls.data = await api(`/api/releases${refresh ? "?refresh=1" : ""}`, { timeout: 120000 });
     rls.err = "";
+    srcOk(rlsSrc);
   } catch (e) {
-    rls.err = e.message || "failed";
+    rls.err = hubErrText(e);
+    // The hub's own refusal (4xx) is an answer; no answer at all, before any, is "Can't reach the hub".
+    if (e.status >= 400 && e.status < 500) srcOk(rlsSrc); else if (!rls.data) srcFail(rlsSrc, e);
   } finally {
     rls.inflight = false;
     rls.loadedAt = Date.now();
@@ -3643,7 +3770,7 @@ function relHistoryHtml(d) {
 
 function relPaneHtml() {
   const d = rls.data;
-  if (!d) return rls.err ? `<div class="rel-block" role="alert">Could not load the releases: ${esc(rls.err)}</div>` : '<div class="pr-empty">Loading…</div>';
+  if (!d) return rls.err && rlsSrc.at ? `<div class="rel-block" role="alert">Could not load the releases: ${esc(rls.err)}</div>` : srcWaitHtml(rlsSrc);
   return `${rls.err ? `<div class="rel-block rl-err-top" role="alert">Could not refresh: ${esc(rls.err)}</div>` : ""}
     <div class="rl-wrap"><div class="rl-a-card">${relCardHtml(d)}</div><div class="rl-a-fleet">${relFleetHtml(d)}</div><div class="rl-a-hist">${relHistoryHtml(d)}</div></div>`;
 }
@@ -5133,6 +5260,7 @@ const ARCH_FILTERS = [
   { key: "left", label: "Something left", ok: (r) => (r.archive.left || []).length > 0 },
 ];
 const arch = { route: false, data: null, err: "", q: "", filter: "all", busy: new Set(), open: new Set(), inflight: false, sig: "" };
+const archSrc = srcNew("archived", () => { if (ledger.on === true) loadArchived(); else { ledger.loadedAt = 0; loadLedger(); } }, () => renderArchived());
 
 // archCount is the number archived: the list when it is in, else the board's count.
 function archCount() {
@@ -5153,8 +5281,10 @@ async function loadArchived() {
     d.archived = Array.isArray(d.archived) ? d.archived : [];
     for (const r of d.archived) r.archive = r.archive || {};
     arch.data = d; arch.err = "";
+    srcOk(archSrc);
   } catch (e) {
-    arch.err = e.message;
+    arch.err = hubErrText(e);
+    if (!arch.data) srcFail(archSrc, e);
   } finally { arch.inflight = false; }
   const sig = JSON.stringify([...archParkIds()]) + ":" + archCount();
   if (sig !== arch.sig) { arch.sig = sig; renderList(); renderNav(); }
@@ -5213,7 +5343,8 @@ function renderArchived() {
   const f = ARCH_FILTERS.find((x) => x.key === arch.filter) || ARCH_FILTERS[0];
   const shown = found.filter(f.ok);
   let html;
-  if (!d) html = arch.err ? `<div class="ln-empty">${esc(arch.err)}</div>` : `<div class="ln-empty">Loading…</div>`;
+  if (!d && ledger.on === false) html = `<div class="ln-empty">Nothing is archived here: archiving needs the hub's ledger, which this host does not keep.</div>`;
+  else if (!d) html = srcWaitHtml(archSrc);
   else if (!rows.length) html = `<div class="ln-empty">Nothing is archived. The hub archives finished work after a week with no progress (3 days for research, plans, reviews and the like), and keeps its worktree and branch.</div>`;
   else if (!shown.length) html = `<div class="ln-empty">No archived session matches.</div>`;
   else html = shown.map(archRowHTML).join("");
@@ -7253,18 +7384,27 @@ function pageFromUrl(href) {
   return m ? { id: m[1], ver: m[2] ? Number(m[2]) : 0 } : null;
 }
 
+const pagesSrc = srcNew("pages", () => pagesLoad(), () => {
+  if (pgs.route) renderPages();
+  if (window.SP) window.SP.pagesChanged();
+  if (rs.el && !rs.el.hidden) renderSplit(true);
+}, true);
 async function pagesLoad() {
+  srcStart(pagesSrc);
   try {
     const r = await api("/api/pages");
     pgs.items = r.pages || [];
     try { pgs.publicUrl = r.public_url ? new URL(r.public_url).origin : ""; } catch { pgs.publicUrl = ""; }
     pgs.pagesUrl = r.pages_url || ""; // pages served from an origin of their own (-pages-listen), or ""
-    pgs.err = "";
+    pgs.err = ""; pgs.pollErr = "";
     pgsOpenedInit();
+    pgs.loaded = true;
+    srcOk(pagesSrc);
   } catch (e) {
-    pgs.err = e.status === 503 ? "Pages are off on this hub." : e.message;
+    // 503 is the hub's answer (Pages are off). Anything else is no answer: a list already read stays on screen.
+    if (e.status === 503) { pgs.err = "Pages are off on this hub."; pgs.loaded = true; srcOk(pagesSrc); }
+    else { pgs.pollErr = hubErrText(e); if (!pgs.loaded) srcFail(pagesSrc, e); }
   }
-  pgs.loaded = true;
   pgs.at = Date.now();
   if (pgs.route) renderPages();
   if (window.SP) window.SP.pagesChanged(); // the Pages tab beside an agent's chat reads the same list
@@ -7387,7 +7527,7 @@ function renderPages() {
   $("pgs-count").textContent = pgs.loaded && !pgs.err ? `${pgs.items.length} page${pgs.items.length === 1 ? "" : "s"}` : "";
   let html;
   if (pgs.err) html = `<div class="pgs-empty">${esc(pgs.err)}</div>`;
-  else if (!pgs.loaded) html = `<div class="pgs-empty">Loading…</div>`;
+  else if (!pgs.loaded) html = srcWaitHtml(pagesSrc);
   else if (!pgs.items.length) html = `<div class="pgs-empty pgs-zero"><span class="pgs-zsk" aria-hidden="true"><i class="a"></i><i></i><i></i><i></i></span><b>No pages yet</b><span>An agent publishes one when it has something to show you: a plan, a mockup, a report.</span><button type="button" class="btn cp" data-copy="comebye publish report.html" aria-label="Copy the command"><code>comebye publish report.html</code></button><span class="pgs-meta">A <code>.md</code> file works too.</span></div>`;
   else {
     const card = (p) => pgsCardHtml(p, p.id === r.id);
@@ -7466,7 +7606,7 @@ function renderPageView() {
   if (!p) {
     pgs.frameKey = "";
     view.dataset.id = "";
-    view.innerHTML = `<div class="pgs-pick">${pgs.loaded ? "That page is gone." : "Loading…"}</div>`;
+    view.innerHTML = `<div class="pgs-pick">${pgs.loaded ? "That page is gone." : srcWaitHtml(pagesSrc)}</div>`;
     return;
   }
   // The frame keeps the version it opened. When the agent publishes a newer
@@ -8110,7 +8250,7 @@ function route() {
   const a = routedAgent(r);
   if (a && state.selected === agentId(a)) return;
   if (a) { state.pendingRoute = null; openDetail(agentId(a)); }
-  else state.pendingRoute = r;
+  else { state.pendingRoute = r; if (!agentsSrc.at) renderList(); } // the list says which agent it is opening
 }
 
 // applyPendingRoute runs after each authoritative agent list.
@@ -8368,11 +8508,11 @@ function statusWho(e) { return e.agent_name || e.branch || e.id; }
 
 function statusHTML(desktop) {
   if (ledger.on === false) return emptyHtml("Status is not available here", "It needs the hub's ledger, which this host does not keep.");
-  if (ledger.on !== true) return emptyHtml("Loading…");
+  if (ledger.on !== true) return srcWaitHtml(ledgerSrc);
   const ps = statusModel();
   const nProg = ps.reduce((n, p) => n + p.progress.length, 0), nBlk = ps.reduce((n, p) => n + p.blocked.length, 0), nYou = ps.reduce((n, p) => n + p.todos.length, 0);
   const dmg = repoDamageList();
-  const sum = [dmg.length ? `${dmg.length} ${dmg.length === 1 ? "repository needs" : "repositories need"} repair` : "", nProg ? `${nProg} in progress` : "", nBlk ? `${nBlk} blocked` : "", nYou ? `${nYou} waiting on you` : ""].filter(Boolean).join(" · ") || "Nothing in progress, and nothing is waiting on you.";
+  const sum = [dmg.length ? `${dmg.length} ${dmg.length === 1 ? "repository needs" : "repositories need"} repair` : "", nProg ? `${nProg} in progress` : "", nBlk ? `${nBlk} blocked` : "", nYou ? `${nYou} waiting on you` : ""].filter(Boolean).join(" · ") || (todos.on == null ? "Nothing in progress." : "Nothing in progress, and nothing is waiting on you.");
   const open = (a) => desktop && a ? ` <button type="button" class="st-link" data-agent="${escAttr(agentId(a))}">open</button>` : "";
   const card = (p) => {
     let h = "";
@@ -8633,7 +8773,7 @@ function renderPeersList() {
   const r = prs.route;
   const hosts = state.hosts || [];
   $("pr-count").textContent = hosts.length ? `${hosts.length} host${hosts.length === 1 ? "" : "s"}` : "";
-  if (!hosts.length) { $("pr-items").innerHTML = '<div class="pr-empty">Loading…</div>'; return; }
+  if (!hosts.length) { $("pr-items").innerHTML = agentsSrc.at ? '<div class="pr-empty">No hosts.</div>' : srcWaitHtml(agentsSrc); return; }
   const html = hosts.map((h) => {
     const st = peerStatusOf(h);
     const mis = h.version_mismatch ? ` · <span class="warn">differs from the hub (${esc(prs.hubVersion || "?")})</span>` : "";
@@ -8890,7 +9030,7 @@ function renderPeerView() {
   $("peers").classList.toggle("in-peer", !!r.name);
   if (!r.name) { view.dataset.name = ""; view.innerHTML = '<div class="pr-empty" style="margin:auto;text-align:center">Pick a host from the list.</div>'; return; }
   const h = (state.hosts || []).find((x) => x.name === r.name);
-  if (!h) { view.dataset.name = ""; view.innerHTML = `<div class="pr-empty" style="margin:auto;text-align:center">${(state.hosts || []).length ? "That host is gone." : "Loading…"}</div>`; return; }
+  if (!h) { view.dataset.name = ""; view.innerHTML = `<div class="pr-empty" style="margin:auto;text-align:center">${agentsSrc.at ? "That host is gone." : srcWaitHtml(agentsSrc)}</div>`; return; }
   const c = prs.cfg[h.name] || { state: "loading" };
   if (view.dataset.name !== h.name) { // a different host: a fresh form, and its models
     view.dataset.name = h.name;
@@ -13846,12 +13986,12 @@ function connectEvents() {
   es.addEventListener("resync", () => {
     // The server's herdr stream was interrupted; refetch authoritative state.
     state.lastEventAt = Date.now();
-    refreshAgents().catch(() => setConn(false));
+    refreshAgents().catch(agentsFailed);
   });
   es.onopen = alive;
   es.onerror = () => {
     // Take over reconnecting so we control backoff and never stack streams.
-    setConn(false);
+    agentsFailed(null);
     es.onopen = es.onerror = null;
     es.close();
     if (state.es === es) scheduleReconnect();
@@ -13894,7 +14034,7 @@ function resume() {
   resumeAt = now;
   state.retryDelay = 1000;
   connectEvents();
-  refreshAgents().catch(() => setConn(false));
+  refreshAgents().catch(agentsFailed);
   if (state.selected) {
     // A read begun before the app was backgrounded may never settle (iOS
     // drops its socket without failing the fetch); do not wait for it.
@@ -15163,10 +15303,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("DOMContentLoaded", () => {
   renderList();
+  renderTodos(); // the phone's To do card says it is waiting, rather than nothing
   // Probe first so a 401 is reported to the user (EventSource alone would
   // just fail and retry silently).
-  api("/api/agents")
-    .catch((e) => { if (e.status === 401) toast(UNAUTHORIZED_MSG, true); })
+  // Its answer draws the list at once (the stream's first snapshot may come later on a slow link).
+  refreshAgents()
+    .catch((e) => { if (e.status === 401) toast(UNAUTHORIZED_MSG, true); agentsFailed(e); })
     .finally(connectEvents);
   startWatchdog();
   setInterval(() => { if (!document.hidden && (!state.selected || isDesktop())) renderList(); }, 60000);

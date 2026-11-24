@@ -161,6 +161,8 @@ if want chatswitch; then node chatswitch.mjs "http://127.0.0.1:$port" "$out" || 
 if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Archived screen (#/archived): list, filter, Unarchive/Resume/Propose removal, the board footer and the links.
 if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Honest loading and empty states on a held or dead link (issue #136, slice 1): /api/ routed in the browser, the shared hub untouched.
+if want offline; then node offline.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

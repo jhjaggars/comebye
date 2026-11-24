@@ -209,6 +209,7 @@
     const carry = !!id && !!st.id && st.open && st.tab === "status";
     st.id = id;
     Object.assign(st, { pick: null, doc: null, pin: null, pinSeen: "", list: null, docErr: "", diff: null, diffErr: "", closed: new Set(), opened: new Set(), known: new Set(), loaded: new Map(), loading: new Set(), loadErr: new Map() });
+    newSources();
     const det = $("detail");
     if (!id) { st.open = false; det.classList.remove("sp-open"); $("sp-btn").hidden = true; return; }
     const m = carry ? { ...recall(), open: true, tab: "status" } : recall();
@@ -221,6 +222,21 @@
     $("sp-grip").setAttribute("aria-valuenow", String(Math.round(m.w || 44)));
     sync();
     if (st.open) tick(true);
+  }
+
+  // Has the hub answered for this agent's Doc and Diff yet (app.js's srcNew)? Until then the tab shows a skeleton,
+  // then "Can't reach the hub": never "No document yet" or "No changes yet" before an answer says so.
+  function newSources() {
+    const redraw = () => { if (st.open) renderBody(); };
+    st.docSrc = srcNew("sp-doc", () => tick(true), redraw, true);
+    st.diffSrc = srcNew("sp-diff", () => tick(true), redraw, true);
+  }
+  newSources();
+  // An answer from the hub (a 4xx is one) settles the wait; no answer, before any, fails it.
+  function srcAfter(s, e) {
+    if (e && e.status >= 400 && e.status < 500) srcOk(s);
+    else if (e && !s.at) srcFail(s, e);
+    else if (!e) srcOk(s);
   }
 
   // ---- polling: every 3 s while the panel is open, the shown tab only ----
@@ -265,6 +281,7 @@
     st.busy = true;
     st.fetchedAt = Date.now();
     const id = st.id;
+    srcStart(st.tab === "diff" ? st.diffSrc : st.docSrc);
     try {
       if (st.tab === "diff") await loadDiff(a, id, now);
       else await loadDoc(a, id, now);
@@ -324,6 +341,7 @@
       const d = await api(`${agentPath(a)}/diff` + (!force && st.diff ? `?since=${encodeURIComponent(st.diff.sig)}` : ""));
       if (id !== st.id) return;
       st.diffErr = "";
+      srcAfter(st.diffSrc);
       if (d.unchanged) { renderBar(); return; }
       d.sections = (d.sections || []).map((s) => ({ ...s, files: s.files || [] })); // an empty section may arrive as null
       const first = !st.diff;
@@ -343,6 +361,7 @@
     } catch (e) {
       if (id !== st.id) return;
       st.diffErr = e.message || "could not read the changes";
+      srcAfter(st.diffSrc, e);
       renderBar();
       if (!st.diff) renderBody();
     }
@@ -356,6 +375,7 @@
       const d = await api(`${agentPath(a)}/file` + (q.toString() ? "?" + q : ""));
       if (id !== st.id) return;
       st.docErr = "";
+      srcAfter(st.docSrc);
       const pinChanged = JSON.stringify(d.pin || null) !== JSON.stringify(st.pin);
       st.pin = d.pin || null;
       if (!d.doc) { // nothing declared
@@ -371,6 +391,7 @@
     } catch (e) {
       if (id !== st.id) return;
       st.docErr = e.message || "could not read the document";
+      srcAfter(st.docSrc, e);
       if (st.pick && (e.status === 403 || e.status === 404 || e.status === 413 || e.status === 415)) { st.pick = null; st.doc = null; }
       renderBar(); renderBody();
     }
@@ -447,7 +468,7 @@
           `<button type="button" id="sp-pgfull" title="Open this Page on the Pages screen">Full screen</button>`;
       } else {
         const n = pgs.loaded ? mine().length : 0;
-        html = `<span class="sp-tot">${n ? `<b>${n} page${n === 1 ? "" : "s"}</b> <span class="muted">this agent published</span>` : `<span class="muted">Pages this agent publishes</span>`}</span><span class="live${pgs.err ? " off" : ""}" id="sp-live">${pgs.err ? "not updating" : "live"}</span>`;
+        html = `<span class="sp-tot">${n ? `<b>${n} page${n === 1 ? "" : "s"}</b> <span class="muted">this agent published</span>` : `<span class="muted">Pages this agent publishes</span>`}</span><span class="live${pgs.err || pgs.pollErr ? " off" : ""}" id="sp-live">${pgs.err || pgs.pollErr ? "not updating" : "live"}</span>`;
       }
     } else if (st.tab === "status") {
       // Full screen is the desktop's Status page; on a phone the sheet is nearly that already.
@@ -608,7 +629,7 @@
     st.pgKey = "";
     let html;
     if (pgs.err) html = `<div class="empty" role="status">${esc(pgs.err)}</div>`;
-    else if (!pgs.loaded) html = `<div class="empty" role="status">Reading the Pages…</div>`;
+    else if (!pgs.loaded) html = srcWaitHtml(pagesSrc);
     else {
       const list = mine();
       html = list.length ? `<div class="pgs-rows sp-pgl" id="sp-pgl" aria-label="Pages this agent published">${list.map((x) => window.pgsCardHtml(x, false)).join("")}</div>`
@@ -625,6 +646,7 @@
   }
 
   function docHtml() {
+    if (!st.doc && !st.docSrc.at) return srcWaitHtml(st.docSrc);
     if (st.docErr && !st.doc) return `<div class="empty" role="status">${esc(st.docErr)}</div>`;
     if (!st.doc) {
       const l = st.list;
@@ -794,7 +816,7 @@
 
   function diffHtml() {
     const d = st.diff;
-    if (!d) return st.diffErr ? `<div class="empty" role="status">${esc(st.diffErr)}</div>` : `<div class="empty" role="status">Reading the changes…</div>`;
+    if (!d) return st.diffErr && st.diffSrc.at ? `<div class="empty" role="status">${esc(st.diffErr)}</div>` : srcWaitHtml(st.diffSrc);
     if (d.not_git) return `<div class="empty" role="status">This agent's directory is not a git checkout, so there is nothing to compare.</div>`;
     const sections = d.sections.filter((s) => s.files.length);
     if (!sections.length) return `<div class="empty" role="status">No changes yet. Edits, staged files and new files show up here within a few seconds.</div>`;

@@ -343,6 +343,23 @@
     .empty span { display: block; margin-top: var(--sp-4); }
     .empty button.empty-act { margin-top: var(--sp-12); }
     .empty kbd { font: var(--fs-11) var(--ff-code); padding: 1px var(--sp-6); border: 1px solid var(--border); border-radius: var(--r-6); background: var(--panel2); color: var(--text); }
+    /* Waiting for the hub's first answer (app.js srcWaitHtml): three skeleton rows, shown 300 ms into the wait (the delay is
+       inline) so a quick answer never flashes them. Never an empty state before the hub has said "none". */
+    .src-wait { padding: var(--sp-12) 0; text-align: left; opacity: 0; animation: src-in 0.2s ease-out both; }
+    @keyframes src-in { to { opacity: 1; } }
+    .src-title { color: var(--text); font-size: var(--fs-15); font-weight: 650; padding: 0 var(--sp-4) var(--sp-10); overflow-wrap: anywhere; }
+    .skel-row { display: flex; align-items: center; gap: var(--sp-12); background: var(--panel); border: 1px solid var(--card-edge);
+      border-radius: var(--r-14); padding: var(--sp-12) var(--sp-14); margin-bottom: var(--sp-10); min-height: calc(var(--hit-48) + var(--sp-8)); box-sizing: border-box; }
+    .skel-row > i { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--panel2); }
+    .skel-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-8); }
+    .skel-row b { display: block; height: 10px; border-radius: var(--r-6); background: var(--panel2); width: 55%; animation: pulse 1.6s ease-in-out infinite; }
+    .skel-row b + b { width: 80%; height: 8px; }
+    .skel-row + .skel-row b { width: 40%; } .skel-row + .skel-row b + b { width: 70%; }
+    .src-note { color: var(--muted); font-size: var(--fs-13); text-align: center; padding-top: var(--sp-4); }
+    .todo.td-wait { opacity: 0; animation: src-in 0.2s ease-out 0.3s both; }
+    .todo.td-wait .src-wait { padding: 0 var(--sp-10) var(--sp-4); }
+    .todo.td-wait .src-note { padding-bottom: var(--sp-8); }
+    @media (prefers-reduced-motion: reduce) { .skel-row b { animation: none; } }
 
     /* Detail view */
     #detail { display: none; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
