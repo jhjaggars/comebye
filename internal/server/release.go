@@ -263,8 +263,9 @@ type relHost struct {
 	Local   bool            `json:"local"`
 	Status  string          `json:"status"`
 	Version string          `json:"version,omitempty"`
-	Enabled bool            `json:"enabled"`           // the host lets the app upgrade it
-	Unknown bool            `json:"unknown,omitempty"` // the host could not be asked
+	Enabled bool            `json:"enabled"`            // the host lets the app upgrade it
+	WithHub bool            `json:"with_hub,omitempty"` // the hub's deploy upgrades it (a -hub-only peer): see upgradeStatus
+	Unknown bool            `json:"unknown,omitempty"`  // the host could not be asked
 	DryRun  bool            `json:"dry_run,omitempty"`
 	Record  *upgrade.Record `json:"record,omitempty"`
 	// Hub marks the local host of a hub. Offline: the host is not answering
@@ -487,9 +488,16 @@ func (s *Server) relHosts(ctx context.Context) []relHost {
 					return // too old, or not enabled there
 				}
 			}
-			out[i].Enabled, out[i].DryRun, out[i].Record = st.Enabled, st.DryRun, st.Record
+			out[i].Enabled, out[i].DryRun, out[i].Record, out[i].WithHub = st.Enabled, st.DryRun, st.Record, st.WithHub && !local
 			if st.Version != "" {
 				out[i].Version = st.Version
+			}
+			if out[i].WithHub && s.cfg.Release.Simulated {
+				// A demo: the simulated deploy "rolls" the peers that go with
+				// the hub too, so they run what the hub's last deploy put out.
+				if v := s.simulatedVersion(nil); newerVersion(v, out[i].Version) {
+					out[i].Version = v
+				}
 			}
 			s.settleUpgradeAudit(h, st.Record)
 		}(i, h.Name, h.Local)
@@ -628,7 +636,12 @@ func (s *Server) tagRelease(it Todo, by string) {
 // ---- upgrading hosts ----
 
 type upgradeStatus struct {
-	Enabled bool            `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// WithHub: this host is upgraded with its hub, by the hub's deploy (Bump
+	// hub), not in place: a -hub-only peer (the in-cluster provisioner) runs
+	// from the same image as the hub, and the deploy rolls both. The host
+	// says so itself, so the hub's rollout needs no list of names.
+	WithHub bool            `json:"with_hub,omitempty"`
 	DryRun  bool            `json:"dry_run,omitempty"`
 	Version string          `json:"version,omitempty"`
 	Record  *upgrade.Record `json:"record,omitempty"`
@@ -642,7 +655,8 @@ func (s *Server) upgradeRecordPath() string {
 }
 
 func (s *Server) upgradeStatus() upgradeStatus {
-	st := upgradeStatus{Enabled: s.cfg.Release.Upgrade, DryRun: s.cfg.Release.DryRun, Version: s.cfg.Version}
+	st := upgradeStatus{Enabled: s.cfg.Release.Upgrade, DryRun: s.cfg.Release.DryRun, Version: s.cfg.Version,
+		WithHub: s.cfg.HubOnly && s.cfg.NoLedger && !s.cfg.Release.Upgrade}
 	if p := s.upgradeRecordPath(); p != "" {
 		if rec, err := upgrade.ReadRecord(p); err == nil && rec.ID != "" {
 			if rec.State == upgrade.RecRunning && !rec.Live(time.Now()) {
@@ -1065,6 +1079,16 @@ func parseSemver(v string) ([3]int, bool) {
 	}
 	_, err := fmt.Sscanf(v, "v%d.%d.%d", &out[0], &out[1], &out[2])
 	return out, err == nil
+}
+
+// newerVersion: v is a version, and newer than have (or have is none).
+func newerVersion(v, have string) bool {
+	nv, ok := parseSemver(v)
+	if !ok {
+		return false
+	}
+	hv, ok := parseSemver(have)
+	return !ok || semverLess(hv, nv)
 }
 
 func semverLess(a, b [3]int) bool {

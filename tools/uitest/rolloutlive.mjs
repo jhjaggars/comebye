@@ -2,7 +2,9 @@
 // (-ledger=false, -release-simulate: they "upgrade" by writing a record and then report the new version). Nothing is mocked:
 // Roll out to all goes through the hub's routes, the loop runs in the hub process, and the hub is KILLED and restarted in the
 // middle of the rollout, which must carry on from release/rollout.json. Then a version whose simulated upgrade fails (patch
-// 13) stops the rollout at the first peer (there is no canary by default) and leaves the rest untouched.
+// 13) stops the rollout at the first peer (there is no canary by default) and leaves the rest untouched. A fourth peer, "prov",
+// is -hub-only (the in-cluster provisioner): it reports with_hub, is never upgraded in place, and is done after the hub's
+// deploy ("upgraded with the hub"). Last, a peer that is down is skipped, and caught up by itself when it is back.
 //
 //   node rolloutlive.mjs OUT_DIR       (env: COMEBYE_BIN, FAKE_SOCK; SCHEME=dark|light)
 import { launch } from "./lib.mjs";
@@ -38,17 +40,18 @@ async function check(name, fn) {
   try { await fn(); results.push([name, true, ""]); } catch (e) { results.push([name, false, String(e.message).split("\n")[0]]); }
 }
 
-const hubPort = await freePort(), peerPorts = [await freePort(), await freePort(), await freePort()];
-const names = ["p1", "p2", "p3"];
+const hubPort = await freePort(), peerPorts = [await freePort(), await freePort(), await freePort()], provPort = await freePort();
+const names = ["p1", "p2", "p3"], fleet = [...names, "prov"];
 const base = `http://127.0.0.1:${hubPort}`;
 const j = async (m, p, body, hdr = {}) => { const r = await fetch(base + p, { method: m, headers: { "Content-Type": "application/json", ...hdr }, body: body && JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
 let browser;
 try {
   names.forEach((n, i) => start(n, peerPorts[i], ["-ledger=false", "-hub", base]));
+  start("prov", provPort, ["-ledger=false", "-hub-only", "-hub", base]);
   start("hub", hubPort, ["-hub-mode"]);
-  await Promise.all([up(hubPort), ...peerPorts.map(up)]);
-  names.forEach(async (n, i) => { const r = await j("POST", "/api/peers", { name: n, urls: [`http://127.0.0.1:${peerPorts[i]}`] }); if (r.status !== 201) throw new Error("add " + n + JSON.stringify(r)); });
-  for (let i = 0; i < 100; i++) { const r = await j("GET", "/api/peers"); if (names.every((n) => (r.body.peers || []).some((p) => p.name === n && p.status === "ok"))) break; await sleep(100); }
+  await Promise.all([up(hubPort), ...peerPorts.map(up), up(provPort)]);
+  [...peerPorts, provPort].forEach(async (port, i) => { const n = fleet[i]; const r = await j("POST", "/api/peers", { name: n, urls: [`http://127.0.0.1:${port}`] }); if (r.status !== 201) throw new Error("add " + n + JSON.stringify(r)); });
+  for (let i = 0; i < 100; i++) { const r = await j("GET", "/api/peers"); if (fleet.every((n) => (r.body.peers || []).some((p) => p.name === n && p.status === "ok"))) break; await sleep(100); }
 
   const tag = async (version) => {
     const t = await j("POST", "/api/todos", { question: "", kind: "release", no_wait: true, release: { version, commit: SHA } });
@@ -68,14 +71,36 @@ try {
   // ---- scenario 1: a healthy rollout, the hub killed and restarted in the middle ----
   const V1 = "v9.7.1";
   const r1 = await tag(V1);
-  await check("the plan offers the peers, then the hub last", async () => {
+  await check("the plan offers the peers, then the hub, then prov upgraded with the hub; prov says with_hub and has no button", async () => {
     const v = await view();
     const plan = v.rollout_plan || [];
     // No canary by default: every peer is in the "peers" wave, in fleet order (the order they announced themselves,
-    // which is not fixed here); the hub is last.
-    const steps = plan.map((s) => s.host + "/" + s.wave);
-    if ([...steps.slice(0, -1).sort(), steps[steps.length - 1]].join() !== "p1/peers,p2/peers,p3/peers,hub/hub") throw new Error(JSON.stringify(plan));
+    // which is not fixed here); the hub is last, and prov (with_hub) after it.
+    const steps = plan.map((s) => s.host + "/" + s.wave + (s.mode ? "/" + s.mode : ""));
+    if ([...steps.slice(0, -2).sort(), ...steps.slice(-2)].join() !== "p1/peers,p2/peers,p3/peers,hub/hub/deploy,prov/hub/with_hub") throw new Error(JSON.stringify(plan));
+    const prov = v.hosts.find((h) => h.name === "prov");
+    if (!prov || !prov.with_hub || prov.enabled) throw new Error("prov: " + JSON.stringify(prov));
+    if (v.rollout_plan_error) throw new Error("plan error: " + v.rollout_plan_error);
   });
+  for (const width of [1280, 390]) {
+    await check(`Roll out to all in the app at ${width}: one confirm lists the peers, the hub, and prov "with the hub"; nothing scrolls sideways`, async () => {
+      const { browser: b, page } = await launch({ width, height: width >= 1100 ? 800 : 844, dark });
+      browser = b;
+      await page.goto(base + "/#/peers/~releases", { waitUntil: "load" });
+      await page.waitForSelector('#pr-releases [data-rel="rollout"]', { timeout: 20000 });
+      if (await page.$("[data-rollout-plan-error]")) throw new Error("the card says Roll out to all is not available");
+      await page.click('#pr-releases [data-rel="rollout"]');
+      await page.waitForSelector("#pr-releases .rl-order [data-with-hub]", { timeout: 5000 });
+      const txt = await page.$eval("#pr-releases .rel-confirm", (el) => el.textContent);
+      if (!/Confirm: roll out v9\.7\.1 to 5 hosts/.test(txt) || !/upgraded with the hub by Bump hub/.test(txt)) throw new Error(txt);
+      const order = await page.$$eval("#pr-releases .rl-order li", (els) => els.map((e) => e.dataset.host));
+      if (order.slice(-2).join() !== "hub,prov") throw new Error(order.join());
+      await page.screenshot({ path: `${out}/rolloutlive-confirm-${width}.png` });
+      const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+      if (w[0] > w[1]) throw new Error("sideways scroll " + w.join("/"));
+      await b.close(); browser = null;
+    });
+  }
   await check("Roll out to all starts a rollout; one peer at a time, with no canary and no soak", async () => {
     const s = await j("POST", "/api/release/rollout", { todo: r1.id, version: V1, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r1.csrf });
     if (s.status !== 202) throw new Error(JSON.stringify(s));
@@ -83,7 +108,7 @@ try {
     if (dup.status !== 409) throw new Error("a second start was accepted: " + dup.status);
     // p1 is upgraded alone: while it is not done, nobody else is touched; and no step ever soaks.
     const jb = await until("p1 upgrading", async () => { const x = await job(); return x && x.plan[0].phase !== "pending" && x; });
-    if (jb.plan[0].phase !== "ok" && (jb.plan[1].phase !== "pending" || jb.plan[2].phase !== "pending" || jb.plan[3].phase !== "pending")) throw new Error("others touched: " + phases(jb));
+    if (jb.plan[0].phase !== "ok" && jb.plan.slice(1).some((x) => x.phase !== "pending")) throw new Error("others touched: " + phases(jb));
     if (jb.plan.some((x) => x.phase === "soaking" || x.wave === "canary") || jb.canary) throw new Error("a canary or a soak: " + JSON.stringify(jb.plan));
     const up1 = await j("POST", `/api/hosts/p2/release/upgrade`, { todo: r1.id, version: V1 }, { "X-Comebye-Csrf": r1.csrf });
     if (up1.status !== 409 || !JSON.stringify(up1.body).includes("rollout_active")) throw new Error("manual upgrade was not refused: " + JSON.stringify(up1));
@@ -97,7 +122,7 @@ try {
     await up(hubPort);
     for (let i = 0; i < 100; i++) { const r = await j("GET", "/api/peers"); if (names.every((n) => (r.body.peers || []).some((p) => p.name === n && p.status === "ok"))) break; await sleep(100); }
     const done = await until("done", async () => { const x = await job(); return x && x.state === "done" && x; }, 120000);
-    if (phases(done) !== "p1=ok p2=ok p3=ok hub=ok") throw new Error(phases(done));
+    if (phases(done) !== "p1=ok p2=ok p3=ok hub=ok prov=ok" || done.plan[4].detail !== "upgraded with the hub") throw new Error(phases(done) + " " + JSON.stringify(done.plan[4]));
     const acts = await audit(r1.id);
     const has = (a) => acts.filter((x) => x === a || x.startsWith(a + ":")).length;
     if (has("rollout.resume-after-restart") !== 1 || has("rollout.finish") !== 1 || has("rollout.start") !== 1) throw new Error(acts.join(" "));
@@ -115,19 +140,39 @@ try {
     const s = await j("POST", "/api/release/rollout", { todo: r2.id, version: V2, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r2.csrf });
     if (s.status !== 202) throw new Error(JSON.stringify(s));
     const jb = await until("stopped", async () => { const x = await job(); return x && x.state === "stopped" && x; });
-    if (phases(jb) !== "p1=failed p2=pending p3=pending hub=pending" || !/rolled_back: simulated smoke check failed/.test(jb.stop.reason) || !jb.plan[0].output) throw new Error(phases(jb) + " " + JSON.stringify(jb.stop));
+    if (phases(jb) !== "p1=failed p2=pending p3=pending hub=pending prov=pending" || !/rolled_back: simulated smoke check failed/.test(jb.stop.reason) || !jb.plan[0].output) throw new Error(phases(jb) + " " + JSON.stringify(jb.stop));
     const v = await view();
     if (!v.needs_you || !/stopped at p1/.test(v.needs_text)) throw new Error("not flagged: " + v.needs_text);
     const rs = await j("POST", "/api/release/rollout/resume", { id: jb.id }, { "X-Comebye-Csrf": r2.csrf });
     if (rs.status !== 200) throw new Error("resume " + JSON.stringify(rs));
     const again = await until("stopped again", async () => { const x = await job(); return x && x.state === "stopped" && x.plan[0].attempt === 1 && x; });
-    if (phases(again) !== "p1=failed p2=pending p3=pending hub=pending") throw new Error(phases(again));
+    if (phases(again) !== "p1=failed p2=pending p3=pending hub=pending prov=pending") throw new Error(phases(again));
     const c = await j("POST", "/api/release/rollout/cancel", { id: jb.id }, { "X-Comebye-Csrf": r2.csrf });
     if (c.status !== 200 || (await job()).state !== "cancelled") throw new Error("cancel " + JSON.stringify(c));
     const todo = (await j("GET", "/api/todos/" + r2.id)).body.todo;
     if (!/cancelled/.test(todo.release.rollout_note || "")) throw new Error("no note on the item: " + JSON.stringify(todo.release));
     const up2 = await j("POST", `/api/hosts/p2/release/upgrade`, { todo: r2.id, version: V2 }, { "X-Comebye-Csrf": r2.csrf });
     if (JSON.stringify(up2.body).includes("rollout_active")) throw new Error("still locked after Cancel");
+  });
+
+  // ---- scenario 3: p3 is down; it is skipped, the rest go, and it is caught up by itself when it is back ----
+  const V3 = "v9.7.2";
+  const r3 = await tag(V3);
+  await check("a peer that is down is skipped without holding up the others, and upgraded by itself when it is back", async () => {
+    procs.p3.kill("SIGKILL");
+    await until("p3 offline", async () => (await view()).hosts.some((h) => h.name === "p3" && h.offline), 30000);
+    const s = await j("POST", "/api/release/rollout", { todo: r3.id, version: V3, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r3.csrf });
+    if (s.status !== 202) throw new Error(JSON.stringify(s));
+    const done = await until("done with p3 skipped", async () => { const x = await job(); return x && x.state === "done" && x; }, 120000);
+    if (phases(done) !== "p1=ok p2=ok p3=skipped hub=ok prov=ok" || !done.plan[2].catch_up) throw new Error(phases(done) + " " + JSON.stringify(done.plan[2]));
+    start("p3", peerPorts[2], ["-ledger=false", "-hub", base]);
+    await up(peerPorts[2]);
+    const caught = await until("p3 caught up", async () => { const x = await job(); return x && x.state === "done" && x.plan[2].phase === "ok" && x; }, 90000);
+    if (phases(caught) !== "p1=ok p2=ok p3=ok hub=ok prov=ok") throw new Error(phases(caught));
+    const acts = await audit(r3.id);
+    if (!acts.includes("rollout.catchup:p3")) throw new Error(acts.join(" "));
+    const v = await view();
+    if (!v.hosts.every((h) => h.version === V3)) throw new Error(v.hosts.map((h) => h.name + ":" + h.version).join());
   });
 
   // ---- the pictures: the finished rollout in the app, at both widths ----

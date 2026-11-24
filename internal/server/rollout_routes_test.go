@@ -66,8 +66,10 @@ func TestRolloutStartRoute(t *testing.T) {
 	tool.mu.Lock()
 	tool.build = release.Build{State: "success"}
 	tool.mu.Unlock()
+	// A host the app may not upgrade does not refuse the plan; a plan of
+	// only such hosts has nothing to do, and is refused with the reason.
 	f.set("b", func(h *relHost) { h.Enabled = false })
-	if w := post("/api/release/rollout", startBody(it, `["a","b"]`)); w.Code != 409 || !strings.Contains(w.Body, "bad_plan") || !strings.Contains(w.Body, "-release-upgrade") {
+	if w := post("/api/release/rollout", startBody(it, `["b"]`)); w.Code != 409 || !strings.Contains(w.Body, "bad_plan") || !strings.Contains(w.Body, "-release-upgrade") {
 		t.Fatalf("not enabled = %d %s", w.Code, w.Body)
 	}
 	f.set("b", func(h *relHost) { h.Enabled = true })

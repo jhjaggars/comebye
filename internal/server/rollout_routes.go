@@ -96,28 +96,28 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 	if b.Hosts == nil {
 		b.Hosts = []string{}
 	}
-	plan, err := planRollout(hosts, b.Hosts, s.cfg.Release.Canary)
-	if err != nil {
-		relErr(w, http.StatusConflict, "bad_plan", err.Error())
-		return
-	}
 	dst, derr := s.deployStatusFor(ctx)
 	if derr == nil && dst.Record != nil && dst.Record.State == depRunning {
 		relErr(w, http.StatusConflict, "deploy_running", "a deploy is running: wait for it to finish")
 		return
 	}
-	if b.Hub {
-		hub, err := hubWave(hosts, derr == nil && dst.Enabled)
-		if err != nil {
-			relErr(w, http.StatusConflict, "bad_plan", err.Error())
-			return
-		}
-		if hub != nil {
-			plan = append(plan, *hub)
-		}
+	plan, err := rolloutPlan(hosts, b.Hosts, s.cfg.Release.Canary, b.Hub, derr == nil && dst.Enabled)
+	if err != nil {
+		relErr(w, http.StatusConflict, "bad_plan", err.Error())
+		return
 	}
-	if len(plan) == 0 {
-		relErr(w, http.StatusConflict, "bad_plan", "every host in the plan already runs "+it.Release.Version)
+	if !actionable(plan) {
+		why := "every host in the plan already runs " + it.Release.Version
+		var notes []string
+		for _, st := range plan {
+			if st.Phase == roSkipped {
+				notes = append(notes, st.Host+": "+st.Detail)
+			}
+		}
+		if len(notes) > 0 {
+			why = "no host in the plan can be upgraded from the app: " + strings.Join(notes, "; ")
+		}
+		relErr(w, http.StatusConflict, "bad_plan", why)
 		return
 	}
 	job, err := s.rollout.Start(it.ID, it.Release.Version, it.Release.Commit, s.by(r, ""), plan)
@@ -214,21 +214,18 @@ func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost, dep *
 	if has && job.live() {
 		return
 	}
-	plan, err := planRollout(hosts, nil, s.cfg.Release.Canary)
+	plan, err := rolloutPlan(hosts, nil, s.cfg.Release.Canary, true, deployOn)
 	if err != nil {
 		out["rollout_plan_error"] = err.Error()
 		return
 	}
-	// The hub is the last wave, named in the confirm.
-	if hub, herr := hubWave(hosts, deployOn); herr == nil && hub != nil {
-		plan = append(plan, *hub)
-		if deployOn {
-			out["rollout_hub_label"] = label
-		}
-	} else if herr != nil {
-		out["rollout_hub_error"] = herr.Error()
+	// The hub is the last wave, named in the confirm, and after it the peers
+	// its deploy upgrades. A host the app cannot upgrade is in the plan,
+	// skipped, with the reason: it does not hold up the others.
+	if deployOn {
+		out["rollout_hub_label"] = label
 	}
-	if len(plan) == 0 {
+	if !actionable(plan) {
 		return
 	}
 	out["rollout_plan"] = plan

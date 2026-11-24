@@ -143,19 +143,29 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   start the hub with `-release-canary NAME` (or `COMEBYE_RELEASE_CANARY`): that peer goes first, alone, and soaks for
   2 minutes before the others. A rollout saved with a canary step before this change still resumes and finishes as
   it was planned.
+- **Peers upgraded with the hub:** a `-hub-only` peer with no ledger (the in-cluster provisioner) runs from the hub's
+  image and is rolled by the hub's deploy, never in place. It says so itself: its `GET /api/release/upgrade` answers
+  `with_hub: true` (unless it is started with `-release-upgrade`). The rollout lists it after the hub as "upgraded
+  with the hub", never starts it, and after the deploy waits up to 5 minutes for it to be back on the version; one
+  that is not is skipped with the reason, not a stop. A hub already on the version is deployed again when such a
+  peer is behind. Without a deploy command the hub and these peers are listed as skipped, with why.
+- **Hosts the app may not upgrade** (no `-release-upgrade`) are listed as skipped, with why; they do not hold up
+  the others.
 - **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then
   the hub sees it back online on the version (5 minutes). Any failure stops the whole rollout at once: the rest are
   not touched, hosts already done stay done. **Retry** runs the failed step again; **Cancel** ends it and reverts
   nothing.
 - **Offline hosts** are skipped after 2 minutes and listed; the rollout finishes "done, 1 skipped" and the release
-  stays open, with **Roll out again** for just those hosts.
+  stays open. The loop keeps looking (once a minute, for a week after the rollout finished): when a skipped host is
+  back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. **Roll out
+  again** does the same at once for just those hosts.
 - **Pause** takes effect when the step in flight ends; it never interrupts an install or a restart. While a rollout
   is live the per-host Upgrade, Roll back and Bump hub buttons are locked.
 - **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few
   seconds. Each step is derived from the file, the hosts' upgrade records and the fleet's versions, so a restart of
   the hub, including the one the hub wave itself causes, carries on where it was. Every step is in the audit log
   (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`,
-  `.finish`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
+  `.finish`, `.catchup`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
   release's to-do item.
 - Only the user starts one (user role and the page's CSRF token; the body repeats version, commit and the ordered
   hosts); there is no automatic option.

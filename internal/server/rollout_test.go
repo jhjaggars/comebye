@@ -641,9 +641,17 @@ func TestPlanRollout(t *testing.T) {
 			t.Errorf("%v must be refused", bad)
 		}
 	}
+	// A reachable host the app may not upgrade is listed, already skipped
+	// with the reason: it does not refuse the plan or hold up the others.
 	hosts[2].Enabled = false
-	if _, err := planRollout(hosts, nil, ""); err == nil || !strings.Contains(err.Error(), "b") {
-		t.Fatalf("not enabled: %v", err)
+	p, err = planRollout(hosts, nil, "")
+	if err != nil || names(p) != "a/peers b/peers d/peers" || p[1].Phase != roSkipped || !strings.Contains(p[1].Detail, "-release-upgrade") || p[0].Phase != roPending {
+		t.Fatalf("not enabled: %+v %v", p, err)
+	}
+	// A peer upgraded with the hub is not an ordinary step, even when named.
+	hosts[1].WithHub, hosts[1].Enabled = true, false
+	if p, err = planRollout(hosts, []string{"a", "b"}, ""); err != nil || names(p) != "b/peers" {
+		t.Fatalf("with_hub: %s %v", names(p), err)
 	}
 }
 
@@ -1095,4 +1103,187 @@ func TestRolloutSavedWithACanaryStepStillResumesAndFinishes(t *testing.T) {
 	r.f.finish("b", upgrade.RecOK, "v0.6.4")
 	r.tick()
 	r.want("done a=ok b=ok")
+}
+
+// ---- the peers upgraded with the hub, skipped hosts, catching up ----
+
+// newProvRig is a hub with a deploy command, peers a and b, and prov: a
+// -hub-only peer the deploy upgrades with the hub (it reports with_hub).
+func newProvRig(t *testing.T) *rolloutRig {
+	r := newHubRig(t, "a", "b")
+	r.f.hosts["prov"] = &relHost{Name: "prov", Status: "ok", Version: "v0.6.3", WithHub: true}
+	r.f.order = append(r.f.order, "prov")
+	r.e.soak = 0
+	return r
+}
+
+func (r *rolloutRig) startAll() Rollout {
+	r.t.Helper()
+	plan, err := rolloutPlan(r.f.Hosts(context.Background(), "v0.6.4"), nil, "", true, true)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	j, err := r.e.Start("t1", "v0.6.4", "", "jesse", plan)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return j
+}
+
+func TestRolloutPlanCoversThePeerUpgradedWithTheHub(t *testing.T) {
+	r := newProvRig(t)
+	hosts := r.f.Hosts(context.Background(), "v0.6.4")
+	plan, err := rolloutPlan(hosts, nil, "", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, st := range plan {
+		got = append(got, st.Host+"/"+st.Wave+"/"+st.Mode+"/"+st.Phase)
+	}
+	if strings.Join(got, " ") != "a/peers//pending b/peers//pending hub/hub/deploy/pending prov/hub/with_hub/pending" {
+		t.Fatal(got)
+	}
+	// No deploy command: the hub cannot be upgraded from the app, and nor
+	// can prov; both are listed, skipped with the reason, and the peers go.
+	r.f.set("hub", func(h *relHost) { h.Enabled = false })
+	plan, err = rolloutPlan(r.f.Hosts(context.Background(), "v0.6.4"), nil, "", true, false)
+	got = nil
+	for _, st := range plan {
+		got = append(got, st.Host+"/"+st.Phase)
+	}
+	if err != nil || strings.Join(got, " ") != "a/pending b/pending hub/skipped prov/skipped" || !actionable(plan) || !strings.Contains(plan[3].Detail, "with the hub") {
+		t.Fatal(got, err)
+	}
+	// The hub already runs the version, but prov does not: the deploy runs
+	// again for it.
+	r.f.set("hub", func(h *relHost) { h.Version = "v0.6.4"; h.Enabled = true })
+	if hub, err := hubWave(r.f.Hosts(context.Background(), "v0.6.4"), true); err != nil || hub == nil || hub.Mode != stepModeDeploy {
+		t.Fatal(hub, err)
+	}
+	r.f.set("prov", func(h *relHost) { h.Version = "v0.6.4" })
+	if hub, err := hubWave(r.f.Hosts(context.Background(), "v0.6.4"), true); err != nil || hub != nil {
+		t.Fatal(hub, err)
+	}
+}
+
+func TestRolloutUpgradesThePeerWithTheHubAcrossTheHubRestart(t *testing.T) {
+	r := newProvRig(t)
+	r.startAll()
+	r.peersDone("a", "b")
+	r.want("running a=ok b=ok hub=upgrading prov=pending")
+	if len(r.f.starts) != 2 {
+		t.Fatalf("prov was started as a host: %v", r.f.starts)
+	}
+	// The deploy rolls the hub (this process ends) and then prov.
+	r.f.endDeploy(depOK, "", "v0.6.4")
+	r.e = r.engine()
+	r.e.resumeAfterRestart()
+	r.tick()
+	r.want("running a=ok b=ok hub=ok prov=verifying")
+	r.f.set("prov", func(h *relHost) { h.Version = "v0.6.4" })
+	r.tick()
+	r.want("done a=ok b=ok hub=ok prov=ok")
+	j, _ := r.e.Get()
+	if j.Plan[3].Detail != "upgraded with the hub" || len(r.f.starts) != 2 || r.f.deploys != 1 {
+		t.Fatalf("%+v starts=%v deploys=%d", j.Plan[3], r.f.starts, r.f.deploys)
+	}
+}
+
+func TestRolloutPeerWithTheHubThatDoesNotComeBackIsSkippedNotStopped(t *testing.T) {
+	r := newProvRig(t)
+	r.startAll()
+	r.peersDone("a", "b")
+	r.f.endDeploy(depOK, "", "v0.6.4")
+	r.tick()
+	r.want("running a=ok b=ok hub=ok prov=verifying")
+	r.f.advance(r.e.backWait)
+	r.tick()
+	r.want("done a=ok b=ok hub=ok prov=skipped")
+	j, _ := r.e.Get()
+	if !strings.Contains(j.Plan[3].Detail, "it runs v0.6.3") || j.Plan[3].CatchUp {
+		t.Fatalf("%+v", j.Plan[3])
+	}
+}
+
+func TestRolloutSkipsAHostTheAppMayNotUpgrade(t *testing.T) {
+	r := newRolloutRig(t, "a", "b", "c")
+	r.canary = ""
+	r.e.soak = 0
+	r.f.set("b", func(h *relHost) { h.Enabled = false })
+	r.start()
+	r.want("running a=pending b=skipped c=pending")
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok b=skipped c=upgrading")
+	// One that changes its mind while the rollout runs is skipped, too.
+	r.f.finish("c", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok b=skipped c=ok")
+	if strings.Contains(r.actions(), "rollout.stop") {
+		t.Fatal(r.actions())
+	}
+}
+
+func TestRolloutCatchesUpAnOfflineHostWhenItIsBack(t *testing.T) {
+	r := newRolloutRig(t, "a", "b")
+	r.canary = ""
+	r.e.soak = 0
+	r.e.catchUpEvery = time.Minute
+	r.f.set("b", func(h *relHost) { h.Status = "down" })
+	r.start()
+	r.tick()
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("running a=ok b=pending")
+	r.f.advance(r.e.offlineGrace)
+	r.tick()
+	r.want("done a=ok b=skipped")
+	j, _ := r.e.Get()
+	if !j.Plan[1].CatchUp {
+		t.Fatalf("%+v", j.Plan[1])
+	}
+	// Still offline: nothing happens, and the fleet is asked at most once a minute.
+	r.f.advance(time.Minute)
+	r.tick()
+	r.want("done a=ok b=skipped")
+	// Back: the loop picks it up by itself.
+	r.f.set("b", func(h *relHost) { h.Status = "ok" })
+	r.tick()
+	r.want("done a=ok b=skipped") // within the minute
+	r.f.advance(time.Minute)
+	r.tick()
+	r.want("running a=ok b=pending")
+	r.tick()
+	r.want("running a=ok b=upgrading")
+	r.f.finish("b", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok b=ok")
+	if !strings.Contains(r.actions(), "rollout.catchup:b") || r.stateSeq() != "running,done,running,done" {
+		t.Fatal(r.actions(), r.stateSeq())
+	}
+	// A host that is back already on the version (upgraded by hand) is
+	// marked done; a week after the job finished nothing is looked at.
+	r2 := newRolloutRig(t, "a", "b", "c")
+	r2.canary = ""
+	r2.e.soak, r2.e.catchUpEvery = 0, 0
+	r2.f.set("b", func(h *relHost) { h.Status = "down" })
+	r2.f.set("c", func(h *relHost) { h.Status = "down" })
+	r2.start()
+	r2.tick()
+	r2.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r2.tick()
+	r2.f.advance(r2.e.offlineGrace)
+	r2.tick()
+	r2.f.advance(r2.e.offlineGrace) // c's own grace starts at its turn
+	r2.tick()
+	r2.want("done a=ok b=skipped c=skipped")
+	r2.f.set("b", func(h *relHost) { h.Status = "ok"; h.Version = "v0.6.4" })
+	r2.tick()
+	r2.want("done a=ok b=ok c=skipped")
+	r2.f.advance(rolloutCatchUpFor + time.Hour)
+	r2.f.set("c", func(h *relHost) { h.Status = "ok" })
+	r2.tick()
+	r2.want("done a=ok b=ok c=skipped")
 }

@@ -177,3 +177,24 @@ func TestWakeThroughTheInClusterPeerWithLaharlAbsent(t *testing.T) {
 		t.Errorf("argv: %v", kvW.argv())
 	}
 }
+
+// The in-cluster provisioner cannot be upgraded in place: its hub's deploy
+// rolls it with the hub. It says so in its release status (with_hub), the
+// explicit signal the hub's "Roll out to all" plans it by; with
+// -release-upgrade it is an ordinary host again.
+func TestHerdrlessPeerReportsItIsUpgradedWithTheHub(t *testing.T) {
+	s := herdrlessProvServer(t, newFakeWorker(t))
+	var st upgradeStatus
+	if code := getJSON(t, s, "/api/release/upgrade", hubCall, &st); code != 200 || !st.WithHub || st.Enabled {
+		t.Fatalf("status = %d %+v", code, st)
+	}
+	s.cfg.Release.Upgrade = true
+	if st = s.upgradeStatus(); st.WithHub || !st.Enabled {
+		t.Fatalf("with -release-upgrade: %+v", st)
+	}
+	// An ordinary peer (it keeps no ledger, but has herdr) is not.
+	s.cfg.Release.Upgrade, s.cfg.HubOnly = false, false
+	if st = s.upgradeStatus(); st.WithHub {
+		t.Fatalf("ordinary peer: %+v", st)
+	}
+}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -28,6 +29,12 @@ import (
 
 const stepModeDeploy = "deploy"
 
+// stepModeWithHub: a peer the hub's deploy upgrades along with the hub (it
+// reports with_hub: a -hub-only peer such as the in-cluster provisioner,
+// which the app cannot upgrade in place). Its step follows the hub's and
+// only watches it come back on the version; it is never started.
+const stepModeWithHub = "with_hub"
+
 // the deploy cannot outlive its own cap by much
 const hubRunWait = deployTimeout + time.Minute
 
@@ -39,7 +46,7 @@ func hubWave(hosts []relHost, deploy bool) (*RolloutStep, error) {
 		if !h.Hub {
 			continue
 		}
-		if h.Current {
+		if h.Current && !(deploy && withHubBehind(hosts)) {
 			return nil, nil
 		}
 		st := RolloutStep{Host: h.Name, Wave: waveHub, Phase: roPending}
@@ -52,6 +59,127 @@ func hubWave(hosts []relHost, deploy bool) (*RolloutStep, error) {
 		return &st, nil
 	}
 	return nil, errors.New("this fleet has no hub host")
+}
+
+// withHubBehind: a reachable peer that the hub's deploy upgrades is not on
+// the version yet (a hub already on it is deployed again for it).
+func withHubBehind(hosts []relHost) bool {
+	for _, h := range hosts {
+		if !h.Hub && h.WithHub && !h.Current && hostUp(h) {
+			return true
+		}
+	}
+	return false
+}
+
+// rolloutPlan is the whole plan of a rollout: the peers (planRollout), then,
+// when hub is asked for, the hub wave: the hub's own step, then the peers
+// its deploy upgrades. What the app cannot upgrade does not refuse the plan:
+// it is in it as a step already skipped, with the reason, and the rest goes
+// ahead. Only a bad explicit order is an error.
+func rolloutPlan(hosts []relHost, order []string, canary string, hub, deploy bool) ([]RolloutStep, error) {
+	plan, err := planRollout(hosts, order, canary)
+	if err != nil || !hub {
+		return plan, err
+	}
+	st, herr := hubWave(hosts, deploy)
+	switch {
+	case herr != nil:
+		for _, h := range hosts {
+			if h.Hub {
+				plan = append(plan, RolloutStep{Host: h.Name, Wave: waveHub, Phase: roSkipped, Detail: herr.Error()})
+			}
+		}
+	case st != nil:
+		plan = append(plan, *st)
+	}
+	bumps := st != nil && st.Mode == stepModeDeploy
+	for _, h := range hosts {
+		if h.Hub || !h.WithHub || h.Current {
+			continue
+		}
+		w := RolloutStep{Host: h.Name, Wave: waveHub, Mode: stepModeWithHub, Phase: roPending}
+		if !bumps {
+			w.Phase, w.Detail = roSkipped, "it is upgraded with the hub, and this rollout does not deploy the hub"
+		}
+		plan = append(plan, w)
+	}
+	return plan, nil
+}
+
+// actionable: the plan has a step that will do something.
+func actionable(plan []RolloutStep) bool {
+	for _, st := range plan {
+		if st.Phase != roSkipped && st.Phase != roOK {
+			return true
+		}
+	}
+	return false
+}
+
+// withHubPending: a step of the hub's deploy is still to come for a peer
+// that is not on the version.
+func (e *rolloutEngine) withHubPending(j Rollout) bool {
+	for _, st := range j.Plan {
+		if st.Mode != stepModeWithHub || st.Phase != roPending {
+			continue
+		}
+		if h, ok := findHost(e.hosts, st.Host); !ok || !h.Current {
+			return true
+		}
+	}
+	return false
+}
+
+// beginWithHub: the hub's step is over; a peer its deploy upgrades is
+// watched until it is back on the version. Nothing is started.
+func (e *rolloutEngine) beginWithHub(j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
+	if !found {
+		e.skip(j, st, now, "no longer in the fleet")
+		return true
+	}
+	t := now
+	st.From, st.Started, st.At = h.Version, &t, now
+	for _, hs := range j.Plan {
+		if hs.Wave == waveHub && hs.Mode == stepModeDeploy && hs.Dry {
+			st.Dry = true
+			e.finishStep(j, st, h, now, "dry run: upgraded with the hub")
+			return true
+		}
+	}
+	if hostUp(h) && h.Current {
+		e.finishStep(j, st, h, now, "upgraded with the hub")
+		return true
+	}
+	st.Phase, st.Detail = roVerifying, "upgraded with the hub: waiting for it to be back on "+j.Version
+	j.Note = "waiting for " + st.Host + " (upgraded with the hub)"
+	return true
+}
+
+// verifyWithHub: the hub's deploy restarts the peer too. One that does not
+// come back on the version is skipped with the reason, not a stop: the
+// deploy already ran, and nothing the app could retry would change that.
+func (e *rolloutEngine) verifyWithHub(j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
+	if found && hostUp(h) && h.Current {
+		st.To = h.Version
+		e.finishStep(j, st, h, now, "upgraded with the hub")
+		return true
+	}
+	if now.Sub(st.At) >= e.backWait {
+		why := fmt.Sprintf("not back on %s within %s of the hub's deploy", j.Version, e.backWait.Round(time.Second))
+		switch {
+		case !found:
+			why += " (not in the fleet any more)"
+		case !hostUp(h):
+			why += " (" + h.Status + ")"
+		default:
+			why += " (it runs " + orUnknown(h.Version) + ")"
+		}
+		e.skip(j, st, now, why)
+		return true
+	}
+	j.Note = "waiting for " + st.Host + " (upgraded with the hub)"
+	return false
 }
 
 // peersBack: every peer an earlier wave finished is up and on the version
@@ -80,7 +208,7 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		e.fail(j, st, now, "the hub is not in the fleet", "")
 		return false
 	}
-	if h.Current {
+	if h.Current && !e.withHubPending(*j) {
 		e.finishStep(j, st, h, now, "already on the version")
 		return true
 	}

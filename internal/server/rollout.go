@@ -75,6 +75,8 @@ const (
 	rolloutStartRetry   = 5 * time.Minute                     // a host that cannot be told to start
 	rolloutHostCallWait = 20 * time.Second
 	rolloutWakeWait     = 10 * time.Minute // a stopped worker: started and joined the hub (the start job 7 min, the join 3)
+	rolloutCatchUpEvery = time.Minute      // a done job looks for its offline hosts this often
+	rolloutCatchUpFor   = 7 * 24 * time.Hour
 )
 
 // RolloutStep is one host of the plan.
@@ -101,6 +103,10 @@ type RolloutStep struct {
 	// upgrade of the host itself (rollout_hub.go). Dry: it was a dry run.
 	Mode string `json:"mode,omitempty"`
 	Dry  bool   `json:"dry,omitempty"`
+	// CatchUp: the step was skipped because the host was offline (or a
+	// stopped worker could not be started); the loop upgrades it when it is
+	// back, while the job is done (catchUp).
+	CatchUp bool `json:"catch_up,omitempty"`
 	// Detail is the one line the card shows beside the phase (why it waits,
 	// why it was skipped, what failed).
 	Detail string `json:"detail,omitempty"`
@@ -190,6 +196,10 @@ type rolloutEngine struct {
 	hosts []relHost
 	// Timings; tests shorten them.
 	soak, backWait, offlineGrace, runWait, startRetry, wakeWait time.Duration
+	// catchUpEvery is how often a done job with hosts skipped while offline
+	// asks the fleet whether they are back; lastCatchUp is when it last did.
+	catchUpEvery time.Duration
+	lastCatchUp  time.Time
 	// tickEvery is how often Run ticks (rolloutTick; -test-mode makes it shorter).
 	tickEvery time.Duration
 	// onState is told, after the file was written, whenever the job's state
@@ -200,7 +210,8 @@ type rolloutEngine struct {
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
 	return &rolloutEngine{path: path, ops: ops, now: func() time.Time { return time.Now().UTC() }, audit: audit,
-		soak: rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait}
+		catchUpEvery: rolloutCatchUpEvery,
+		soak:         rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait}
 }
 
 var (
@@ -264,8 +275,10 @@ func (e *rolloutEngine) Get() (Rollout, bool) {
 // There is no canary or soak unless canary names the first peer (the
 // -release-canary opt-in); then it goes first, alone, and soaks. A host already on the version is left out
 // of the default plan. The hub is not an ordinary peer: its wave is added
-// by the caller. A reachable host that does not let the app upgrade it, or
-// a name that is no host, refuses the plan.
+// by the caller (rolloutPlan), and so are the peers upgraded with the hub
+// (with_hub). A reachable host that does not let the app upgrade it is in
+// the plan already skipped, with the reason; a name that is no host refuses
+// the plan.
 func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep, error) {
 	by := map[string]relHost{}
 	var peers []string
@@ -292,7 +305,6 @@ func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep,
 	}
 	seen := map[string]bool{}
 	var plan []RolloutStep
-	var notEnabled []string
 	for _, n := range order {
 		h, ok := by[n]
 		switch {
@@ -304,17 +316,19 @@ func planRollout(hosts []relHost, order []string, canary string) ([]RolloutStep,
 			return nil, fmt.Errorf("%s is listed twice", n)
 		}
 		seen[n] = true
-		if hostUp(h) && !h.Enabled && !h.Current {
-			notEnabled = append(notEnabled, n)
+		if h.WithHub {
+			continue // the hub's wave upgrades it (rolloutPlan)
 		}
 		wave := wavePeers
 		if len(plan) == 0 && len(order) > 1 && n == canary { // opt-in only (-release-canary); a lone host is not a canary
 			wave = waveCanary
 		}
-		plan = append(plan, RolloutStep{Host: n, Wave: wave, Phase: roPending})
-	}
-	if len(notEnabled) > 0 {
-		return nil, fmt.Errorf("%s: the app is not allowed to upgrade %s (start comebye there with -release-upgrade)", strings.Join(notEnabled, ", "), map[bool]string{true: "it", false: "them"}[len(notEnabled) == 1])
+		st := RolloutStep{Host: n, Wave: wave, Phase: roPending}
+		if hostUp(h) && !h.Enabled && !h.Current {
+			// It does not stop the others: it is listed, skipped, with the reason.
+			st.Wave, st.Phase, st.Detail = wavePeers, roSkipped, "the app is not allowed to upgrade it (start comebye there with -release-upgrade)"
+		}
+		plan = append(plan, st)
 	}
 	return plan, nil
 }
@@ -333,14 +347,19 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 	if cur, ok := e.load(); ok && cur.live() {
 		return cur, errRolloutActive
 	}
-	if len(plan) == 0 {
-		return Rollout{}, errors.New("the plan has no hosts")
+	if !actionable(plan) {
+		return Rollout{}, errors.New("the plan has no host the app can upgrade")
 	}
 	now := e.now()
 	var idb [3]byte
 	_, _ = rand.Read(idb[:])
 	j := Rollout{ID: fmt.Sprintf("r%x", idb), Todo: todo, Version: version, Commit: commit, State: roRunning, By: by,
 		Plan: plan, Started: now}
+	for i := range plan {
+		if plan[i].Phase == roSkipped && plan[i].Done == nil {
+			plan[i].Done = &now
+		}
+	}
 	if plan[0].Wave == waveCanary {
 		j.Canary = plan[0].Host
 	}
@@ -496,6 +515,10 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 	e.mu.Lock()
 	j, ok := e.load()
 	e.mu.Unlock()
+	if ok && j.State == roDone {
+		e.catchUp(ctx, j)
+		return
+	}
 	if !ok || j.State != roRunning {
 		return
 	}
@@ -525,6 +548,70 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 	}
 	if j.State != before.State && e.onState != nil {
 		e.onState(j)
+	}
+}
+
+// catchUp: a done job whose offline hosts were skipped upgrades each one
+// when it is back. The step is reopened and the job runs again, through the
+// same gates; it is done again after it. A host that was upgraded meanwhile
+// (by hand, or by a later rollout) is marked done. It stops looking a week
+// after the job finished, and a newer rollout replaces the job anyway.
+func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout) {
+	now := e.now()
+	if j.Finished == nil || now.Sub(*j.Finished) > rolloutCatchUpFor || now.Sub(e.lastCatchUp) < e.catchUpEvery {
+		return
+	}
+	want := false
+	for _, st := range j.Plan {
+		want = want || (st.Phase == roSkipped && st.CatchUp)
+	}
+	if !want {
+		return
+	}
+	e.lastCatchUp = now
+	hosts := e.ops.Hosts(ctx, j.Version)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cur, ok := e.load()
+	if !ok || cur.ID != j.ID || cur.Rev != j.Rev || cur.State != roDone {
+		return
+	}
+	var back, already []string
+	for i := range cur.Plan {
+		st := &cur.Plan[i]
+		if st.Phase != roSkipped || !st.CatchUp {
+			continue
+		}
+		h, found := findHost(hosts, st.Host)
+		switch {
+		case !found || !hostUp(h):
+		case h.Current:
+			t := now
+			st.Phase, st.Done, st.To, st.CatchUp, st.Detail = roOK, &t, h.Version, false, "on the version since it is back"
+			already = append(already, st.Host)
+		case h.Enabled:
+			*st = RolloutStep{Host: st.Host, Wave: st.Wave, Phase: roPending, Attempt: st.Attempt + 1, Detail: "back: catching up"}
+			back = append(back, st.Host)
+		}
+	}
+	if len(back) == 0 && len(already) == 0 {
+		return
+	}
+	if len(back) > 0 {
+		cur.State, cur.Finished, cur.Note = roRunning, nil, "catching up "+strings.Join(back, ", ")+": back online"
+	}
+	if err := e.save(&cur); err != nil {
+		log.Printf("rollout: %v", err)
+		return
+	}
+	for _, n := range back {
+		e.emit(cur, n, "rollout.catchup", true, "back online: upgrading it now", "comebye")
+	}
+	for _, n := range already {
+		e.emit(cur, n, "rollout.catchup", true, "back online, already on the version", "comebye")
+	}
+	if len(back) > 0 && e.onState != nil {
+		e.onState(cur)
 	}
 }
 
@@ -591,8 +678,11 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 			j.State, j.PauseRequested, j.Note = roPaused, false, "paused"
 			return false
 		}
-		if st.Mode == stepModeDeploy {
+		switch st.Mode {
+		case stepModeDeploy:
 			return e.beginHub(ctx, j, st, h, found, now)
+		case stepModeWithHub:
+			return e.beginWithHub(j, st, h, found, now)
 		}
 		return e.begin(ctx, j, st, h, found, now)
 	case roUpgrading:
@@ -603,6 +693,9 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 	case roWaking:
 		return e.watchWake(ctx, j, st, h, found, now)
 	case roVerifying:
+		if st.Mode == stepModeWithHub {
+			return e.verifyWithHub(j, st, h, found, now)
+		}
 		return e.verify(j, st, h, found, now)
 	case roSoaking:
 		return e.soaking(j, st, h, found, now)
@@ -636,6 +729,7 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 			case wakeRefused:
 				e.emit(*j, st.Host, "rollout.wake", false, "not started: "+v.Reason, "comebye")
 				e.skip(j, st, now, v.Reason)
+				st.CatchUp = true
 				return true
 			}
 		}
@@ -648,14 +742,15 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		}
 		if now.Sub(*st.OfflineSince) >= e.offlineGrace {
 			e.skip(j, st, now, "offline for "+now.Sub(*st.OfflineSince).Round(time.Second).String())
+			st.CatchUp = true
 			return true
 		}
 		st.Detail = "offline: waiting for it to come back"
 		j.Note = st.Host + " is offline: waiting for it to come back"
 		return false
 	case !h.Enabled:
-		e.fail(j, st, now, "this host does not let the app upgrade it (-release-upgrade)", "")
-		return false
+		e.skip(j, st, now, "the app is not allowed to upgrade it (start comebye there with -release-upgrade)")
+		return true
 	}
 	st.OfflineSince = nil
 	// Adopt a run that is already going for this version: the hub died after
@@ -711,6 +806,7 @@ func (e *rolloutEngine) watchWake(ctx context.Context, j *Rollout, st *RolloutSt
 	case v.Kind == wakeFailed:
 		e.emit(*j, st.Host, "rollout.wake", false, "could not wake: "+oneLine(v.Reason, 200), "comebye")
 		e.skip(j, st, now, "could not wake "+st.Host+": "+oneLine(v.Reason, 200))
+		st.CatchUp = true
 		return true
 	case hostUp(h):
 		st.Phase, st.At, st.Detail, st.OfflineSince = roPending, now, "", nil
@@ -719,10 +815,12 @@ func (e *rolloutEngine) watchWake(ctx context.Context, j *Rollout, st *RolloutSt
 	case v.Kind != wakeStarting && v.Kind != wakeUp:
 		e.emit(*j, st.Host, "rollout.wake", false, "the wake was lost", "comebye")
 		e.skip(j, st, now, "could not wake "+st.Host+": the hub lost track of the start")
+		st.CatchUp = true
 		return true
 	case now.Sub(st.At) >= e.wakeWait:
 		e.emit(*j, st.Host, "rollout.wake", false, "did not join within "+e.wakeWait.String(), "comebye")
 		e.skip(j, st, now, "could not wake "+st.Host+": it did not join the hub within "+e.wakeWait.Round(time.Second).String())
+		st.CatchUp = true
 		return true
 	}
 	st.Detail = wakeText(st.Host, v)

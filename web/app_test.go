@@ -619,3 +619,80 @@ func TestAppPolishesStoppedWorkers(t *testing.T) {
 		}
 	}
 }
+
+// "Roll out to all" does everything in one click: the confirm lists the
+// peers, the hub last, and after it the peers its deploy upgrades (with_hub,
+// the in-cluster provisioner) as "with the hub", never as a blocker. A host
+// the app may not upgrade is listed as skipped with why, and not counted. The
+// fleet row of a with_hub peer has no Upgrade button, and a done rollout
+// says its offline hosts are upgraded when they are back.
+func TestAppRolloutToAllCoversTheHubAndItsPeers(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var js strings.Builder
+	js.WriteString("const rls = { confirm: null, busy: false };\n")
+	for _, name := range []string{"esc", "escAttr", "cpOut", "relShort", "relRecordText", "relDeployText", "relDeployOut", "relWhen",
+		"roJob", "roLive", "RO_PHASE", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
+		b := regexp.MustCompile(`\n(function ` + name + `\(.*\}|const ` + name + ` = .*;)\n`).Find(src) // a one-liner
+		if b == nil {
+			b = regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)
+		}
+		if b == nil {
+			t.Fatalf("app.js has no %s", name)
+		}
+		js.Write(b)
+	}
+	js.WriteString(`
+const rl = { version: "v1.2.3", commit: "a".repeat(40), state: "tagged" };
+const d = { current: true, todo: { id: "t1", release: rl }, build: { state: "success" }, rollout_enabled: true, rollout_hub_label: "Bump hub",
+  deploy: { enabled: true, label: "Bump hub" }, release_host: "hub",
+  hosts: [
+    { name: "a", status: "ok", version: "v1.2.2", enabled: true },
+    { name: "b", status: "ok", version: "v1.2.2", enabled: false },
+    { name: "hub", status: "ok", version: "v1.2.2", hub: true, local: true },
+    { name: "prov", status: "ok", version: "v1.2.2", with_hub: true },
+  ],
+  rollout_plan: [
+    { host: "a", wave: "peers", phase: "pending" },
+    { host: "b", wave: "peers", phase: "skipped", detail: "the app is not allowed to upgrade it (start comebye there with -release-upgrade)" },
+    { host: "hub", wave: "hub", mode: "deploy", phase: "pending" },
+    { host: "prov", wave: "hub", mode: "with_hub", phase: "pending" },
+  ] };
+rls.confirm = { k: "rollout", order: ["a", "b"], hub: true };
+const confirm = roConfirmHtml(d);
+rls.confirm = null;
+const job = { id: "r1", todo: "t1", state: "done", plan: [
+  { host: "a", wave: "peers", phase: "ok" }, { host: "c", wave: "peers", phase: "skipped", detail: "offline for 2m0s", catch_up: true },
+  { host: "hub", wave: "hub", mode: "deploy", phase: "ok" }, { host: "prov", wave: "hub", mode: "with_hub", phase: "ok", detail: "upgraded with the hub" } ] };
+const got = {
+  button: /Roll out to all/.test(roButtonHtml(d, true)),
+  withHubLi: /data-with-hub>[^]*with the hub[^]*upgraded with the hub by Bump hub/.test(confirm),
+  skippedB: /data-host="b" data-skipped>[^]*skipped[^]*-release-upgrade/.test(confirm),
+  count: /Confirm: roll out v1\.2\.3 to 3 hosts/.test(confirm),
+  order: confirm.indexOf('data-host="hub"') < confirm.indexOf('data-host="prov"'),
+  provRow: /upgraded with the hub \(Bump hub\)/.test(relRowHtml(d.hosts[3], d, null)) && !/data-rel="up"/.test(relRowHtml(d.hosts[3], d, null)),
+  provOffline: /not reachable; upgraded with the hub/.test(relRowHtml({ ...d.hosts[3], offline: true, status: "down" }, d, null)),
+  aRow: /data-rel="up"/.test(relRowHtml(d.hosts[0], d, null)),
+  stepPending: roStepText({ host: "prov", mode: "with_hub", phase: "pending" }, { state: "running" }),
+  stepOk: roStepText(job.plan[3], job),
+  stepSkip: roStepText(job.plan[1], job),
+  gates: /hub deployed/.test(roGatesHtml({ host: "prov", mode: "with_hub", phase: "verifying" }, "v1.2.3")),
+  band: /data-catch-up>Offline hosts are upgraded by themselves when they are back: c\./.test(roBandHtml(d, job)),
+};
+console.log(JSON.stringify(got));
+`)
+	out, err := exec.Command(node, "-e", js.String()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	want := `{"button":true,"withHubLi":true,"skippedB":true,"count":true,"order":true,"provRow":true,"provOffline":true,"aRow":true,"stepPending":"upgraded with the hub, after it","stepOk":"upgraded with the hub","stepSkip":"skipped · offline for 2m0s · upgrades when it is back","gates":true,"band":true}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("got  %s\nwant %s", out, want)
+	}
+}

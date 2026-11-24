@@ -455,7 +455,9 @@ func main() {
 	var relCfg server.ReleaseConfig
 	switch {
 	case *releaseSim:
-		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: true, Simulated: true, Runner: server.SimulatedUpgrade{}}
+		// A simulated -hub-only peer is upgraded with its hub, as the real one is
+		// (it reports with_hub), so it does not "upgrade" itself.
+		relCfg = server.ReleaseConfig{Tool: &release.Simulated{}, Upgrade: !(*hubOnly && !*ledgerOn), Simulated: true, Runner: server.SimulatedUpgrade{}}
 		log.Printf("release: SIMULATED (canned results, nothing runs)")
 	default:
 		relCfg = server.ReleaseConfig{Upgrade: *releaseUp, DryRun: *releaseDry, DeployCmd: deployCmd, DeployLabel: strings.TrimSpace(*releaseDepLbl), Canary: strings.TrimSpace(*releaseCanary)}
