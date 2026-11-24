@@ -934,6 +934,29 @@ The user does these; nothing in this repository touches the cluster.
    runs. See [Create and destroy from the pod](#create-and-destroy-from-the-pod).
 7. Version bumps: the hub's bump script edits one manifest; point it at this Deployment's image too
    (a follow-up in the homelab repo).
+8. To wake and stop workers that another host created (their ssh key lives in *that* host's
+   `~/.local/state/comebye-worker/`), seed the pod's state volume before its first start. `start` rewrites
+   each worker's `ssh_config` and `known_hosts` from the KubeVirt API, but it cannot ssh without the key the
+   worker was built with. With the Deployment at 0 replicas, run a throwaway pod that mounts the volume
+   (say at `/v`), then, from the host that holds the state:
+
+   ```sh
+   tmp=$(mktemp -d) && chmod 700 "$tmp" && mkdir -m 700 "$tmp/worker"
+   src=~/.local/state/comebye-worker
+   cp -p "$src/id_ed25519" "$src/id_ed25519.pub" "$tmp/worker/"
+   for vm in WORKER1 WORKER2; do            # only the workers the pod should drive
+     mkdir -m 700 "$tmp/worker/$vm"
+     cp -p "$src/$vm/known_hosts" "$tmp/worker/$vm/"
+     sed "s#$src#/var/lib/comebye-worker#g" "$src/$vm/ssh_config" > "$tmp/worker/$vm/ssh_config"
+   done
+   tar -C "$tmp" -cf - --owner=UID --group=GID --numeric-owner worker \
+     | kubectl -n HUB_NS exec -i SEED_POD -- tar -xpf - -C /v --numeric-owner
+   rm -rf "$tmp"; kubectl -n HUB_NS delete pod SEED_POD
+   ```
+
+   `UID`/`GID` are the pod's `runAsUser`/`runAsGroup`, and `/var/lib/comebye-worker` is the config's
+   `state_dir`. The key never appears in output, a manifest or git. Nothing else from that directory is
+   needed: the pod adopts every managed VM its `status` reports, so one kubevirt config covers them all.
 
 ## OpenShell sandboxes
 
