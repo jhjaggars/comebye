@@ -142,7 +142,7 @@
       border-radius: var(--r-14); padding: var(--sp-12) var(--sp-14); margin-bottom: var(--sp-10);
       cursor: pointer; min-height: calc(var(--hit-48) + var(--sp-8)); /* a row with two lines of text */
     }
-    .agent:active { background: var(--panel2); }
+    /* Pressed: the shared press layer ("Press layer" below), so a blocked row's own background shows it too. */
 
     .agent.blocked { border-color: var(--orange); border-left-width: 4px; background: var(--blocked-bg); }
     .agent.working { border-left: 4px solid var(--blue); }
@@ -325,7 +325,6 @@
     .hf-chip .ver { color: var(--orange); border: 1px solid var(--orange); border-radius: var(--r-6); padding: 0 var(--sp-6); font-size: var(--fs-11); font-weight: 600; line-height: 1.5; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .agent.host-down { cursor: default; opacity: 0.7; border-style: dashed; min-height: var(--hit-44); padding-top: var(--sp-8); padding-bottom: var(--sp-8); }
-    .agent.host-down:active { background: var(--panel); }
     .agent .status { flex: none; font-size: var(--fs-12); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
     .status.blocked { color: var(--orange); }
     .status.working { color: var(--blue); }
@@ -2264,6 +2263,15 @@
       .td-opt, #answer button.opt, .hf-chip, .tp-opt, .attach-menu button, .ln-dir, .ln-model, .td-row, .nv, .rc-card { transition: none; }
       .td-opt:active, #answer button.opt:active, .hf-chip:active, .tp-opt:active { transform: none; }
     }
+    /* Press layer (issue 135): app.js adds .is-pressed to whatever tappable thing is under the finger (or mouse) while it is
+       down, and .is-released for the fade after. It is a 10% --text layer (Material's pressed opacity) drawn as a
+       background image over the element's own background, so the element keeps its colour, border and shadows, and
+       it reads in every theme: dark on light ones, light on dark ones. --press-c is registered so the fade can animate. */
+    @property --press-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
+    .is-pressed, .is-released { background-image: linear-gradient(var(--press-c), var(--press-c)) !important; }
+    .is-pressed { --press-c: color-mix(in srgb, var(--text) 10%, transparent); transition: none !important; }
+    .is-released { transition: --press-c .18s ease-out !important; }
+    @media (prefers-reduced-motion: reduce) { .is-released { transition: none !important; } }
     /* Pages: reports agents publish (comebye publish). A screen of its own, like Transcripts. */
     #pgs-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pgs-panes { flex: 1; min-height: 0; display: flex; }

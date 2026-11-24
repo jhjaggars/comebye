@@ -29,6 +29,63 @@ const state = {
   view: null,          // desktop only: the page filling the main pane ("status", "todo"), or null for an agent / nothing
 };
 
+// ---- The press layer (#135): every tappable thing shows that it is pressed while the finger (or mouse button) is down,
+// as native lists and buttons do. One capture-phase listener adds .is-pressed to the nearest tappable element; the CSS
+// (index.html, "Press layer") draws it as a 10% --text layer over the element's own background, so it works on every
+// kind, theme and state (a blocked row's orange too) without per-component rules.
+// - Inside something that scrolls, a touch waits PRESS_DELAY ms first, and moving the finger or any scroll cancels it,
+//   so starting a scroll is not a press. Elsewhere (and with a mouse) it shows at once.
+// - It stays at least PRESS_MIN ms, so a quick tap is still seen, then .is-released fades it out (180 ms in the CSS).
+const PRESS_SEL = 'button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .agent';
+const PRESS_SKIP = ':disabled, [aria-disabled="true"], .agent.host-down, input, select, textarea';
+const PRESS_DELAY = 60, PRESS_MIN = 100, PRESS_FADE = 180, PRESS_SLOP = 10;
+const press = { el: null, id: -1, x: 0, y: 0, at: 0, timer: 0 };
+function pressScrolls(el) { // is el inside something the finger could be starting to scroll?
+  for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    const cs = getComputedStyle(n);
+    if (/auto|scroll/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) return true;
+    if (/auto|scroll/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 1) return true;
+  }
+  const s = document.scrollingElement;
+  return !!s && s.scrollHeight > s.clientHeight + 1;
+}
+function pressShow(el) { el.classList.remove("is-released"); el.classList.add("is-pressed"); press.at = performance.now(); }
+function pressFade(el) {
+  if (el === press.el) return; // pressed again meanwhile: that press owns it now
+  el.classList.remove("is-pressed");
+  el.classList.add("is-released");
+  setTimeout(() => { if (el !== press.el) el.classList.remove("is-released"); }, PRESS_FADE + 40);
+}
+function pressEnd(cancel) {
+  const el = press.el;
+  if (!el) return;
+  press.el = null; press.id = -1;
+  if (press.timer) { // released before the delay ran out
+    clearTimeout(press.timer); press.timer = 0;
+    if (cancel) return; // a scroll: never shown
+    pressShow(el); // a quick tap: show it now, for PRESS_MIN
+  }
+  const left = cancel ? 0 : PRESS_MIN - (performance.now() - press.at);
+  if (left > 0) setTimeout(() => pressFade(el), left); else pressFade(el);
+}
+addEventListener("pointerdown", (ev) => {
+  if (!ev.isPrimary || ev.button > 0) return;
+  pressEnd(true);
+  const el = ev.target.closest?.(PRESS_SEL);
+  if (!el || el.matches(PRESS_SKIP) || el.closest("[inert]")) return;
+  Object.assign(press, { el, id: ev.pointerId, x: ev.clientX, y: ev.clientY });
+  if (ev.pointerType === "touch" && pressScrolls(el)) press.timer = setTimeout(() => { press.timer = 0; pressShow(el); }, PRESS_DELAY);
+  else pressShow(el);
+}, { capture: true, passive: true });
+addEventListener("pointermove", (ev) => {
+  if (press.el && ev.pointerId === press.id && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > PRESS_SLOP) pressEnd(true);
+}, { capture: true, passive: true });
+addEventListener("pointerup", (ev) => { if (ev.pointerId === press.id) pressEnd(false); }, true);
+addEventListener("pointercancel", (ev) => { if (ev.pointerId === press.id) pressEnd(true); }, true); // the browser took the gesture (a pan)
+addEventListener("scroll", () => { if (press.el) pressEnd(true); }, { capture: true, passive: true });
+// iOS Safari applies :active only to elements with a touch listener; one passive no-op lets the remaining :active rules work there.
+addEventListener("touchstart", () => {}, { passive: true });
+
 /* ---------- helpers ---------- */
 
 const UNAUTHORIZED_MSG = "Not authorized: open this from a device logged into an allowed Tailscale account";

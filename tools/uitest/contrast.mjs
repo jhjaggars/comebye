@@ -9,6 +9,7 @@
 //     text on the surfaces, text on filled buttons/badges/marks) is under 4.5:1;
 //   - a non-text indicator (focus ring, the status-dot accents) is under 3:1
 //     against the page and panel backgrounds;
+//   - text stops reading on a surface while it is pressed (the press layer's 10% --text);
 //   - a var(--token) used by index.html is missing from the theme.
 // Tokens themes.js nudged to pass (an official palette colour that failed
 // AA) are listed under "adjusted" in the output.
@@ -69,9 +70,30 @@ const used = new Set([...html.matchAll(/var\(--([a-z0-9-]+)/g)].map((m) => m[1])
 // Tokens index.html declares itself (safe-bottom, list-w, td-list-w...) are layout, not colour.
 for (const m of html.matchAll(/(?:^|[;{\s])--([a-z0-9-]+)\s*:/g)) used.delete(m[1]);
 
+// The press layer (index.html "Press layer"): while held (100-300 ms on a tap), a surface gets 10% of --text over it.
+// It is a moment, not a resting state, and any layer that shows moves the surface toward the text, so a theme whose text
+// only just meets AA (Solarized, Tokyo Night Day) dips under it while held: what sits on a pressed surface must stay 3:1.
+const PRESS = 0.1;
+const pressed = (base, text) => "#" + [1, 3, 5].map((i) => {
+  const b = parseInt(base.slice(i, i + 2), 16), f = parseInt(text.slice(i, i + 2), 16);
+  return Math.round(b + (f - b) * PRESS).toString(16).padStart(2, "0");
+}).join("");
+const PRESSED = [
+  ...["bg", "panel", "panel2", "s1", "s2", "s3"].flatMap((b) => [["text", b, UI, "text on pressed " + b], ["muted", b, UI, "muted on pressed " + b]]),
+  ["text", "btn-bg", UI, "text on a pressed button"],
+  ["text", "blocked-bg", UI, "text on a pressed blocked row"], ["blocked-name", "blocked-bg", UI, "blocked name on a pressed blocked row"],
+];
+
 let fails = 0, checks = 0;
 for (const t of THEMES) {
   const bad = [];
+  for (const [fg, bg, min, what] of PRESSED) {
+    checks++;
+    const f = t.vars[fg], b = t.vars[bg];
+    if (!/^#[0-9a-f]{6}$/i.test(f || "") || !/^#[0-9a-f]{6}$/i.test(b || "") || !/^#[0-9a-f]{6}$/i.test(t.vars.text || "")) { bad.push(`${what}: ${fg}, ${bg} or text is not a 6-digit hex`); continue; }
+    const pb = pressed(b, t.vars.text), r = contrast(f, pb);
+    if (r < min) bad.push(`${what}: ${fg} ${f} on ${bg} ${b} pressed (${pb}) = ${r.toFixed(2)} < ${min}`);
+  }
   for (const [fg, bg, min, what] of TEXT) {
     checks++;
     const f = t.vars[fg], b = t.vars[bg];
