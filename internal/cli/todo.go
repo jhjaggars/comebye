@@ -222,6 +222,7 @@ func cmdTodo(e *Env, args []string) error {
 	all := fs.Bool("all", false, "list: every item, closed ones too")
 	state := fs.String("state", "", "list: only open, answered, done or dropped items")
 	reason := fs.String("reason", "", "drop: why")
+	skipOffline := fs.Bool("skip-offline", false, "done, on a release item: close it although offline hosts still run an older version (named on the item; a rollout that skipped them upgrades them when they are back)")
 	from := fs.String("from", "", "set create: the set as JSON: a file, or - for stdin")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -641,9 +642,11 @@ func cmdTodo(e *Env, args []string) error {
 		if err != nil {
 			return err
 		}
-		body := map[string]string{}
+		body := map[string]any{}
 		if sub == "drop" {
-			body = map[string]string{"reason": *reason}
+			body = map[string]any{"reason": *reason}
+		} else if *skipOffline {
+			body = map[string]any{"skip_offline": true}
 		}
 		data, err := c.raw("POST", "/api/todos/"+url.PathEscape(id)+"/"+sub, nil, body)
 		if err != nil {

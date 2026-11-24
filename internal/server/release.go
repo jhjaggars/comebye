@@ -1034,6 +1034,12 @@ func (s *Server) reconcileTagged(it Todo, ck release.Check) bool {
 // the item itself once none is left (sweepReleases); this is the refusal for a
 // person who tries sooner.
 func (s *Server) releasePending(ctx context.Context, it Todo) []string {
+	return s.pendingLines(s.releaseBehind(ctx, it))
+}
+
+// releaseBehind is the marked hosts of a tagged release item that do not run
+// its version yet.
+func (s *Server) releaseBehind(ctx context.Context, it Todo) []relHost {
 	if it.Release == nil || it.Release.State != relTagged || s.fleet == nil {
 		return nil
 	}
@@ -1044,7 +1050,31 @@ func (s *Server) releasePending(ctx context.Context, it Todo) []string {
 	defer cancel()
 	hosts := s.relHosts(ctx)
 	markRollout(hosts, it.Release.Version)
-	return s.pendingLines(hosts)
+	var out []relHost
+	for _, h := range hosts {
+		if !h.Current {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// noteSkippedOffline records, on a release item closed as done with offline
+// hosts behind, which ones, and audits it.
+func (s *Server) noteSkippedOffline(it Todo, hosts, by string) Todo {
+	note := "done with " + hosts + " offline, still on an older version"
+	if got, err := s.todos.mutate(it.ID, func(t *Todo) error {
+		if t.Release != nil {
+			rel := *t.Release
+			rel.RolloutNote = note
+			t.Release = &rel
+		}
+		return nil
+	}); err == nil {
+		it = got
+	}
+	s.auditBy(ledger.AuditEvent{By: by, Action: "release.done-skip-offline", Todo: it.ID, OK: true, Detail: it.Release.Version + " skipped: " + hosts})
+	return it
 }
 
 // pendingLines says, for each marked host that is not current, what holds it.

@@ -3406,6 +3406,17 @@ function roAgain(d, job) {
   return (job.plan || []).filter((st) => st.phase === "skipped" && can.has(st.host)).map((st) => st.host);
 }
 
+// "Done, skip offline hosts": the release item can be closed when every host
+// still behind is offline (a laptop away for a while). The server checks it
+// again, names them on the item, and a rollout that skipped them still
+// upgrades them when they are back.
+function roSkipOfflineHtml(d, job) {
+  const t = d.todo, behind = (d.hosts || []).filter((x) => !x.current);
+  if (!t || !(t.state === "open" || t.state === "answered") || roLive(job) || !behind.length || !behind.every((x) => x.offline && !x.hub)) return "";
+  return `<div class="rl-roll" data-skip-offline><button type="button" data-rel="done-skip-offline"${rls.busy ? " disabled" : ""}>Done, skip offline hosts</button>
+    <span class="rl-note">${esc(behind.map((x) => x.name).join(", "))} ${behind.length === 1 ? "is" : "are"} offline; ${behind.length === 1 ? "it is" : "they are"} named on the item.</span></div>`;
+}
+
 // Roll out to all / Roll out again: next to the card's other buttons.
 function roButtonHtml(d, green) {
   const job = roJob(d);
@@ -3500,7 +3511,7 @@ function relFleetHtml(d) {
   }
   const job = tagged ? roJob(d) : null;
   const showJob = !!job && (roLive(job) || (job.state === "done" && !(ro && ro.complete)) || job.state === "cancelled");
-  if (tagged) h += roButtonHtml(d, green);
+  if (tagged) h += roButtonHtml(d, green) + roSkipOfflineHtml(d, job);
   if (tagged && showJob) h += roBandHtml(d, job);
   if (tagged && d.rollout_plan_error && d.rollout_enabled && green && !roLive(job) && !(ro && ro.complete)) h += `<div class="rel-note" data-rollout-plan-error>Roll out to all is not available: ${esc(d.rollout_plan_error)}</div>`;
   if (!hosts.length) h += `<div class="rel-note">${rls.data ? "No hosts." : "Loading…"}</div>`;
@@ -3678,6 +3689,12 @@ async function relClick(act, host) {
     case "rollback": rls.confirm = { k: "up", host, rollback: true }; break;
     case "deploy": rls.confirm = { k: "deploy" }; break;
     case "dismiss": rls.confirm = { k: "dismiss" }; break;
+    case "done-skip-offline":
+      if (await relPost(`/api/todos/${id}/done`, { skip_offline: true })) toast(`${t.release.version} done; offline hosts skipped.`);
+      todos.loadedAt = 0;
+      loadTodos();
+      await loadReleases(true);
+      return;
     case "confirm-dismiss":
       if (await relPost(`/api/release/${id}/dismiss`, { version: t.release.version, commit: t.release.commit })) toast(`${t.release.version} dismissed.`);
       todos.loadedAt = 0;

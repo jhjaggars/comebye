@@ -943,20 +943,40 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_busy", "message": "the tag is being pushed: wait for it to finish"})
 		return
 	}
-	if state == TodoDone {
-		if it, ok := s.todos.get(r.PathValue("id")); ok {
-			if pend := s.releasePending(r.Context(), it); len(pend) > 0 {
-				writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_pending", "message": "release " + it.Release.Version +
-					" is not deployed everywhere yet: " + strings.Join(pend, ", ") + ". Keep this item open until the hub and every host are upgraded (drop it instead to abandon the release)"})
-				return
-			}
-		}
-	}
 	var b struct {
 		Reason string `json:"reason"`
+		// SkipOffline: done for a release whose only hosts behind are
+		// offline peers (a laptop away for a while). They are named on the
+		// item, and a rollout's catch-up still upgrades them when they are back.
+		SkipOffline bool `json:"skip_offline"`
 	}
 	if r.ContentLength != 0 {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&b)
+	}
+	skipped := ""
+	if state == TodoDone {
+		if it, ok := s.todos.get(r.PathValue("id")); ok {
+			behind := s.releaseBehind(r.Context(), it)
+			var offline []string
+			for _, h := range behind {
+				if h.Offline && !h.Hub {
+					offline = append(offline, h.Name)
+				}
+			}
+			switch {
+			case len(behind) == 0:
+			case b.SkipOffline && len(offline) == len(behind):
+				skipped = strings.Join(offline, ", ")
+			default:
+				msg := "release " + it.Release.Version + " is not deployed everywhere yet: " + strings.Join(s.pendingLines(behind), ", ") +
+					". Keep this item open until the hub and every host are upgraded (drop it instead to abandon the release)"
+				if len(offline) == len(behind) {
+					msg += ", or close it with the offline hosts left behind: comebye todo done --skip-offline (a rollout that skipped them still upgrades them when they are back)"
+				}
+				writeJSONStatus(w, http.StatusConflict, map[string]string{"code": "release_pending", "message": msg})
+				return
+			}
+		}
 	}
 	reason := ""
 	if state == TodoDropped {
@@ -966,6 +986,9 @@ func (s *Server) closeTodo(w http.ResponseWriter, r *http.Request, state string)
 	if err != nil {
 		todoErr(w, err)
 		return
+	}
+	if skipped != "" {
+		it = s.noteSkippedOffline(it, skipped, s.by(r, ""))
 	}
 	s.approvalClosedByUser(it) // "Not now" denies a waiting approval
 	if it.Set != nil && it.Set.Plan != "" {

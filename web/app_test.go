@@ -638,7 +638,7 @@ func TestAppRolloutToAllCoversTheHubAndItsPeers(t *testing.T) {
 	var js strings.Builder
 	js.WriteString("const rls = { confirm: null, busy: false };\n")
 	for _, name := range []string{"esc", "escAttr", "cpOut", "relShort", "relRecordText", "relDeployText", "relDeployOut", "relWhen",
-		"roJob", "roLive", "RO_PHASE", "roAgain", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
+		"roJob", "roLive", "RO_PHASE", "roAgain", "roSkipOfflineHtml", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
 		b := regexp.MustCompile(`\n(function ` + name + `\(.*\}|const ` + name + ` = .*;)\n`).Find(src) // a one-liner
 		if b == nil {
 			b = regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)
@@ -687,6 +687,9 @@ const got = {
   // Roll out again takes only what the plan can act on: b (not allowed) never.
   again: roAgain({ ...d, rollout_plan: [{ host: "c", wave: "peers", phase: "pending" }, d.rollout_plan[1]] }, { ...job, plan: [...job.plan, { host: "b", wave: "peers", phase: "skipped" }] }).join(),
   noAgain: roAgain(d, { ...job, plan: [{ host: "b", wave: "peers", phase: "skipped" }] }).length,
+  // "Done, skip offline hosts" only when every host behind is offline.
+  skipOff: /data-rel="done-skip-offline"[^]*mac is offline/.test(roSkipOfflineHtml({ todo: { id: "t1", state: "open" }, hosts: [{ name: "a", current: true }, { name: "mac", offline: true }] }, null)),
+  noSkipOff: roSkipOfflineHtml(d, null) + roSkipOfflineHtml({ todo: { id: "t1", state: "done" }, hosts: [{ name: "mac", offline: true }] }, null),
 };
 console.log(JSON.stringify(got));
 `)
@@ -694,7 +697,7 @@ console.log(JSON.stringify(got));
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
-	want := `{"button":true,"withHubLi":true,"skippedB":true,"count":true,"order":true,"provRow":true,"provOffline":true,"aRow":true,"stepPending":"upgraded with the hub, after it","stepOk":"upgraded with the hub","stepSkip":"skipped · offline for 2m0s · upgrades when it is back","gates":true,"band":true,"again":"c","noAgain":0}`
+	want := `{"button":true,"withHubLi":true,"skippedB":true,"count":true,"order":true,"provRow":true,"provOffline":true,"aRow":true,"stepPending":"upgraded with the hub, after it","stepOk":"upgraded with the hub","stepSkip":"skipped · offline for 2m0s · upgrades when it is back","gates":true,"band":true,"again":"c","noAgain":0,"skipOff":true,"noSkipOff":""}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}

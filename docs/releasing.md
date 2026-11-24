@@ -159,6 +159,11 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   stays open. The loop keeps looking (once a minute, for a week after the rollout finished): when a skipped host is
   back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. **Roll out
   again** does the same at once for just those hosts.
+- **Done with hosts away:** while every host still behind is offline (a laptop away for a while), **Done, skip
+  offline hosts** on the Fleet card (or `comebye todo done ID --skip-offline`) closes the release item. The item
+  names the hosts left behind (audited `release.done-skip-offline`), and the catch-up above still upgrades the ones
+  the rollout skipped when they are back. A plain done is refused while any host is behind, and the hub or a
+  reachable host behind is never skipped.
 - **Pause** takes effect when the step in flight ends; it never interrupts an install or a restart. While a rollout
   is live the per-host Upgrade, Roll back and Bump hub buttons are locked.
 - **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few

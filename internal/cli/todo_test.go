@@ -64,6 +64,10 @@ func TestTodoListShowAnswerCloseSubcommands(t *testing.T) {
 	if code := run(e, "todo", "done", "t1"); code != 0 {
 		t.Fatalf("done: %d %s", code, errb)
 	}
+	if code := run(e, "todo", "done", "t2", "--skip-offline"); code != 1 || f.find("POST", "/api/todos/t2/done").body != `{"skip_offline":true}` {
+		t.Fatalf("done --skip-offline: %d %s", code, errb)
+	}
+	errb.Reset()
 	if code := run(e, "todo", "drop", "t1", "--reason", "moot"); code != 0 || f.find("POST", "/api/todos/t1/drop").body != `{"reason":"moot"}` {
 		t.Fatalf("drop: %d %s", code, errb)
 	}

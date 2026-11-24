@@ -208,8 +208,38 @@ func TestReleasesAnOfflineHostBlocksAllUpgraded(t *testing.T) {
 		t.Fatal("the item closed with a host offline")
 	}
 	w := do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{}`)
-	if w.Code != 409 || !strings.Contains(w.Body.String(), "kube is offline") {
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "kube is offline") || !strings.Contains(w.Body.String(), "--skip-offline") {
 		t.Fatalf("done = %d %s", w.Code, w.Body)
+	}
+	// Done, skipping the offline host: closed, the host named on the item and in the audit log.
+	w = do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{"skip_offline":true}`)
+	if w.Code != 200 {
+		t.Fatalf("done skipping offline = %d %s", w.Code, w.Body)
+	}
+	got, _ := s.todos.get(it.ID)
+	if got.State != TodoDone || !strings.Contains(got.Release.RolloutNote, "kube offline") {
+		t.Fatalf("item = %+v %+v", got, got.Release)
+	}
+	found := false
+	for _, e := range s.ledger.AuditLog(it.ID) {
+		found = found || (e.Action == "release.done-skip-offline" && strings.Contains(e.Detail, "kube"))
+	}
+	if !found {
+		t.Fatal("no audit entry")
+	}
+}
+
+// Skipping offline hosts never closes a release a reachable host (or the
+// hub) has not upgraded to.
+func TestReleaseSkipOfflineDoesNotSkipAReachableHost(t *testing.T) {
+	s, _ := relHubWithPeer(t, "v0.5.8", "v0.5.8", true) // the hub is behind too
+	it := tagOnServer(t, s, "v0.5.9", relSHA)
+	w := do(s, "POST", "/api/todos/"+it.ID+"/done", userHdr, `{"skip_offline":true}`)
+	if w.Code != 409 || strings.Contains(w.Body.String(), "--skip-offline") {
+		t.Fatalf("done = %d %s", w.Code, w.Body)
+	}
+	if got, _ := s.todos.get(it.ID); !got.active() {
+		t.Fatal("closed")
 	}
 }
 

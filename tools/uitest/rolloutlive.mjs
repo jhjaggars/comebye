@@ -158,13 +158,18 @@ try {
   // ---- scenario 3: p3 is down; it is skipped, the rest go, and it is caught up by itself when it is back ----
   const V3 = "v9.7.2";
   const r3 = await tag(V3);
-  await check("a peer that is down is skipped without holding up the others, and upgraded by itself when it is back", async () => {
+  await check("a peer that is down is skipped without holding up the others; the item can be closed skipping it; it is upgraded by itself when it is back", async () => {
     procs.p3.kill("SIGKILL");
     await until("p3 offline", async () => (await view()).hosts.some((h) => h.name === "p3" && h.offline), 30000);
     const s = await j("POST", "/api/release/rollout", { todo: r3.id, version: V3, commit: SHA, hosts: names, hub: true }, { "X-Comebye-Csrf": r3.csrf });
     if (s.status !== 202) throw new Error(JSON.stringify(s));
     const done = await until("done with p3 skipped", async () => { const x = await job(); return x && x.state === "done" && x; }, 120000);
     if (phases(done) !== "p1=ok p2=ok p3=skipped hub=ok prov=ok" || !done.plan[2].catch_up) throw new Error(phases(done) + " " + JSON.stringify(done.plan[2]));
+    // The user calls it done while p3 is away: plain done is refused, "done, skip offline hosts" closes it and names p3.
+    const d0 = await j("POST", `/api/todos/${r3.id}/done`, {});
+    if (d0.status !== 409 || !/--skip-offline/.test(JSON.stringify(d0.body))) throw new Error("plain done: " + JSON.stringify(d0));
+    const d1 = await j("POST", `/api/todos/${r3.id}/done`, { skip_offline: true });
+    if (d1.status !== 200 || d1.body.todo.state !== "done" || !/p3 offline/.test(d1.body.todo.release.rollout_note || "")) throw new Error("skip offline: " + JSON.stringify(d1));
     start("p3", peerPorts[2], ["-ledger=false", "-hub", base]);
     await up(peerPorts[2]);
     const caught = await until("p3 caught up", async () => { const x = await job(); return x && x.state === "done" && x.plan[2].phase === "ok" && x; }, 90000);
