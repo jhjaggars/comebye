@@ -164,7 +164,16 @@ if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The press layer (#135): every tappable kind shows a pressed look under real touch input; a scroll is not a press.
-if want press; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node press.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Its own fake herdr with the dev fixtures (blocked, working, marked rows; a list long enough to scroll) and its own hub.
+if want press; then
+  "$tmp/fake-herdr" -sock "$tmp/pr.sock" -dir "$tmp/pr" -fixtures >"$out/fake-herdr-press.log" 2>&1 &
+  for _ in $(seq 300); do [ -S "$tmp/pr.sock" ] && break; sleep 0.1; done
+  prport=$((port + 280))
+  "$tmp/comebye" -sock "$tmp/pr.sock" -addr "127.0.0.1:$prport" -insecure-no-auth -test-mode -push=false \
+    -state-dir "$tmp/state-press" -host-name uitest >"$out/comebye-press.log" 2>&1 &
+  for _ in $(seq 300); do curl -sf "http://127.0.0.1:$prport/api/agents" >/dev/null && break; sleep 0.1; done
+  COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-press" node press.mjs "http://127.0.0.1:$prport" "$out" || rc=1
+fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
