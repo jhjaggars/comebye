@@ -178,6 +178,7 @@ o="${OUT_DIR:-$RUNNER_TEMP/flakes}"; mkdir -p "$o"; echo "args=$*" >"$o/flakes.t
 EOF
 cat >tools/ci/gotest.sh <<'EOF'
 #!/bin/bash
+set -euo pipefail # as the real gotest.sh: prefer_vm must not fail a step under set -e
 . "$(dirname "$0")/prefer-vm.sh"; prefer_vm gotest "$@"
 echo "gotest where=$([ -n "${COMEBYE_ON_VM:-}" ] && echo vm || echo local) args=$*"
 EOF
@@ -543,6 +544,9 @@ echo 0 >rc.txt; : >"$root/worker.log"
 pool_run
 check "pool: the VM with the most free slots (kv-a, 2 of 2) (rc=$rc)" [ "$rc:$(went)" = 0:kv-a ]
 check "...saying so, with the pool's free slots" grep -qx 'tests: running browser on the test VM kv-a: 2 of 2 slots free (pool: kv-a 2/2 free, kv-b 1/1 free, kv-c stopped; TEST_VM=local runs it here)' <<<"$out"
+out="$(timeout 60 "$caller/tools/ci/gotest.sh" 2>&1)"; rc=$?
+check "pool under set -e (gotest.sh): the last VM has fewer free slots (kv-b 1/1 after kv-a 2/2), still kv-a (rc=$rc)" \
+  bash -c "[ '$rc' = 0 ] && grep -qx 'tests: running gotest on the test VM kv-a: 2 of 2 slots free (pool: kv-a 2/2 free, kv-b 1/1 free, kv-c stopped; TEST_VM=local runs it here)' <<<\"\$1\" && grep -q '^gotest where=vm args=$' <<<\"\$1\"" _ "$out"
 hold kv-a 0
 pool_run
 check "pool: a tie (1 free each) goes to the one listed first" [ "$rc:$(went)" = 0:kv-a ]

@@ -149,8 +149,9 @@ _pvm_pool() {
       if [ -z "$t" ]; then sum="$sum${sum:+, }${_pvm_names[$j]} unreachable"; continue; fi
       if [ "$t" != ok ]; then sum="$sum${sum:+, }${_pvm_names[$j]} without this checkout's pins"; continue; fi
       sum="$sum${sum:+, }${_pvm_names[$j]} $f/$s free"
-      [ "$f" -gt "$bf" ] 2>/dev/null && { best=$j; bf=$f; }
+      if [ "$f" -gt "$bf" ] 2>/dev/null; then best=$j; bf=$f; fi
     done
+    return 0 # a caller under set -e (gotest.sh) must not stop here
   }
   _pvm_go() { # I WHY POOL ARG...: run there
     local j="$1" said="$2" p="$3"; shift 3
