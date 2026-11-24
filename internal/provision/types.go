@@ -61,6 +61,11 @@ type Preflight struct {
 	// DryRun is set by the node's comebye, not the tool: every job on this node
 	// runs create --dry-run (the real path is off).
 	DryRun bool `json:"dry_run"`
+	// HubOnly is set by the node's comebye, not the tool: the node hosts no
+	// agents (-hub-only), so it is a dedicated provisioner, always on (an
+	// in-cluster one), not someone's workstation. When two nodes can start the
+	// same worker, the hub prefers it.
+	HubOnly bool `json:"hub_only,omitempty"`
 }
 
 var (

@@ -273,31 +273,79 @@ func (s *Server) peerStatus(name string) string {
 	return ""
 }
 
-// ownerOf finds the node whose book lists the host (fresh look), and its record.
+// ownerOf finds the node whose book lists the host (fresh look), and its
+// record. With via empty and more than one node listing it (a VM that two
+// provisioners drive, such as a workstation's worker config and the
+// in-cluster provisioner), pickOwner chooses; ambiguous only when it cannot.
 func (s *Server) ownerOf(ctx context.Context, name, via string) (owner string, hv *provision.HostView, ambiguous bool) {
 	for _, n := range s.hostsNodes() {
 		if via == "" || via == n {
 			s.askHosts(ctx, n, true)
 		}
 	}
+	return s.pickOwner(s.ownersOf(name, via))
+}
+
+// hostOwner is one node that lists a host, with its record.
+type hostOwner struct {
+	node string
+	hv   provision.HostView
+}
+
+// ownersOf lists the nodes whose cached books list the host (not destroyed),
+// sorted by node name. via, when set, keeps only that node.
+func (s *Server) ownersOf(name, via string) []hostOwner {
 	s.prov.mu.Lock()
-	defer s.prov.mu.Unlock()
+	var out []hostOwner
 	for n, c := range s.prov.hosts {
 		if c.View == nil || (via != "" && via != n) {
 			continue
 		}
 		for i := range c.View.Hosts {
-			h := c.View.Hosts[i]
-			if h.Name == name && h.State != "destroyed" {
-				if owner != "" {
-					return "", nil, true
-				}
-				cp := h
-				owner, hv = n, &cp
+			if h := c.View.Hosts[i]; h.Name == name && h.State != "destroyed" {
+				out = append(out, hostOwner{node: n, hv: h})
+				break
 			}
 		}
 	}
-	return owner, hv, false
+	s.prov.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].node < out[j].node })
+	return out
+}
+
+// pickOwner chooses the node that acts on a host more than one node lists:
+// the one that is up; of several that are up, the one dedicated to
+// provisioning (a -hub-only node, such as the in-cluster provisioner). So a
+// wake works with the workstation off, and nobody has to pick while both are
+// on. It answers ambiguous when that still leaves more than one. It reads only
+// what the hub has cached (the fleet and the nodes' preflights).
+func (s *Server) pickOwner(cands []hostOwner) (owner string, hv *provision.HostView, ambiguous bool) {
+	one := func(c hostOwner) (string, *provision.HostView, bool) { cp := c.hv; return c.node, &cp, false }
+	switch len(cands) {
+	case 0:
+		return "", nil, false
+	case 1:
+		return one(cands[0])
+	}
+	var up []hostOwner
+	for _, c := range cands {
+		if s.peerStatus(c.node) == "ok" {
+			up = append(up, c)
+		}
+	}
+	if len(up) == 1 {
+		return one(up[0])
+	}
+	var ded []hostOwner
+	for _, c := range up {
+		if n := s.cachedNode(c.node); n != nil && n.Preflight != nil && n.Preflight.HubOnly {
+			ded = append(ded, c)
+		}
+	}
+	if len(ded) == 1 {
+		return one(ded[0])
+	}
+	return "", nil, true
 }
 
 // handleProvisionHostStart: POST /api/provision/hosts/{name}/start. Only the
@@ -602,27 +650,10 @@ func dueNow(due string) bool {
 	return err == nil && !time.Now().Before(t)
 }
 
-// cachedHost finds a host in the provisioners' cached books (no network).
-// nil when none lists it, or more than one does.
+// cachedHost finds a host in the provisioners' cached books (no network),
+// choosing as pickOwner does when more than one lists it. nil when none
+// lists it, or the choice is ambiguous.
 func (s *Server) cachedHost(name string) (*provision.HostView, string) {
-	s.prov.mu.Lock()
-	defer s.prov.mu.Unlock()
-	var out *provision.HostView
-	var owner string
-	for n, c := range s.prov.hosts {
-		if c.View == nil {
-			continue
-		}
-		for i := range c.View.Hosts {
-			h := c.View.Hosts[i]
-			if h.Name == name && h.State != "destroyed" {
-				if out != nil {
-					return nil, ""
-				}
-				cp := h
-				out, owner = &cp, n
-			}
-		}
-	}
-	return out, owner
+	owner, hv, _ := s.pickOwner(s.ownersOf(name, ""))
+	return hv, owner
 }

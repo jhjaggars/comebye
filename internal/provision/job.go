@@ -229,6 +229,19 @@ const StartTimeout = 10 * time.Minute
 // command for every provider. The tool has no --events for start, so each line
 // of its text (stdout or stderr) becomes a log Item: that is the progress.
 func (t *Tool) RunStart(ctx context.Context, name string, emit func(Item)) JobResult {
+	return t.runLines(ctx, "start", StartTimeout, name, emit)
+}
+
+// RunStopJob stops a running host, disks kept (worker stop NAME), as a job
+// asked for from the app: like RunStart, each line of the tool's text is a
+// log Item.
+func (t *Tool) RunStopJob(ctx context.Context, name string, emit func(Item)) JobResult {
+	return t.runLines(ctx, "stop", StopTimeout, name, emit)
+}
+
+// runLines runs `worker VERB NAME` for a command with no --events: each line
+// of its text becomes a log Item, and the last one is the message of a failure.
+func (t *Tool) runLines(ctx context.Context, verb string, timeout time.Duration, name string, emit func(Item)) JobResult {
 	if !nameRe.MatchString(name) {
 		return JobResult{Class: ClassOther, Msg: "bad name"}
 	}
@@ -244,7 +257,7 @@ func (t *Tool) RunStart(ctx context.Context, name string, emit func(Item)) JobRe
 		mu.Unlock()
 		emit(Item{Kind: "log", Msg: l})
 	}
-	_, err := t.stream(ctx, "create", StartTimeout, nil, []string{"start", name},
+	_, err := t.stream(ctx, "create", timeout, nil, []string{verb, name},
 		func(b []byte) { line(string(b)) }, line)
 	if err == nil {
 		return JobResult{OK: true}

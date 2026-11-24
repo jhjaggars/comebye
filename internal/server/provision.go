@@ -165,6 +165,7 @@ func (s *Server) handlePeerPreflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.DryRun = !tool.Real
+	p.HubOnly = s.cfg.HubOnly
 	writeJSON(w, p)
 }
 
@@ -648,7 +649,9 @@ func (s *Server) provisionRoutes() {
 	s.mux.HandleFunc("POST /api/provisioner/host/fetch", s.auth(s.handlePeerHostFetch))
 	// waking a stopped worker (issue #66)
 	s.mux.HandleFunc("POST /api/provisioner/host/start", s.auth(s.handlePeerHostStart))
+	s.mux.HandleFunc("POST /api/provisioner/host/stop", s.auth(s.handlePeerHostStop))
 	s.mux.HandleFunc("POST /api/provision/hosts/{name}/start", s.authAgent(s.handleProvisionHostStart))
+	s.mux.HandleFunc("POST /api/provision/hosts/{name}/stop", s.authAgent(s.handleProvisionHostStop))
 	s.mux.HandleFunc("GET /api/provision/wake", s.auth(s.handleProvisionWake))
 	s.mux.HandleFunc("GET /api/provision/hosts", s.auth(s.handleProvisionHosts))
 	s.mux.HandleFunc("POST /api/provision/hosts/{name}/destroy", s.auth(s.handleProvisionHostDestroy))

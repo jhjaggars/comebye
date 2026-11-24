@@ -485,6 +485,67 @@ func TestAppHasAStartButtonForStoppedWorkers(t *testing.T) {
 	}
 }
 
+// A running provisioned worker has a Stop button on its page, beside where a
+// stopped one has Start: it asks first, stops through the hub's route with the
+// CSRF token and follows the job. Start and Stop name a node only when one node
+// lists the host; with two, the hub chooses.
+func TestAppHasAStopButtonForRunningWorkers(t *testing.T) {
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []string{
+		"/api/provision/hosts/\\$\\{encodeURIComponent\\(name\\)\\}/stop",
+		`body: JSON\.stringify\(\{ via: phVia\(name\) \}\)`,
+		`body: JSON\.stringify\(\{ via: phVia\(name\), confirm_cap: !!confirmed \}\)`,
+		`data-sp-stop=`,
+		`data-sp-yes=`,
+		`Its disks are kept, and Start brings it back`,
+		`/api/provision/jobs/\$\{encodeURIComponent\(j\.id\)\}`,
+		`const html = head \+ wsec \+ ssec \+ reach \+ body;`,
+	} {
+		if !regexp.MustCompile(re).Match(src) {
+			t.Errorf("app.js does not match %s", re)
+		}
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	var js strings.Builder
+	for _, name := range []string{"phHost", "phVia", "stopOf"} {
+		b := regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)
+		if b == nil {
+			b = regexp.MustCompile(`\nfunction ` + name + `\(.*\n`).Find(src)
+		}
+		if b == nil {
+			t.Fatalf("app.js has no %s", name)
+		}
+		js.Write(b)
+	}
+	js.WriteString(`
+const ph = { data: { hosts: [
+  { name: "kv1", via: "desk", state: "running" }, { name: "kv1", via: "kube", state: "running" },
+  { name: "demo1", via: "desk", state: "stopped" }, { name: "old", via: "kube", state: "destroyed" },
+] } };
+function peerStatusOf(h) { return h.status; }
+const got = {
+  vKv1: phVia("kv1"), vDemo: phVia("demo1"), vOld: phVia("old"), vNone: phVia("nope"),
+  sUp: !!stopOf({ name: "kv1", status: "ok" }), sDown: !!stopOf({ name: "kv1", status: "down" }),
+  sStopped: !!stopOf({ name: "demo1", status: "ok" }), sLocal: !!stopOf({ name: "kv1", status: "ok", local: true }),
+};
+console.log(JSON.stringify(got));
+`)
+	out, err := exec.Command(node, "-e", js.String()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	want := `{"vKv1":"","vDemo":"desk","vOld":"","vNone":"","sUp":true,"sDown":false,"sStopped":false,"sLocal":false}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("got  %s\nwant %s", out, want)
+	}
+}
+
 // The model chip beside the context chip shows a short name: Claude ids as
 // "Opus 5.5", other models by their last path segment minus a date or build
 // stamp. The full provider/model stays in the tooltip.

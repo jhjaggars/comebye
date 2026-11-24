@@ -2540,7 +2540,7 @@
     .ph-row .btn.danger, .ph-dest .btn.danger { color: var(--red); border-color: var(--red); }
     /* Stopped workers: Start (issue #66) */
     .wk-line { margin: calc(-1 * var(--sp-4)) 0 var(--sp-4); padding: 0 var(--sp-12); }
-    .wk-start, .wk-acts .btn { min-height: var(--hit-44); padding: 0 var(--sp-14); }
+    .wk-start, .sp-stop, .wk-acts .btn { min-height: var(--hit-44); padding: 0 var(--sp-14); }
     .wk-acts { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
     .wk-confirm { display: flex; flex-direction: column; gap: var(--sp-8); }
     .wk-prog { display: flex; align-items: center; gap: var(--sp-8); color: var(--orange); font-size: var(--fs-13); min-height: var(--hit-44); overflow-wrap: anywhere; min-width: 0; }
@@ -2552,7 +2552,7 @@
     .agent.host-stopped .status { white-space: nowrap; }
     .agent.host-stopped.failed .status { color: var(--red); }
     .agent.host-stopped.starting .status { color: var(--orange); }
-    @media (max-width: 420px) { .wk-start { width: 100%; } .wk-acts .btn { flex: 1; } .wk-launch .btn { width: 100%; } }
+    @media (max-width: 420px) { .wk-start { width: 100%; } .sp-stop { width: 100%; } .wk-acts .btn { flex: 1; } .wk-launch .btn { width: 100%; } }
     /* Launch picker and rollout preview: stopped workers (issue #66) */
     .hf-chip .ln-wk { margin-left: var(--sp-6); font-size: var(--fs-11); font-weight: 500; color: var(--muted); }
     .hf-chip .ln-wk.starting { color: var(--orange); } .hf-chip .ln-wk.failed { color: var(--red); }

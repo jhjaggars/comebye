@@ -54,7 +54,11 @@ case "$4" in
    [ -f ` + d + `/start.fail ] && { echo "the instance would not start" >&2; exit 1; }
    [ -f ` + d + `/start.flip ] && cp ` + d + `/start.flip ` + d + `/status.json
    exit 0 ;;
- stop) exit 0 ;;
+ stop)
+   [ -f ` + d + `/stop.out ] && cat ` + d + `/stop.out
+   [ -f ` + d + `/stop.fail ] && { echo "the instance would not stop" >&2; exit 1; }
+   [ -f ` + d + `/stop.flip ] && cp ` + d + `/stop.flip ` + d + `/status.json
+   exit 0 ;;
  fetch)
    [ -f ` + d + `/fetch.fail ] && { echo "worker: $(cat ` + d + `/fetch.fail)" >&2; exit 1; }
    cat ` + d + `/fetch.json ;;
@@ -221,13 +225,20 @@ func TestProvisionRoutesAreUserOnly(t *testing.T) {
 				}
 				continue
 			}
+			if strings.Contains(line, "/api/provision/hosts/{name}/stop") {
+				// the same exception for a stop (TestStopNeedsTheUserOrTheCoordinator)
+				if !strings.Contains(line, "s.authAgent(s.handleProvisionHostStop)") {
+					t.Errorf("the stop route is not guarded as agreed: %s", strings.TrimSpace(line))
+				}
+				continue
+			}
 			if !strings.Contains(line, ", s.auth(s.") || strings.Contains(line, "authAgent") || strings.Contains(line, "authWorker") {
 				t.Errorf("a provisioning route is not user-only: %s", strings.TrimSpace(line))
 			}
 		}
 	}
-	if n != 25 {
-		t.Fatalf("found %d provisioning routes, want 25: update this test with the route", n)
+	if n != 27 {
+		t.Fatalf("found %d provisioning routes, want 27: update this test with the route", n)
 	}
 	if strings.Contains(string(src), "/api/provision") {
 		t.Error("provisioning routes belong in provision.go, where this test checks them")

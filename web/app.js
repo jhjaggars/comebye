@@ -8893,7 +8893,9 @@ function renderPeerView() {
   // Keep the focus and caret in a field being typed in across a redraw.
   const ae = document.activeElement, keep = ae && view.contains(ae) && ae.id ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
   const wsec = wx ? `<div class="pr-sec wk-sec"><h3>${esc(wakeChip(wx))}</h3><div class="pr-note">${esc(wakeWhat(wx))}</div>${wakeAction(h, wx)}</div>` : "";
-  const html = head + wsec + reach + body;
+  const sx = wx ? null : stopOf(h); // a running provisioned worker: Stop, where a stopped one has Start
+  const ssec = sx ? `<div class="pr-sec wk-sec"><h3>Running</h3><div class="pr-note">${esc([sx.provider || (sx.kind !== "openshell" ? sx.kind : ""), sx.type, phVia(h.name) ? "via " + phVia(h.name) : ""].filter(Boolean).join(" · "))}</div>${stopAction(h)}</div>` : "";
+  const html = head + wsec + ssec + reach + body;
   if (view._html === html) return;
   view._html = html;
   const typed = document.getElementById("si-code"), typedV = typed && view.contains(typed) ? typed.value : "";
@@ -9279,6 +9281,12 @@ const ph = { data: null, err: "", loading: false, dest: null, timer: null, polli
 
 function phMoney(v) { return v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)); }
 function phHost(name) { return ph.data && (ph.data.hosts || []).find((h) => h.name === name && h.state !== "destroyed") || null; }
+// phVia is the node to name for a start or a stop: the one that lists the host, or "" when more than one does, so
+// the hub chooses (the one that is up; of two, the dedicated in-cluster provisioner) and nobody has to pick.
+function phVia(name) {
+  const vias = new Set(((ph.data && ph.data.hosts) || []).filter((h) => h.name === name && h.state !== "destroyed").map((h) => h.via));
+  return vias.size === 1 ? [...vias][0] || "" : "";
+}
 
 // phEnsure loads what the provisioners say about their hosts without the Peers screen being open, so that a
 // session on a host that is down can say it is stopped. Asked again after half a minute if it did not come.
@@ -9515,7 +9523,7 @@ async function wakeStart(name, confirmed) {
   if (!confirmed && p && (p.cap_stopped || (p.destroy_due && Date.parse(p.destroy_due) <= Date.now()))) { wk.confirm = name; wakeRedraw(); return; }
   wk.confirm = ""; wk.busy[name] = true; wk.err[name] = ""; wakeRedraw();
   try {
-    const d = await api(`/api/provision/hosts/${encodeURIComponent(name)}/start`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: (p || {}).via || "", confirm_cap: !!confirmed }), timeout: 60000 });
+    const d = await api(`/api/provision/hosts/${encodeURIComponent(name)}/start`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: phVia(name), confirm_cap: !!confirmed }), timeout: 60000 });
     if (d.wake) wk.wakes[name] = d.wake;
     wakeStartPoll();
   } catch (e) {
@@ -9596,6 +9604,73 @@ document.addEventListener("click", (ev) => {
   if (b.dataset.wkStart) wakeStart(b.dataset.wkStart, false);
   else if (b.dataset.wkYes) wakeStart(b.dataset.wkYes, true);
   else { wk.confirm = ""; wakeRedraw(); }
+}, true);
+
+/* ---------- Running workers: a Stop button ---------- */
+//
+// The counterpart of Start: a provisioned worker the cloud says is running can be
+// stopped from its page, disks kept (POST /api/provision/hosts/{name}/stop). It
+// asks first: whatever runs on the worker stops with it. The hub answers with a
+// job, which the page follows until it ends; then Start is offered again.
+const sp = { confirm: "", busy: {}, err: {}, jobs: {}, timer: null, polling: false };
+
+// stopOf: the provisioner's record of a peer that is up and running, so it can be stopped. null otherwise.
+function stopOf(h) {
+  if (!h || h.local || peerStatusOf(h) !== "ok") return null;
+  const p = phHost(h.name);
+  return p && p.state === "running" ? p : null;
+}
+
+function stopAction(h) {
+  const n = escAttr(h.name), j = sp.jobs[h.name];
+  if (j && j.state === "running") return `<div class="wk-prog" role="status"><span class="wk-spin" aria-hidden="true"></span><span>${esc(j.step || "stopping " + h.name)}</span></div>`;
+  if (sp.confirm === h.name) {
+    const ag = h.agents ? `Its ${h.agents} agent${h.agents === 1 ? "" : "s"} stop with it.` : "Nothing is running on it.";
+    return `<div class="wk-confirm" role="alertdialog" aria-label="Stop ${n}"><p class="pz-note warn">Stop ${esc(h.name)}? ${esc(ag)} Its disks are kept, and Start brings it back.</p>
+      <div class="wk-acts"><button type="button" class="btn" data-sp-no="1">Cancel</button><button type="button" class="btn danger" data-sp-yes="${n}">Stop it</button></div></div>`;
+  }
+  const done = j && j.state !== "running" ? (j.state === "ok" ? `<p class="pz-note" role="status">Stopped.</p>` : `<p class="pz-note warn" role="alert">The stop did not finish: ${esc(j.msg || j.state)}</p>`) : "";
+  const err = sp.err[h.name] ? `<p class="pz-note warn" role="alert">${esc(sp.err[h.name])}</p>` : "";
+  return `${done}${err}<button type="button" class="btn sp-stop" data-sp-stop="${n}"${sp.busy[h.name] ? " disabled" : ""}>${sp.busy[h.name] ? "Stopping…" : "Stop"}</button>`;
+}
+
+async function stopHost(name) {
+  sp.confirm = ""; sp.busy[name] = true; sp.err[name] = ""; delete sp.jobs[name]; wakeRedraw();
+  try {
+    const d = await api(`/api/provision/hosts/${encodeURIComponent(name)}/stop`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: phVia(name) }), timeout: 60000 });
+    sp.jobs[name] = { id: d.id, state: d.state, msg: d.msg, cursor: d.next || 0, step: "" };
+    if (!sp.timer) sp.timer = setInterval(stopPoll, 1500);
+  } catch (e) { sp.err[name] = e.message || "failed"; }
+  sp.busy[name] = false;
+  wakeRedraw();
+}
+
+async function stopPoll() {
+  if (sp.polling) return;
+  sp.polling = true;
+  let open = false, ended = false;
+  for (const [name, j] of Object.entries(sp.jobs)) {
+    if (j.state !== "running") continue;
+    try {
+      const v = await api(`/api/provision/jobs/${encodeURIComponent(j.id)}?after=${j.cursor}`, { timeout: 20000 });
+      const last = (v.items || []).filter((it) => it.msg).pop();
+      sp.jobs[name] = { ...j, state: v.state, msg: v.msg, cursor: v.next, step: last ? last.msg : j.step };
+      if (v.state === "running") open = true; else ended = true;
+    } catch (e) { open = true; /* the next tick tries again */ }
+  }
+  if (!open) { clearInterval(sp.timer); sp.timer = null; }
+  sp.polling = false;
+  if (ended) await loadProvHosts(true);
+  wakeRedraw();
+}
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest("[data-sp-stop],[data-sp-yes],[data-sp-no]");
+  if (!b || b.disabled) return;
+  ev.preventDefault(); ev.stopPropagation();
+  if (b.dataset.spStop) { sp.confirm = b.dataset.spStop; sp.err[sp.confirm] = ""; wakeRedraw(); }
+  else if (b.dataset.spYes) stopHost(b.dataset.spYes);
+  else { sp.confirm = ""; wakeRedraw(); }
 }, true);
 
 /* ---------- Add host: the wizard (Peers → Prices → Add host…) ---------- */

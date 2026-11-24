@@ -885,6 +885,20 @@ guide](setup.md#a-hub-with-no-herdr-containers-kubernetes)). It answers the hub'
 health and peer calls and reports 0 agents, which the hub shows as "no agents here", not as a
 broken host. Agent routes on it answer 409 `no_herdr`.
 
+### Start and Stop from the app
+
+A stopped worker's page has **Start**; a running one has **Stop** (it asks first: the worker's
+agents stop with it, and its disks are kept). Both go through the hub
+(`POST /api/provision/hosts/{name}/start` and `/stop`, the user or the coordinator only) to the
+node that can act on the host, which runs `worker start` or `worker stop` as a job.
+
+**A VM that two nodes drive.** When a workstation's worker config and this pod both list the same
+VM, the hub picks the node without being told: the one that is up, and of two that are up, the
+one that hosts no agents (`-hub-only`, which this pod is: its preflight says `hub_only`). So a wake
+works with the workstation off, and nobody has to pick while both are on. Two ordinary nodes that
+are both up are still refused as `ambiguous`: give `via` then. The workstation's own config keeps
+working for anything that runs there, such as `tools/ci/remote.sh`.
+
 ### The Secrets trade-off
 
 The Role has get, list, create, update and delete on **Secrets in the VM namespace**, because the
@@ -926,8 +940,9 @@ The user does these; nothing in this repository touches the cluster.
    for create, `comebye-provisioner-tailscale-oauth` (key `tailscale-oauth`).
 4. Let the hub admit the pod: the same `-ts-allow-cap` grant the other peers use, and either
    `comebye peers add` once or `-peer-self-register` on the hub with `COMEBYE_ANNOUNCE` on the pod.
-5. Leave the hub's own manifest alone: pick the pod's node in the app. Its `-provision-host` default
-   is unchanged.
+5. Leave the hub's own manifest alone: its `-provision-host` default is unchanged. A VM that this pod
+   and the default node both list is started and stopped through the pod (see
+   [Start and Stop from the app](#start-and-stop-from-the-app)).
 6. To allow create and destroy (the one opt-in step): fill the OAuth Secret
    `comebye-provisioner-tailscale-oauth` (key `tailscale-oauth`, mounted read-only, mode 0400, in this
    pod only), then uncomment `-provision-create` in `deployment.yaml`. Remove it to go back to dry
