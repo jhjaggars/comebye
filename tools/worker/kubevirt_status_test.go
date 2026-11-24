@@ -82,6 +82,9 @@ func TestKubeVirtStatusJSON(t *testing.T) {
 	w := newLiveWorld()
 	e := kvWorker(t, w)
 	w.vmState = "Stopped"
+	// The node the gate pinned the VM to, as the VM object says.
+	tpl := w.objs["vm/kv1"]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	pin, _ := tpl["nodeSelector"].(map[string]any)["kubernetes.io/hostname"].(string)
 	for _, name := range []string{"kv1", ""} {
 		var out strings.Builder
 		e.Out = &out
@@ -100,8 +103,8 @@ func TestKubeVirtStatusJSON(t *testing.T) {
 			got.CreatedAt == nil || *got.CreatedAt != "2026-11-20T10:00:00Z" || !strings.Contains(got.Type, "32Gi") {
 			t.Errorf("%q: %+v", name, got)
 		}
-		if got.Node != "rozalin.x.cc" { // a stopped VM's node is its pin, for tools/ci's heat check
-			t.Errorf("%q: node %q, want the pinned rozalin.x.cc", name, got.Node)
+		if got.Node == "" || got.Node != pin { // a stopped VM's node is its pin, for tools/ci's heat check
+			t.Errorf("%q: node %q, want the pinned %q", name, got.Node, pin)
 		}
 		if strings.Contains(out.String(), `"mode"`) {
 			t.Errorf("a KubeVirt worker has no price mode: %s", out.String())
