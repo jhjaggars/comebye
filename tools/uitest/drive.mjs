@@ -4303,8 +4303,14 @@ const relHscroll = () => page.evaluate(() => {
   const bad = [...document.querySelectorAll(sel + " *")].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).display !== "inline" && !e.closest("pre")).map((e) => e.tagName + "." + e.className + " " + e.scrollWidth + ">" + e.clientWidth);
   return { bad, page: [document.documentElement.scrollWidth, innerWidth], pane: [document.querySelector(sel).scrollWidth, document.querySelector(sel).clientWidth] };
 });
+// openReleases opens the deep link as a page of its own, as a link does. It used to go there by changing the hash of the
+// page left by the check before (the phone list), just after the resize to 1280 had made it a desktop. The desktop then
+// opens Status on its own (openToSomething, on the next agents list): when that replaceState came a moment before the
+// goto's hash landed (5 ms in CI run 45612141179), the browser kept #/status, and the reload came back on Status. An
+// app opened at the link never does that: it keeps a deep link.
 const openReleases = async (width) => {
   await page.setViewportSize({ width, height: width < 500 ? 844 : 800 });
+  await page.goto("about:blank");
   await page.goto(base + "/#/peers/~releases", { waitUntil: "load" });
   await page.reload({ waitUntil: "load" });
   await page.waitForSelector("#pr-releases .rl-card", { timeout: 20000 });
@@ -4314,10 +4320,13 @@ const openReleases = async (width) => {
 for (const width of [1280, 390]) {
 await check(`releases tab at ${width}: tabs and badge, and the card and fleet table in every state; nothing scrolls sideways`, async () => {
   let state = "none";
-  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: releaseView(state) }));
+  // Each answer names its state (_uitest), so reload() waits for that one to be drawn, not for any answer.
+  await page.route(/\/api\/releases(\?.*)?$/, (r) => r.fulfill({ json: { ...releaseView(state), _uitest: state } }));
   try {
     const txt = () => page.locator("#pr-releases").innerText();
-    const reload = async (s) => { state = s; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history, null); await idle(); };
+    // reload(s): the hub's answer becomes s. loadReleases returns at once while a poll is in flight, and that poll was
+    // answered with the old state: settle first (it lands), then ask, then wait for s itself ("partial3: RELEASE").
+    const reload = async (s) => { state = s; await idle(); await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => document.querySelector("#pr-releases").innerText.length > 0 && rls.data && rls.data.history && rls.data._uitest === v, s); await idle(); };
     await openReleases(width);
     // the tabs
     if ((await page.locator("#pr-tabs [role=tab]:not([hidden])").allInnerTexts()).map((t) => t.trim().replace(/\s+\d$/, "")).join("|") !== "Hosts|Releases") throw new Error("tabs");
