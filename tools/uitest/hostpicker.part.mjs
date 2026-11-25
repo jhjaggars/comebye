@@ -5,9 +5,14 @@
 // Space, Enter and Esc work and focus returns to the button; the sheet traps focus and closes on a swipe down; a down
 // host is listed and cannot be picked; light and dark at 390, 1280 and 3440.
 //
-//   node hostpicker.mjs BASE OUT_DIR
+//   (a part of navjourney.mjs) hostpicker BASE OUT_DIR
+//
+// A part of navjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch, settled } from "./lib.mjs";
+import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const results = [];
 // idle: two frames, then no CSS transition or animation still running (a sheet has slid in, a pull has sprung back), not a timer.
@@ -241,7 +246,6 @@ for (const dark of [false, true]) {
 }
 
 // Colours: the button, the popover and the note read in all 15 themes, both from the tokens and on the painted column.
-import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 const tctx = { globalThis: null }; tctx.globalThis = tctx; vm.createContext(tctx);
 vm.runInContext(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "themes.js"), "utf8"), tctx);
 const { THEMES: ALL, contrast } = tctx.ComebyeThemes;
@@ -284,3 +288,4 @@ for (const t of ALL) {
 }
 
 process.exit(results.every(Boolean) ? 0 : 1);
+}

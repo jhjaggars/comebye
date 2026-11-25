@@ -5,14 +5,18 @@
 // document with the real `comebye show`, and the checks edit the files while
 // the panel is open.
 //
-//   node sidepanel.mjs BASE OUT_DIR      (env: PANEL_HOME, COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
+//   (a part of paneljourney.mjs) sidepanel BASE OUT_DIR      (env: PANEL_HOME, COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
 //
 // Each check runs at 1440 (a split beside the chat) and at 390 (a bottom sheet).
+//
+// A part of paneljourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { clickStable, launch, settled } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const home = process.env.PANEL_HOME, bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!home || !bin || !stateDir) { console.error("sidepanel.mjs: set PANEL_HOME, COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -475,3 +479,4 @@ for (const width of [1440, 390]) {
 const bad = results.filter((r) => !r.ok).length;
 console.log(`sidepanel: ${results.length - bad}/${results.length} passed`);
 process.exit(bad ? 1 : 0);
+}

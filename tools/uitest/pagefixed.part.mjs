@@ -3,13 +3,17 @@
 // the text inside it. The comment strip and tray float over the frame instead of taking room from it.
 // Reference boxes: the frame's own bounding box in the app, and a paragraph's box and the scroll offset inside it.
 //
-//   node pagefixed.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
+//   (a part of pagereplyjourney.mjs) pagefixed BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
+//
+// A part of pagereplyjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pagefixed.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -110,3 +114,4 @@ for (const width of (process.env.WIDTHS || "390,1280,3440").split(",").map(Numbe
 const failed = results.filter((r) => !r.ok);
 console.log(`pagefixed: ${results.length - failed.length}/${results.length} passed`);
 process.exit(failed.length ? 1 : 0);
+}

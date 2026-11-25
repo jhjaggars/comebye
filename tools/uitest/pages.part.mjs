@@ -8,13 +8,17 @@
 // run from the hub's own origin must succeed, so the test cannot pass because
 // the attacks are broken.
 //
-//   node pages.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//   (a part of pagesjourney.mjs) pages BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//
+// A part of pagesjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch, settled } from "./lib.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pages.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -996,3 +1000,4 @@ fs.rmSync(work, { recursive: true, force: true });
 let failed = 0;
 for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : "  -- " + why}`); if (!ok) failed++; }
 process.exit(failed ? 1 : 0);
+}

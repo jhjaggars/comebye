@@ -3,9 +3,14 @@
 // the #/list?...&group= hash; it works with the tabs, the filter box and the host picker; a blocked agent is in sight in every
 // mode; the menu is keyboard reachable and a bottom sheet on a phone; nothing overflows at 390, 1280 and 3440, light and dark.
 //
-//   node groupby.mjs BASE OUT_DIR
+//   (a part of navjourney.mjs) groupby BASE OUT_DIR
+//
+// A part of navjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch, settled } from "./lib.mjs";
+import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const results = [];
 // idle: two frames, then no CSS transition or animation still running (a sheet has slid in, a pull has sprung back), not a timer.
@@ -419,7 +424,6 @@ for (const dark of [false, true]) {
 }
 
 // Colours: the button reads in all 15 themes (tokens); the pressed state paints blue on chip-blue as the tabs do.
-import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 const tctx = { globalThis: null }; tctx.globalThis = tctx; vm.createContext(tctx);
 vm.runInContext(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "themes.js"), "utf8"), tctx);
 const { THEMES: ALL, contrast } = tctx.ComebyeThemes;
@@ -432,3 +436,4 @@ await check("all 15 themes (tokens): the Group button, its label, and the non-de
 });
 
 process.exit(results.every(Boolean) ? 0 : 1);
+}

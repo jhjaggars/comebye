@@ -3,7 +3,7 @@
 #
 #   tools/ci/browser.sh SUITE [SCHEME] [OUT_DIR] [SHARD]
 #
-# SUITE: smoke (whole groups of drive.mjs checks, one set per screen, plus pages, usage and peers: ~160 checks, about 2 min), drive (drive.mjs), rest (every other behaviour script),
+# SUITE: smoke (whole groups of drive.mjs checks, one set per screen, plus pagesjourney (its pages part alone under SMOKE), usage and peers: ~160 checks, about 2 min), drive (drive.mjs), rest (every other behaviour script),
 #        visual (the design-language scripts), full (everything, as tools/uitest/run.sh does),
 #        changed (what a pull request's pre-submit tier runs for this branch's changes against BASE, default origin/main:
 #        tools/ci/select.sh's smoke set plus the scripts for the touched paths, nothing for docs, full when it says all)
@@ -69,7 +69,7 @@ if [ "$suite" = changed ]; then
 fi
 
 case "$suite" in
-  smoke)  export SMOKE=1; scripts="drive pages usage peers ${EXTRA:-}" ;;
+  smoke)  export SMOKE=1; scripts="drive pagesjourney usage peers ${EXTRA:-}" ;;
   drive)  scripts="drive" ;;
   rest)   scripts="${rest# }" ;;
   visual) scripts="$VISUAL" ;;

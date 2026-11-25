@@ -51,14 +51,14 @@ while IFS= read -r f; do
     internal/dialog/*) lint=true; merge_go=true; add_pkg ./internal/dialog; add_pkg ./internal/state; add_pkg ./internal/server ;;
     web/test/unlockinterop.mjs) lint=true; merge_browser=true; merge_go=true; add_script markdown; add_pkg ./internal/gpgunlock ;;
     tools/release/tag) lint=true; merge_go=true; add_pkg .; add_pkg ./internal/release ;;   # main.go embeds it
-    tools/worker/testdata/*) lint=true; add_script provision; add_script provhosts; add_script provkubevirt; add_script wake; add_script multiconfig; add_script wakeuse; add_script wakepolish; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
+    tools/worker/testdata/*) lint=true; add_script fleetjourney; merge_browser=true; merge_go=true; add_pkg ./tools/worker; add_pkg ./internal/provision; add_pkg ./internal/server ;;
     # The provisioner example manifests have a Go test (deploy/kubernetes/provisioner/manifests_test.go): the Role's allow-list, the Secret lint, kustomize.
     deploy/kubernetes/provisioner/*) lint=true; merge_go=true; add_pkg ./deploy/kubernetes/provisioner ;;
     docs/*|*.md|LICENSE|.gitignore|deploy/*) ;;                       # nothing to test
     .github/*|go.mod|go.sum|tools/uitest/package.json|tools/uitest/package-lock.json|tools/uitest/run.sh|tools/uitest/lib.mjs|tools/ci/*)
       everything=true ;;
     web/themes.js) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
-    web/sidepanel.js) lint=true; smoke=true; add_script sidepanel; add_script statussplit; add_script pagessplit; add_script offline; add_script saved; add_script shell; merge_browser=true; add_pkg ./web ;;
+    web/sidepanel.js) lint=true; smoke=true; add_script paneljourney; add_script offline; add_script saved; add_script shell; merge_browser=true; add_pkg ./web ;;
     web/test/*) lint=true; add_script markdown; merge_browser=true ;;
     web/app.js) lint=true; smoke=true; visual=true; add_script offline; add_script saved; add_script shell; add_script pullrefresh; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
     web/sw.js|web/index.html|web/manifest.webmanifest) lint=true; smoke=true; visual=true; add_script shell; add_script offline; add_script saved; add_script pullrefresh; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
@@ -66,13 +66,13 @@ while IFS= read -r f; do
     main.go|announce.go|main_test.go) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg . ;;
     internal/server/*|internal/herdr/*|internal/state/*)
       lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
-    internal/pageskit/*) lint=true; smoke=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
+    internal/pageskit/*) lint=true; smoke=true; add_script pagesjourney; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
     internal/fleet/*) lint=true; add_script peers; add_script testruns; merge_browser=true; merge_go=true; add_pkg ./internal/fleet ;;
     internal/testruns/*) lint=true; add_script testruns; merge_browser=true; merge_go=true; add_pkg ./internal/testruns; add_pkg ./internal/fleet ;;
-    tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; add_script provkubevirt; add_script wake; add_script multiconfig; add_script wakeuse; add_script wakepolish; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
+    tools/worker/*|internal/provision/*) lint=true; add_script fleetjourney; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
       # internal/server's tests read the provision and tools/worker golden files and testdata
       add_pkg ./internal/provision; add_pkg ./internal/server ;;
-    internal/cli/*) lint=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;
+    internal/cli/*) lint=true; add_script pagesjourney; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/cli ;;
     # `comebye api`'s module: the cli runs it, internal/server's golden test checks the generated records.
     internal/apipy/*) lint=true; merge_go=true; add_pkg ./internal/apipy; add_pkg ./internal/cli; add_pkg ./internal/server ;;
     internal/usage/*) lint=true; add_script usage; merge_browser=true; merge_go=true; add_pkg ./internal/usage ;;
@@ -81,6 +81,12 @@ while IFS= read -r f; do
     tools/smoke/*) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg ./tools/smoke/fakeherdr ;;
     # The helper the GPG scripts share: both of them, and (through tools/smoke/day.mjs) the day in the life.
     tools/uitest/gpghelp.mjs) lint=true; smoke=true; merge_browser=true; add_script gpgunlock ;;
+    # The journeys' runner: every journey (#139 slice 6).
+    tools/uitest/journey.mjs) lint=true; smoke=true; merge_browser=true; for j in tools/uitest/?*journey.mjs; do add_script "$(basename "$j" .mjs)"; done ;;
+    # A journey's part (NAME.part.mjs): the journey that lists it.
+    tools/uitest/*.part.mjs)
+      lint=true; smoke=true; merge_browser=true; b="$(basename "$f" .part.mjs)"
+      j="$(grep -l "\"$b\"" tools/uitest/?*journey.mjs | head -1 || true)"; if [ -n "$j" ]; then add_script "$(basename "$j" .mjs)"; else everything=true; fi ;;
     tools/uitest/*.mjs)
       lint=true; smoke=true; merge_browser=true
       b="$(basename "$f" .mjs)"; add_script "$b"; case "$b" in shapes|appearance|starters|depth|gradients|landscape|empties|contrast|tokens|static) visual=true;; esac ;;
@@ -100,7 +106,7 @@ if $everything; then
   echo "merge_go=true"; echo "merge_browser=true"; echo "go_shards=3"; echo "browser_parallel=true"; exit 0
 fi
 
-# The smoke job's estimated script time: its own set (drive's smoke groups, pages, usage, peers: about 130 s on a
+# The smoke job's estimated script time: its own set (drive's smoke groups, pagesjourney's pages part, usage, peers: about 130 s on a
 # runner) plus each extra script's time in browser-times.txt (30 s when not listed). Over SMOKE_MAX, the parallel
 # jobs finish sooner (about 4 min), so a pull request with many extras no longer waits 20 minutes on one job.
 SMOKE_BASE=130; SMOKE_MAX="${SMOKE_MAX:-300}"
@@ -108,7 +114,7 @@ browser_parallel=false
 if [ -n "$scripts" ]; then
   est="$(for s in $scripts; do echo "$s"; done | awk -v base="$SMOKE_BASE" '
     NR == FNR { if ($1 !~ /^#/ && NF >= 2) t[$1] = $2; next }
-    $1 == "drive" || $1 == "pages" || $1 == "usage" || $1 == "peers" { next }
+    $1 == "drive" || $1 == "pagesjourney" || $1 == "usage" || $1 == "peers" { next }
     { base += ($1 in t) ? t[$1] : 30 }
     END { print base }' tools/ci/browser-times.txt -)"
   if [ "$est" -gt "$SMOKE_MAX" ]; then

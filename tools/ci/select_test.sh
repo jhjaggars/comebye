@@ -37,9 +37,9 @@ expect "one script" "$o" smoke true
 expect "one script" "$o" browser_parallel false
 expect "one script" "$o" go_shards 1
 
-# The side panel's five scripts (offline and saved alone are nearly 4 minutes): the parallel jobs.
+# The side panel's journey and three scripts (offline and saved alone are nearly 4 minutes): the parallel jobs.
 o="$(sel web/sidepanel.js)"
-expect "side panel" "$o" scripts "sidepanel statussplit pagessplit offline saved shell"
+expect "side panel" "$o" scripts "paneljourney offline saved shell"
 expect "side panel" "$o" browser_parallel true
 expect "side panel" "$o" visual false
 
@@ -59,13 +59,35 @@ done
 # A visual script among the extras turns the visual pass on when the run goes parallel (the rest parts leave it out),
 # and leaves it as it was when it stays in the smoke job.
 o="$(sel internal/pageskit/x.go)"
-expect "pages kit" "$o" scripts "pages starters"
+expect "pages kit" "$o" scripts "pagesjourney starters"
 expect "pages kit" "$o" browser_parallel false
 expect "pages kit" "$o" visual false
 o="$(printf 'internal/pageskit/x.go\n' | SMOKE_MAX=100 tools/ci/select.sh)"
 expect "pages kit, SMOKE_MAX=100" "$o" browser_parallel true
 expect "pages kit, SMOKE_MAX=100" "$o" visual true
-expect "pages kit, SMOKE_MAX=100" "$o" scripts "pages starters"
+expect "pages kit, SMOKE_MAX=100" "$o" scripts "pagesjourney starters"
+
+# A journey's part runs its journey; the journeys' runner runs every journey; a part no journey lists runs everything
+# (#139 slice 6).
+o="$(sel tools/uitest/wakepolish.part.mjs)"
+expect "a fleet part" "$o" scripts fleetjourney
+o="$(sel tools/uitest/statussplit.part.mjs)"
+expect "a side-panel part" "$o" scripts paneljourney
+o="$(sel tools/uitest/pages.part.mjs)"
+expect "the pages part" "$o" scripts pagesjourney
+o="$(sel tools/uitest/journey.mjs)"
+expect "the journeys' runner" "$o" scripts "fleetjourney navjourney pagereplyjourney pagesjourney paneljourney"
+o="$(sel tools/uitest/nosuch.part.mjs)"
+expect "a part no journey lists" "$o" scripts all
+# Every part is listed by exactly one journey, and every journey run.sh knows.
+for p in tools/uitest/*.part.mjs; do
+  b="$(basename "$p" .part.mjs)"; n="$(grep -l "\"$b\"" tools/uitest/?*journey.mjs | wc -l)"
+  if [ "$n" = 1 ]; then ok "part $b: in one journey"; else bad "part $b: in $n journeys"; fi
+done
+for j in tools/uitest/?*journey.mjs; do
+  b="$(basename "$j" .mjs)"
+  if grep -q "want $b;" tools/uitest/run.sh; then ok "journey $b: run.sh runs it"; else bad "journey $b: not in run.sh"; fi
+done
 
 # run.sh's fixture hubs each have a port of their own (keyed and pullrefresh once shared 283).
 dup="$(grep -o 'fixture_hub [a-z]* [0-9]*' tools/uitest/run.sh | awk '{print $3}' | sort | uniq -d | tr '\n' ' ')"

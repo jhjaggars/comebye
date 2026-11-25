@@ -4,13 +4,17 @@
 // screen's list, read again as often as that screen reads it); a quiet empty state. Doc, Diff and Status keep their
 // tabs and arrow keys; on a phone Pages is the sheet's fourth tab. Pages are published with the real CLI as the agents.
 //
-//   node pagessplit.mjs BASE OUT_DIR      (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME, WIDTHS)
+//   (a part of paneljourney.mjs) pagessplit BASE OUT_DIR      (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME, WIDTHS)
+//
+// A part of paneljourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pagessplit.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -244,3 +248,4 @@ try {
 const bad = results.filter((r) => !r.ok);
 console.log(`pagessplit: ${results.length - bad.length}/${results.length} ok`);
 process.exit(bad.length ? 1 : 0);
+}

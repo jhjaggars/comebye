@@ -5,13 +5,17 @@
 // leave the viewer as it was. A good selection shows the strip, the note goes
 // to the tray, and Send files one To do item for the user.
 //
-//   node pagecomments.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
+//   (a part of pagereplyjourney.mjs) pagecomments BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
+//
+// A part of pagereplyjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pagecomments.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -161,3 +165,4 @@ fs.rmSync(work, { recursive: true, force: true });
 const failed = results.filter((r) => !r.ok);
 console.log(`pagecomments: ${results.length - failed.length}/${results.length} passed`);
 process.exit(failed.length ? 1 : 0);
+}

@@ -2,13 +2,17 @@
 // screen shows a "JS" badge on those cards, an "Interactive" chip that toggles the search term has:script, and the term
 // itself works in the box alone or with words (the words are searched in the pages' text by the hub). Light and dark, 390 and 1280.
 //
-//   node pagescript.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//   (a part of pagesjourney.mjs) pagescript BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//
+// A part of pagesjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pagescript.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -90,3 +94,4 @@ for (const dark of [false, true]) {
 }
 fs.rmSync(work, { recursive: true, force: true });
 process.exit(results.every(Boolean) ? 0 : 1);
+}

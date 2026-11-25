@@ -5,10 +5,14 @@
 // stay in it on a phone, where the row is hidden and every destination is still reached; light and dark; the icons
 // and badges read on --nav-bg in all 15 themes.
 //
-//   node leftnav.mjs BASE OUT_DIR
+//   (a part of navjourney.mjs) leftnav BASE OUT_DIR
+//
+// A part of navjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch, settled } from "./lib.mjs";
 import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const results = [];
 async function check(name, fn) {
@@ -214,3 +218,4 @@ for (const dark of [false, true]) for (const width of [390, 1280, 1920, 3440]) {
 }
 
 process.exit(results.every(Boolean) ? 0 : 1);
+}

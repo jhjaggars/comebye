@@ -137,19 +137,13 @@ if want appearance; then node appearance.mjs "http://127.0.0.1:$port" "$out" || 
 if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Slight gradients (soft chrome, accent threads): on by default, off under more contrast, reduced transparency, forced colours and Flat.
 if want gradients; then node gradients.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want leftnav; then node leftnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want hostpicker; then node hostpicker.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want listfilter; then node listfilter.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want groupby; then node groupby.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The left nav, one journey (#139 slice 6): its nav row, host picker, status tabs and filter box, and Group by menu.
+if want navjourney; then node navjourney.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want shapes; then node shapes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tap-to-copy values, whole-message copy and the other copy buttons.
 if want copytap; then node copytap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Fresh reports: a report's age, and a newer reply beside it, in the app's report views.
 if want reportage; then node reportage.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Status as the third tab of the side panel beside an agent's chat (statussplit.mjs: live, closes, URL and Back, phone sheet).
-if want statussplit; then node statussplit.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# The Pages an agent published, as the fourth tab of the side panel (pagessplit.mjs: the match, a Page in the panel, live, back, full screen, empty).
-if want pagessplit; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagessplit.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Tool calls as one grey line per run: the list, a call's input and output, the failure peek.
 if want toolruns; then node toolruns.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The same lines by keyboard only (arrows, Home/End, Enter/Space, Esc), the status line and a light axe-style audit.
@@ -225,15 +219,13 @@ if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want versionbanner; then node versionbanner.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The Pages checks publish with the real CLI, so they need the binary and its state.
-if want pagescript; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagescript.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want pageback; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pageback.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-if want pages; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pages.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The Page viewer, one journey (#139 slice 6): pagescript, pageback, pages (the sandbox and the screen), pagetheme.
+if want pagesjourney; then PAGES_URL="$pages_url" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagesjourney.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The page starters (comebye pages new): published by the real CLI, opened in the viewer under the real CSP.
 if want starters; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node starters.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Comments on a page: select, comment, send; and what the viewer refuses from a hostile page.
-if want pagecomments; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagecomments.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# The Page does not move when text is selected, commented on, saved or cancelled (the strip and tray float over it).
-if want pagefixed; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagefixed.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Answering a Page, one journey (#139 slice 6): comments (select, comment, send; what the viewer refuses from a hostile
+# page), the Page staying put meanwhile, revision marks, and "Chat about this".
+if want pagereplyjourney; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagereplyjourney.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The review card in To do: a kind "review" item about a Page (thumbnail, Looks good with Undo, Needs changes and its Fix item, keys).
 if want reviewcard; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node reviewcard.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # An expanded To do item (and the split review mode) does not trap navigation: header, fleet menu, agent, Page link, Back.
@@ -246,12 +238,6 @@ if want tododeeplink; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/st
 if want passkeys; then COMEBYE_STATE_DIR="$tmp/state" node passkeys.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # GPG unlock (issue #3, slice 3): the Set up and Unlock cards, with the real CLI and gpg in a throwaway GNUPGHOME and the virtual authenticator's PRF.
 if want gpgunlock; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node gpgunlock.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# Revision marks: data-revision blocks outlined from the Page menu.
-if want pagerevisions; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagerevisions.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# "Chat about this" in the Page viewer: the button, the menu item, the toast, the refusals.
-if want pagechat; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagechat.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
-# A Page paints in the app's mode from its first frame (device one way, app the other), Markdown and Mermaid too.
-if want pagetheme; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node pagetheme.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A chat helper in the app: the `chat` chip in Agents, the strip over its conversation, the review card's "Chat about this".
 if want chatstrip; then COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state" node chatstrip.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # A release item closes itself once the fleet runs its version: a second build with a version stamped in, its own state.
@@ -305,7 +291,9 @@ pport=$((port + 350))
 HOME="$pdir" "$tmp/comebye" -sock "$tmp/fp.sock" -addr "127.0.0.1:$pport" -insecure-no-auth -test-mode -push=false \
   -state-dir "$tmp/state-panel" -host-name uitest >"$out/comebye-panel.log" 2>&1 &
 for _ in $(seq 300); do curl -sf "http://127.0.0.1:$pport/api/agents" >/dev/null && break; sleep 0.1; done
-if want sidepanel; then PANEL_HOME="$pdir" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-panel" node sidepanel.mjs "http://127.0.0.1:$pport" "$out" || rc=1 ; fi
+# The side panel, one journey (#139 slice 6) on that hub: Status as its third tab (statussplit), the agent's Pages as its
+# fourth (pagessplit: the match, a Page in the panel, live, back, full screen, empty), and the Doc and Diff tabs (sidepanel).
+if want paneljourney; then PANEL_HOME="$pdir" COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-panel" node paneljourney.mjs "http://127.0.0.1:$pport" "$out" || rc=1 ; fi
 # The Peers screen and the host defaults: real servers (a hub, a peer, a peer that is down) on the same fake herdr.
 if want peers; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node peers.mjs "$out" || rc=1 ; fi
 # Test runs on a test VM (#138): a hub and a peer playing the VM, with run records in its state dir.
@@ -314,20 +302,12 @@ if want testruns; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node t
 if want signin; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node signin.mjs "$out" || rc=1 ; fi
 # The rolling rollout end to end: a simulated hub and three simulated peers, the hub killed and restarted mid-rollout.
 if want rolloutlive; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node rolloutlive.mjs "$out" || rc=1 ; fi
-# Adding a host, slice 1: a hub with a default provisioner (a peer running a stand-in for the worker tool) and the price browser.
-if want provision; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provision.mjs "$out" || rc=1 ; fi
-# Slice 3: hosts built from the app, their spend, and Destroy… (the real path on, against a stand-in worker).
-if want provhosts; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provhosts.mjs "$out" || rc=1 ; fi
-# Add host and Destroy… for a KubeVirt worker: the in-cluster provisioner (a kubevirt config, create on) against a stand-in worker tool.
-if want provkubevirt; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node provkubevirt.mjs "$out" || rc=1 ; fi
-# Waking a stopped worker (issue #66): Start on a worker the cloud says is stopped, with the tool's progress, against a stand-in worker tool.
-if want wake; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wake.mjs "$out" || rc=1 ; fi
-# One provisioner with two worker configs (AWS login expired, KubeVirt fine): the stopped KubeVirt worker still has its Start button.
-if want multiconfig; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node multiconfig.mjs "$out" || rc=1 ; fi
-# Using a session on a stopped worker (issue #66, slice 3): the Start banner, and a send that starts the host.
-if want wakeuse; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wakeuse.mjs "$out" || rc=1 ; fi
-# Polish (issue #66, slice 4): the launch picker marks a stopped worker, and the rollout confirm says it will be started.
-if want wakepolish; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node wakepolish.mjs "$out" || rc=1 ; fi
+# Adding hosts and waking stopped workers, one journey (#139 slice 6), each part with its own hub, peers and a stand-in
+# for the worker tool: a default provisioner and the price browser (provision); hosts built from the app, their spend
+# and Destroy… (provhosts); the same for a KubeVirt worker (provkubevirt); Start on a stopped worker with the tool's
+# progress (wake); one provisioner with two worker configs (multiconfig); the Start banner and a send that starts the
+# host (wakeuse); the launch picker and the rollout confirm on a stopped worker (wakepolish).
+if want fleetjourney; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node fleetjourney.mjs "$out" || rc=1 ; fi
 # The Usage screen: a hub and a peer, each with fixture session files (counts only), a ledger, and a coordinator.
 if want usage; then FAKE_HERDR="$tmp/fake-herdr" COMEBYE_BIN="$tmp/comebye" node usage.mjs "$out" || rc=1 ; fi
 # (The "GPG is locked" item staying open over minutes is Go tests with an injected clock: internal/gpgunlock/trigger_test.go,

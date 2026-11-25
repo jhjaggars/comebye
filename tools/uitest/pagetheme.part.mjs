@@ -7,13 +7,17 @@
 // with a Mermaid diagram is checked the same way, and the diagram's theme must follow the app. A theme change
 // while the Page is open must reach it, in the Page viewer (#pgs-view) and in the split (#rs).
 //
-//   node pagetheme.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//   (a part of pagesjourney.mjs) pagetheme BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
+//
+// A part of pagesjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, stateDir = process.env.COMEBYE_STATE_DIR;
 if (!bin || !stateDir) { console.error("pagetheme.mjs: set COMEBYE_BIN and COMEBYE_STATE_DIR"); process.exit(2); }
@@ -163,3 +167,4 @@ const failed = results.filter((r) => !r.ok);
 fs.writeFileSync(`${out}/pagetheme.json`, JSON.stringify(results, null, 1));
 console.log(`pagetheme: ${results.length - failed.length}/${results.length} ok`);
 process.exit(failed.length ? 1 : 0);
+}

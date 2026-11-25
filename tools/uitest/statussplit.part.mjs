@@ -5,10 +5,14 @@
 // Status when another agent is opened. On a phone it is the third tab of the bottom sheet. The full-screen Status is
 // checked unchanged at both widths.
 //
-//   node statussplit.mjs BASE OUT_DIR      (env: SCHEME, WIDTHS)
+//   (a part of paneljourney.mjs) statussplit BASE OUT_DIR      (env: SCHEME, WIDTHS)
+//
+// A part of paneljourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import fs from "node:fs";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 fs.mkdirSync(out, { recursive: true });
 const dark = process.env.SCHEME !== "light";
@@ -199,3 +203,4 @@ for (const width of (process.env.WIDTHS || "1280,390").split(",").map(Number)) {
 const bad = results.filter((r) => !r.ok);
 console.log(`statussplit: ${results.length - bad.length}/${results.length} ok`);
 process.exit(bad.length ? 1 : 0);
+}

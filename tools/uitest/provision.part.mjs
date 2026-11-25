@@ -6,9 +6,12 @@
 // us-east-1, nothing account-specific). Nothing is mocked in the browser: the
 // app talks to the hub, the hub to the peer, the peer to the script.
 //
-//   node provision.mjs OUT_DIR       (env: COMEBYE_BIN, FAKE_SOCK; SCHEME=dark|light)
+//   (a part of fleetjourney.mjs) provision OUT_DIR       (env: COMEBYE_BIN, FAKE_SOCK; SCHEME=dark|light)
 //
 // Each check runs at 1280 and at 390.
+//
+// A part of fleetjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch } from "./lib.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -17,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+export async function run(process) {
 const [out] = process.argv.slice(2);
 const bin = process.env.COMEBYE_BIN, sock = process.env.FAKE_SOCK;
 if (!bin || !sock) { console.error("provision.mjs: set COMEBYE_BIN and FAKE_SOCK"); process.exit(2); }
@@ -330,3 +334,4 @@ let failed = 0;
 for (const [name, ok, why] of results) { console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ": " + why}`); if (!ok) failed++; }
 console.log(`provision: ${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);
+}

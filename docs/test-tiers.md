@@ -74,6 +74,10 @@ Where the time went, and the rules that keep it from coming back:
   is as heavy as the check needs (its load comes seconds after the first paint), not more.
 - **`-test-mode` shortens waits that only exist for real fleets:** the app polls every 300 ms, and a peer that is down
   is retried every 2 s at most (not 30 s), so a worker that starts is seen at once.
+- **Journeys share a set-up.** A journey (`navjourney`, `pagesjourney`, `pagereplyjourney`, `paneljourney`,
+  `fleetjourney`) runs several parts (`NAME.part.mjs`, each once a script of its own) one after the other in one
+  process, so they share one Chrome and the hub run.sh started for it (`tools/uitest/journey.mjs`). A part keeps its
+  checks and their names; `PARTS="a b"` runs only those parts. A new check for one of these areas goes into its part.
 - `UITEST_PROFILE=FILE` logs every Chrome start; the `== script NAME: N s` lines give each script's time.
 
 ## Sharding the browser job
@@ -106,7 +110,7 @@ the condition the next step needs) or deleted.
 To find a flaky check, run a script (or all of them) several times by hand and look at what fails only sometimes:
 
 ```sh
-tools/ci/flakes.sh repeat 5 leftnav reviewcard      # these two, five runs each, 4 at a time (JOBS=n changes it)
+tools/ci/flakes.sh repeat 5 navjourney reviewcard   # these two, five runs each, 4 at a time (JOBS=n changes it)
 tools/ci/flakes.sh repeat 3                         # every script run.sh knows
 ```
 

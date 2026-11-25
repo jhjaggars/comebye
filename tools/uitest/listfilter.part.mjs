@@ -4,9 +4,14 @@
 // an empty result says so and "Clear filters" clears the box, the tab and the host selection; the host picker's
 // "+N outside this filter" is a button that clears the host filter; light and dark at 390, 1280 and 3440.
 //
-//   node listfilter.mjs BASE OUT_DIR
+//   (a part of navjourney.mjs) listfilter BASE OUT_DIR
+//
+// A part of navjourney.mjs (journey.mjs): the script as it was, as the body of run(process); `process` is the one the
+// journey gives it (its own argv and env), and process.exit ends the part.
 import { launch, settled } from "./lib.mjs";
+import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 
+export async function run(process) {
 const [base, out] = process.argv.slice(2);
 const results = [];
 async function check(name, fn) {
@@ -279,7 +284,6 @@ for (const dark of [false, true]) {
 }
 
 // Colours: the box, the tabs, the pressed tab and the note read in all 15 themes (tokens) and as painted.
-import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 const tctx = { globalThis: null }; tctx.globalThis = tctx; vm.createContext(tctx);
 vm.runInContext(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "themes.js"), "utf8"), tctx);
 const { THEMES: ALL, contrast } = tctx.ComebyeThemes;
@@ -292,3 +296,4 @@ await check("all 15 themes (tokens): the box text and placeholder, the tabs, the
 });
 
 process.exit(results.every(Boolean) ? 0 : 1);
+}
