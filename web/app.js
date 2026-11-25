@@ -29,6 +29,9 @@ const state = {
   view: null,          // desktop only: the page filling the main pane ("status", "todo"), or null for an agent / nothing
 };
 
+// Below 1100px the agent's header floats over the chat as two capsules (index.html "Floating chrome", floatSync).
+const floatMq = matchMedia("(max-width: 1099px)");
+
 // ---- The press layer (#135): every tappable thing shows that it is pressed while the finger (or mouse button) is down,
 // as native lists and buttons do. One capture-phase listener adds .is-pressed to the nearest tappable element; the CSS
 // (index.html, "Press layer") draws it as a 10% --text layer over the element's own background, so it works on every
@@ -2289,7 +2292,10 @@ function stripSync() {
     el.title = kind === "stuck" || kind === "down" ? s.err || "" : "";
     el.hidden = false;
     // Under the header, in the flow: it pushes the rows down rather than covering them; under a sticky header it sticks too.
-    if (v.header.nextElementSibling !== el) v.header.after(el);
+    // Over a phone's chat it is one of the chips under the floating name (index.html "Floating chrome").
+    const chips = floatMq.matches && v.header.querySelector(".d-chips");
+    if (chips) { if (el.parentNode !== chips) chips.append(el); }
+    else if (v.header.nextElementSibling !== el) v.header.after(el);
     const sticky = getComputedStyle(v.header).position === "sticky";
     el.style.top = sticky ? v.header.offsetHeight + "px" : "";
     el.classList.toggle("sticky", sticky);
@@ -17134,10 +17140,47 @@ window.addEventListener("DOMContentLoaded", () => {
 // leaves the screen: then html.vv-panned drops the header as that bar, and the blur lies over the messages as before.
 if (window.visualViewport) {
   const vv = window.visualViewport;
-  const pan = () => document.documentElement.classList.toggle("vv-panned", vv.offsetTop > 0.5);
+  const pan = () => { const was = document.documentElement.classList.contains("vv-panned"); document.documentElement.classList.toggle("vv-panned", vv.offsetTop > 0.5); if (was && !(vv.offsetTop > 0.5) && typeof floatSync === "function") floatSync(); };
   vv.addEventListener("scroll", pan);
   vv.addEventListener("resize", pan);
 }
+
+// Floating chrome (index.html): below 1100px the agent's header is two glass capsules over the chat, with the chips
+// (blocked reason, note, usage, the offline strip) hanging under the left one. floatSync measures where they end and
+// sets --d-top on #detail: the chat's top padding, so at rest the first message starts under them, and the foot of
+// the blur band. The name is a button there (it opens the agent menu, as ⋮ does); from 1100px it is plain text again.
+// While typing (the keyboard out) --d-top holds still, so hiding the note does not move the conversation.
+function floatSync() {
+  const det = $("detail"), name = $("d-name");
+  if (!det || !name) return;
+  const on = floatMq.matches;
+  if (on !== (name.getAttribute("role") === "button")) {
+    if (on) { name.setAttribute("role", "button"); name.tabIndex = 0; name.setAttribute("aria-haspopup", "menu"); name.setAttribute("aria-controls", "d-menu"); }
+    else { for (const k of ["role", "tabindex", "aria-haspopup", "aria-controls"]) name.removeAttribute(k); }
+  }
+  if (!on) { det.style.removeProperty("--d-top"); return; }
+  if (document.documentElement.classList.contains("vv-panned") || det.querySelector(".composer:focus")) return;
+  let y = 0;
+  for (const e of det.querySelectorAll(":scope > header .d-cap, :scope > header .d-chips > *")) if (e.getClientRects().length) y = Math.max(y, e.getBoundingClientRect().bottom);
+  if (!y) return; // not on screen
+  const top = Math.ceil(y + 10) + "px";
+  if (det.style.getPropertyValue("--d-top") === top) return;
+  const c = $("chat"), end = !!c && c.scrollHeight - c.scrollTop - c.clientHeight < 4;
+  det.style.setProperty("--d-top", top);
+  if (end) c.scrollTop = c.scrollHeight; // reading the latest: still the latest
+}
+window.addEventListener("DOMContentLoaded", () => {
+  const det = $("detail"), name = $("d-name");
+  if (!det || !name) return;
+  const ro = new ResizeObserver(() => floatSync());
+  for (const e of det.querySelectorAll(":scope > header :is(.d-cap, .d-chips)")) ro.observe(e);
+  floatMq.addEventListener("change", () => { floatSync(); stripSoon(); });
+  document.addEventListener("focusout", (ev) => { if (ev.target.closest?.("#detail .composer")) setTimeout(floatSync, 0); });
+  const open = (ev) => { if (!floatMq.matches) return; ev.preventDefault(); ev.stopPropagation(); toggleDetailMenu(); };
+  name.addEventListener("click", open);
+  name.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") open(ev); });
+  floatSync();
+});
 
 window.addEventListener("DOMContentLoaded", () => {
   renderList();

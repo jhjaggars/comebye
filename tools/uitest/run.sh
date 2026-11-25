@@ -142,6 +142,8 @@ if want appearance; then node appearance.mjs "http://127.0.0.1:$port" "$out" || 
 if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Slight gradients (soft chrome, accent threads): on by default, off under more contrast, reduced transparency, forced colours and Flat.
 if want gradients; then node gradients.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The phone chat's floating capsules (#142): their controls, hit areas, chips, and the chat scrolling under them.
+if want floatchrome; then node floatchrome.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The left nav, one journey (#139 slice 6): its nav row, host picker, status tabs and filter box, and Group by menu.
 if want navjourney; then node navjourney.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want shapes; then node shapes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

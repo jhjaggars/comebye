@@ -1354,7 +1354,7 @@
       #detail > header .meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--sp-8); padding: var(--sp-4) 0; }
       #detail > header .meta .title { flex: 0 1 auto; min-width: 0; max-width: 60%; }
       #detail > header .meta .subtitle { flex: 1 1 0; min-width: 0; }
-      #detail > header .meta > :not(.title, .subtitle) { flex: 0 0 100%; }
+      #detail > header .meta > :not(.title, .subtitle, .d-name, .d-chips), #detail > header .d-chips > * { flex: 0 0 100%; }
       #detail main { padding-top: 0; }
       #detail main > #chat { margin-top: 0; }
     }
@@ -3274,6 +3274,130 @@
     @media (prefers-reduced-motion: reduce) {
       ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
     }
+
+    /* ---- Floating chrome: the agent's chat below 1100px (issue 142, design D) ----
+       No header bar: two glass capsules float over the conversation, which scrolls under them. The left one is back
+       and the name (the status dot with its context ring, the name over host · path), each its own 44 px target with
+       its own press layer; the name opens the agent menu. The right one is the side panel and ⋮. The blocked reason,
+       the progress note, the usage chip and the offline strip hang under the left capsule as chips (beside it in
+       landscape, where the row stays one row). The busy bar runs along the left capsule's foot.
+       iOS's top edge (see "#detail header" above, 5aaaca4): an installed web app gets a blur over the status bar and
+       ~40pt under it unless WebKit finds, 4px under the middle of the top edge, a full-width fixed or sticky box with a
+       solid background colour and no backdrop-filter on the way up (LocalFrameView::fixedContainerEdges). Then iOS
+       draws that colour instead of its blur, over the whole edge. So the header itself is that box: fixed, full width,
+       as tall as the status bar (at least 12px, WebKit skips a box 10px or thinner), solid --bg. Its glass and the
+       capsules' glass are pseudo-elements and children, never ancestors of what the hit test finds, so iOS never blurs
+       the capsules' text: it draws no blur at all. Our own blur band (header::before) lies over the messages under
+       the status bar instead. With the keyboard out (html.vv-panned) the header is 0 tall, so iOS finds no bar and
+       its blur lies over the messages, as before. tools/uitest/gradients.mjs (topEdge) replays the rule. */
+    .d-cap, .d-name, .d-nm, .d-chips { display: contents; }
+    @media (max-width: 1099px) {
+      #detail { --d-st: max(env(safe-area-inset-top, 0px), 12px); --d-l: max(10px, env(safe-area-inset-left, 0px)); --d-r: max(10px, env(safe-area-inset-right, 0px));
+        --d-row: calc(var(--d-st) + 6px); --d-top: calc(var(--d-st) + 64px); --glass-a: 86%; } /* --d-top: app.js floatSync measures it; 86%: contrast.mjs */
+      #detail > header, html.vv-panned #detail > header {
+        position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-bar); display: block; box-sizing: border-box;
+        height: var(--d-st); min-height: 0; padding: 0; margin: 0; border: 0; overflow: visible; background: var(--bg);
+      }
+      html.vv-panned #detail > header { height: 0; background: transparent; }
+      #detail > header.busy::after { content: none; }
+      /* Our own band: from under the status bar to where the messages start at rest, blurred, fading out at its foot. */
+      #detail > header::before {
+        content: ""; position: absolute; left: 0; right: 0; top: var(--d-st); height: calc(var(--d-top) - var(--d-st)); pointer-events: none;
+        background: linear-gradient(color-mix(in srgb, var(--bg) 88%, transparent), color-mix(in srgb, var(--bg) 45%, transparent));
+        -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5);
+        /* a mask reads only alpha: any opaque token will do */ -webkit-mask-image: linear-gradient(var(--bg) calc(100% - 24px), transparent); mask-image: linear-gradient(var(--bg) calc(100% - 24px), transparent);
+      }
+      #detail > header .d-cap { position: absolute; top: var(--d-row); height: 48px; display: flex; align-items: center; border-radius: 24px; isolation: isolate; box-sizing: border-box;
+        box-shadow: 0 4px 16px var(--sh-md); }
+      #detail > header .d-cap::before {
+        content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+        background-color: color-mix(in srgb, var(--panel) var(--glass-a), transparent);
+        -webkit-backdrop-filter: blur(18px) saturate(1.7); backdrop-filter: blur(18px) saturate(1.7);
+        border: 1px solid color-mix(in srgb, var(--border) 75%, transparent); box-shadow: inset 0 1px 0 var(--hi, transparent);
+      }
+      #detail > header .d-cap-l { left: var(--d-l); max-width: min(320px, calc(100% - var(--d-l) - var(--d-r) - 112px)); }
+      #detail > header .d-cap-r { right: var(--d-r); overflow: hidden; padding: 0 4px; }
+      #detail > header:has(#d-dot-in.blocked) .d-cap-l::before { border-color: var(--orange); }
+      /* The buttons: no background of their own, so the press layer is their shape inside the capsule. */
+      #detail > header .d-cap :is(.back, .more) { margin: 0; padding: 0; width: 46px; min-width: 46px; height: 48px; min-height: 48px; border-radius: 0; background-color: transparent; }
+      #detail > header .d-cap-l .back { padding-left: 4px; width: 44px; min-width: 44px; border-radius: 24px 0 0 24px; }
+      /* The right capsule clips its buttons to its own rounding (nothing hangs under it), with 4px of glass at each end. */
+      #detail > header .d-cap-r .more { width: 44px; min-width: 44px; }
+      #detail > header .d-cap-r #sp-btn[aria-pressed="true"] { background-color: var(--chip-blue); }
+      #detail > header .d-cap-l .meta { display: contents; }
+      #detail > header .d-name {
+        display: flex; align-items: center; gap: var(--sp-8); min-width: 0; height: 48px; padding: 0 14px 0 2px; box-sizing: border-box;
+        border-radius: 0 24px 24px 0; cursor: pointer; -webkit-tap-highlight-color: transparent;
+      }
+      #detail > header .d-name:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+      #detail > header .d-dot { margin-right: 0; }
+      #detail > header .d-nm { display: flex; flex-direction: column; min-width: 0; }
+      #detail > header .d-nm > :is(.title, .subtitle) { flex: none; max-width: none; }
+      #detail > header .d-nm .title { font-size: var(--fs-15); line-height: 1.2; }
+      #detail > header .d-nm .subtitle { line-height: 1.25; }
+      /* The busy bar: a 2px sweep along the left capsule's foot, inside its rounding. */
+      #detail > header.busy .d-cap-l::after {
+        content: ""; position: absolute; left: 16px; right: 16px; bottom: 2px; height: 2px; border-radius: 2px; pointer-events: none;
+        background: linear-gradient(90deg, transparent, var(--blue), transparent) 0 0 / 40% 100% no-repeat; animation: d-sweep 1.4s ease-in-out infinite;
+      }
+      /* The chips under the left capsule. */
+      #detail > header .d-chips {
+        position: absolute; top: calc(100% + 6px); left: 0; width: calc(100vw - var(--d-l) - var(--d-r)); display: flex; flex-direction: column;
+        align-items: flex-start; gap: 6px; pointer-events: none;
+      }
+      #detail > header .d-chips > * { pointer-events: auto; max-width: 100%; box-sizing: border-box; margin: 0; }
+      #detail > header .d-chips > [hidden] { display: none !important; }
+      #detail > header .d-chips > :is(.why, .d-note, .hub-strip) {
+        border-radius: 18px; border: 1px solid color-mix(in srgb, var(--border) 75%, transparent); color: var(--text);
+        background-color: color-mix(in srgb, var(--panel) var(--glass-a), transparent); background-image: none;
+        -webkit-backdrop-filter: blur(18px) saturate(1.7); backdrop-filter: blur(18px) saturate(1.7); box-shadow: 0 4px 16px var(--sh-md);
+      }
+      #detail > header .d-chips > .why { display: block; line-height: 34px; padding: 0 14px; font-size: var(--fs-13); font-weight: 600; width: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #detail > header .d-chips > .why::before { content: ""; display: inline-block; vertical-align: 1px; margin-right: var(--sp-8); width: 8px; height: 8px; border-radius: 50%; background: var(--orange); }
+      #detail > header .d-chips > .why:not(.quiet, .stuck) { border-color: var(--orange); }
+      #detail > header .d-chips > .why.stuck { border-color: var(--yellow); }
+      #detail > header .d-chips > .why.stuck::before { background: var(--yellow); }
+      #detail > header .d-chips > .why.quiet { color: var(--muted); font-weight: 500; padding-left: 14px; }
+      #detail > header .d-chips > .why.quiet::before { content: none; }
+      #detail > header .d-chips > .d-note { padding: 6px 12px; border-radius: 14px; max-width: min(100%, 420px); }
+      #detail > header .d-chips > .hub-strip { position: static; border-radius: 22px; min-height: var(--tap-hit, 36px); padding: 0 6px 0 14px; width: auto; }
+      #detail > header .d-chips > .hub-strip .hs-text { flex: 0 1 auto; }
+      /* Keyboard out: the note waits (it is the same line as in the list, and the menu's mark state). */
+      :is(html.vv-panned #detail, #detail:has(.composer:focus)) > header .d-chips > .d-note { display: none !important; }
+      /* The conversation runs to the top of the screen, under the capsules; at rest it starts under them (and their
+         chips), at --d-top, which app.js floatSync measures. A strip above the chat (ready to remove, a page's chat) is
+         pushed down instead, and the chat starts under it as before. */
+      #detail main { padding-top: 0; }
+      #detail main > :is(#chat, #output) { margin-top: 0; }
+      #detail main > #chat { padding-top: var(--d-top); scroll-padding-top: var(--d-top); }
+      #detail main > #output { margin-top: var(--d-top); }
+      #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) { padding-top: var(--d-top); }
+      #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) > #chat { padding-top: var(--sp-12); scroll-padding-top: 0; }
+      #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) > #output { margin-top: 0; }
+      /* The old top fade sat under a header bar; the band does its work here. */
+      :root:not([data-depth="flat"]) #detail #chat::before { content: none; }
+      /* Where blur is missing or the device asks for plainness, the glass is near solid. */
+      @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+        #detail { --glass-a: 94%; }
+        #detail > header::before { background: linear-gradient(color-mix(in srgb, var(--bg) 96%, transparent) 60%, transparent); -webkit-mask-image: none; mask-image: none; }
+      }
+      @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+        #detail { --glass-a: 100%; }
+        #detail > header::before { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--bg); -webkit-mask-image: none; mask-image: none; }
+        #detail > header .d-cap::before, #detail > header .d-chips > * { -webkit-backdrop-filter: none; backdrop-filter: none; border-color: var(--border); }
+      }
+    }
+    @keyframes d-sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+    @media (max-width: 1099px) and (prefers-reduced-motion: reduce) { #detail > header.busy .d-cap-l::after { animation: none; background-size: 100% 100%; opacity: .6; } }
+    /* Landscape (a phone on its side): one row. The chips sit beside the left capsule, between it and the right one. */
+    @media (max-width: 1099px) and (pointer: coarse) and (max-height: 500px) and (min-width: 601px) {
+      #detail > header .d-cap-l { max-width: 300px; }
+      /* The side panel's sheet takes the height under the capsule row, so back, the name and ⋮ stay in reach. */
+      #detail.sp-open > #sp { top: calc(var(--d-row) + 48px + 6px); }
+      #detail > header .d-chips { top: 0; left: calc(100% + 8px); width: calc(100vw - var(--d-l) - var(--d-r) - 300px - 8px - 112px); }
+      :is(html.vv-panned #detail, #detail:has(.composer:focus)) > header .d-chips { flex-direction: row; }
+      :is(html.vv-panned #detail, #detail:has(.composer:focus)) > header .d-chips > * { min-width: 0; flex: 0 1 auto; }
+    }
   </style>
 </head>
 <body>
@@ -3761,22 +3885,35 @@
   <!-- Agent detail view -->
   <div id="detail">
     <header>
+      <!-- Below 1100px the header floats over the chat (index.html "Floating chrome"): .d-cap-l is the left capsule
+           (back, then the name), .d-chips hang under it, .d-cap-r is the right one. From 1100px the wrappers are
+           display: contents, so the header lays out as it always has. -->
+      <div class="d-cap d-cap-l">
       <button type="button" class="back" id="back" aria-label="Back">&#8592;</button>
-      <!-- Below 1100px: the status as the list's dot, with the context used as a ring around it (app.js renderDotRing). -->
-      <span class="d-dot" id="d-dot" role="img" aria-label="Status"><svg class="d-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="d-ring-track" cx="12" cy="12" r="10.5"/><circle class="d-ring-fill" id="d-ring-fill" cx="12" cy="12" r="10.5" pathLength="100" stroke-dasharray="0 100"/></svg><span class="dot idle" id="d-dot-in"></span></span>
       <div class="meta">
-        <div class="title" id="d-title"></div>
-        <div class="subtitle" id="d-subtitle"></div>
-        <div class="why" id="d-why" hidden></div>
-        <div class="d-note" id="d-note" hidden></div>
-        <div class="d-usage" id="d-usage" hidden></div>
+        <div class="d-name" id="d-name">
+          <!-- Below 1100px: the status as the list's dot, with the context used as a ring around it (app.js renderDotRing). -->
+          <span class="d-dot" id="d-dot" role="img" aria-label="Status"><svg class="d-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="d-ring-track" cx="12" cy="12" r="10.5"/><circle class="d-ring-fill" id="d-ring-fill" cx="12" cy="12" r="10.5" pathLength="100" stroke-dasharray="0 100"/></svg><span class="dot idle" id="d-dot-in"></span></span>
+          <div class="d-nm">
+            <div class="title" id="d-title"></div>
+            <div class="subtitle" id="d-subtitle"></div>
+          </div>
+        </div>
+        <div class="d-chips" id="d-chips">
+          <div class="why" id="d-why" hidden></div>
+          <div class="d-note" id="d-note" hidden></div>
+          <div class="d-usage" id="d-usage" hidden></div>
+        </div>
+      </div>
       </div>
       <button type="button" class="chip muted d-modelchip" id="d-modelchip" hidden></button>
       <button type="button" class="chip d-ctx" id="d-ctx" hidden></button>
       <button type="button" class="pgs-ib d-term" id="btn-terminal" aria-label="Show raw terminal" title="Show raw terminal" hidden></button>
       <span class="status" id="d-status"></span>
+      <div class="d-cap d-cap-r">
       <button type="button" class="more" id="d-refresh" aria-label="Refresh this view">&#8635;</button>
       <button type="button" class="more" id="d-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="d-menu">&#8942;</button>
+      </div>
     </header>
     <div id="d-menu" class="attach-menu d-menu pop" role="menu" aria-label="Agent actions" hidden>
       <div class="grab" aria-hidden="true"><i></i></div>

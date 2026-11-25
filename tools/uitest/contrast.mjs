@@ -12,6 +12,7 @@
 //   - text stops reading on a surface while it is pressed (the press layer's 10% --text);
 //   - text, or a status dot, stops reading on a gradient stop (--g-attn, --g-blk, --g-off) or muted on a blocked row;
 //   - text stops reading on a row marked on the way back to its list (the return mark's 16% --blue);
+//   - text stops reading on the phone chat's floating glass (86% --panel over what scrolls under it);
 //   - a var(--token) used by index.html is missing from the theme.
 // Tokens themes.js nudged to pass (an official palette colour that failed
 // AA) are listed under "adjusted" in the output.
@@ -116,9 +117,32 @@ const MARKED = [
   ["text", "blocked-bg", UI, "text on a marked blocked row"], ["blocked-name", "blocked-bg", UI, "blocked name on a marked blocked row"],
 ];
 
+// The phone chat's floating glass (index.html "Floating chrome", #142): the capsules and chips are 86% --panel over whatever
+// scrolls under them (--panel is --s1 under Layered), blurred. (At the mockup's 82%, One Dark and Rosé Pine dip to 4.40-4.48 for
+// host · path on --s1 over a bubble or blurred text; 86% clears every theme.) Their text must read over the worst of it: the page, a
+// bubble, code, a raised card, a chip or a blocked wash, and blurred body text (taken as 25% --text over --bg). The
+// name and the strips' text are --text, host · path and the quiet lines --muted, ← is --blue (a glyph: AA); the blocked,
+// stuck and offline dots are non-text (3:1). Where blur is missing the glass is 94%, and with reduced transparency solid.
+const GLASS = 0.86;
+const GLASS_FILLS = ["bg", "bubble", "code-bg", "panel2", "s2", "blocked-bg", "chip-blue", "chip-yellow", "chip-red", "chip-green", "chip-purple"];
+const GLASS_FG = [["text", AA, "the name and chip text"], ["muted", AA, "host · path"], ["blue", AA, "back"], ["orange", UI, "the blocked dot and edge"], ["yellow", UI, "the stuck dot"]];
+
 let fails = 0, checks = 0;
 for (const t of THEMES) {
   const bad = [];
+  const hex = (x) => /^#[0-9a-f]{6}$/i.test(x || "");
+  for (const base of ["panel", "s1"]) {
+    const fills = GLASS_FILLS.filter((f) => hex(t.vars[f])).map((f) => [f, t.vars[f]]);
+    if (hex(t.vars.bg) && hex(t.vars.text)) fills.push(["blurred text", mix(t.vars.bg, t.vars.text, 0.25)]);
+    for (const [fill, fc] of fills) {
+      const g = mix(fc, t.vars[base], GLASS);
+      for (const [fg, min, what] of GLASS_FG) {
+        checks++;
+        const r = contrast(t.vars[fg], g);
+        if (r < min) bad.push(`floating glass: ${what} (${fg}) on ${base} ${GLASS * 100}% over ${fill} (${g}) = ${r.toFixed(2)} < ${min}`);
+      }
+    }
+  }
   for (const [fg, bg, min, what] of PRESSED) {
     checks++;
     const f = t.vars[fg], b = t.vars[bg];

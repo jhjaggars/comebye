@@ -70,14 +70,14 @@ try {
           const why = [];
           for (const id of KEPT) if (!(await shown(id))) why.push(id + " is not shown");
           for (const id of MOVED) if (await shown(id)) why.push(id + " is still in the header");
-          const extra = await page.evaluate((known) => [...document.querySelectorAll("#detail > header > *")]
-            .filter((e) => e.getClientRects().length && !e.classList.contains("meta") && !known.includes(e.id)).map((e) => e.id || e.className), KEPT);
+          // The header floats (index.html "Floating chrome"): its controls are in the two capsules, the name in the left one.
+          const extra = await page.evaluate((known) => [...document.querySelectorAll("#detail > header > *, #detail > header > .d-cap > *, #detail > header .d-name > *")]
+            .filter((e) => e.getClientRects().length && !e.matches(".d-cap, .meta, .d-name, .d-nm") && !known.includes(e.id)).map((e) => e.id || e.className), KEPT);
           if (extra.length) why.push("other things in the header: " + extra.join(", "));
           for (const id of ["back", "sp-btn", "d-more"]) { const b = await box("#" + id); if (b.w < 44 || b.h < 44) why.push(`${id} is ${b.w}x${b.h}, under 44px`); }
-          const hd = await box("#detail > header");
-          if (s.name === "landscape" && hd.h > 46) why.push(`landscape header ${hd.h}px, want one 44px row`);
-          if (s.name === "portrait" && hd.h > 76) why.push(`portrait header ${hd.h}px: a second line is back`);
-          const sub = await page.evaluate(() => [...document.querySelectorAll("#detail > header .meta > *")].filter((e) => e.getClientRects().length).map((e) => e.id));
+          const cl = await box("#detail > header .d-cap-l"), cr = await box("#detail > header .d-cap-r");
+          if (cl.h > 48 || cr.h > 48 || Math.abs(cl.t - cr.t) > 0.5) why.push(`the capsules are not one 48px row: ${JSON.stringify([cl, cr])}`);
+          const sub = await page.evaluate(() => [...document.querySelectorAll("#detail > header .d-nm > *")].filter((e) => e.getClientRects().length).map((e) => e.id));
           if (sub.join() !== "d-title,d-subtitle") why.push("the name's lines: " + sub.join());
           if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) why.push("the page scrolls sideways");
           if (why.length) throw new Error(why.join("\n"));
@@ -86,9 +86,13 @@ try {
 
         await check(`${tg}: the name gets the freed width`, async () => {
           await open(PANES.warn);
-          const meta = await box("#detail > header .meta"), dot = await box("#d-dot"), sp = await box("#sp-btn");
-          // Between the dot and the side panel button only the gaps are left: the meta takes the rest.
-          if (sp.l - meta.r > 24 || meta.l - dot.r > 16) throw new Error(`meta ${JSON.stringify(meta)} between dot ${dot.r} and panel ${sp.l}`);
+          // The left capsule fits its name, and a long name may grow it until a small gap before the right capsule.
+          const long = await page.evaluate(() => { const t = document.getElementById("d-title"), was = t.textContent; t.textContent = "a-very-long-agent-name-that-will-not-fit-anywhere-at-all"; return was; });
+          const cl = await box("#detail > header .d-cap-l"), cr = await box("#detail > header .d-cap-r");
+          await page.evaluate((w) => { document.getElementById("d-title").textContent = w; }, long);
+          // In landscape the capsule stops at 300px: the chips sit beside it, in the rest of the row.
+          if (s.name === "landscape" ? Math.abs(cl.r - cl.l - 300) > 0.5 : cr.l - cl.r > 24 || cr.l - cl.r < 4) throw new Error(`a long name's capsule is ${cl.l}..${cl.r}, the right capsule starts at ${cr.l}`);
+          const meta = await box("#d-name");
           const t = await page.evaluate(() => { const e = document.getElementById("d-title"), u = document.getElementById("d-subtitle"); return { tc: e.scrollWidth > e.clientWidth, uc: u.scrollWidth > u.clientWidth, t: e.textContent, u: u.textContent }; });
           if (t.tc) throw new Error(`the name "${t.t}" is cut`);
           if (s.name === "portrait" && meta.w < 180) throw new Error(`the name has only ${meta.w}px`);

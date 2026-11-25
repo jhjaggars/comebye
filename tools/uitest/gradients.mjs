@@ -8,10 +8,11 @@
 // the check cannot pass on a feature the browser ignored), and under Surfaces: Flat, every one of them is gone and the
 // rules are back. The top fade (pixels, at 390x844 and 844x390, light and dark): on the list, To do, Pages, Status,
 // Peers and Settings the band under the top bars is the same with every pseudo-element hidden (nothing is drawn over
-// the screen's real colours); in a conversation a message at rest is the same too, and one scrolled under the header
-// is faded. The top edge (same sizes and themes): on each of those screens and in a conversation, WebKit's rule for
-// iOS's status-bar blur (topEdge, below) finds a solid bar to take its colour from, and the conversation's header
-// (its name, subtitle, ← and ⋮) is the same with every pseudo-element and view-transition name off.
+// the screen's real colours); in a phone's conversation (the floating capsules, #142) a message at rest is the same
+// too, and one scrolled under the capsules has the blur band over it. The top edge (same sizes and themes): on each of
+// those screens and in a conversation, WebKit's rule for iOS's status-bar blur (topEdge, below) finds a solid bar to
+// take its colour from (in a conversation, the strip as tall as the status bar, with the capsules under it), and the
+// capsules (← and the name, the side panel and ⋮) are the same with every pseudo-element but their glass off.
 //
 //   node gradients.mjs BASE OUT_DIR
 import { launch } from "./lib.mjs";
@@ -58,8 +59,12 @@ const probeTabs = (page) => page.evaluate(() => {
 });
 const probeChat = (page) => page.evaluate(() => {
   const c = document.getElementById("chat"), a = getComputedStyle(c, "::after"), b = getComputedStyle(c, "::before");
+  // Below 1100px the header floats (index.html "Floating chrome"): no bar and no rule, and its blur band (header::before)
+  // does the top fade's work.
+  const h = document.querySelector("#detail > header"), band = getComputedStyle(h, "::before");
   return { fade: a.content !== "none", img: a.backgroundImage, top: b.content !== "none" && b.backgroundImage.includes("linear-gradient"),
-    rule: getComputedStyle(document.querySelector("#detail > header")).borderBottomColor };
+    rule: getComputedStyle(h).borderBottomColor, floating: getComputedStyle(h).position === "fixed",
+    band: band.content !== "none" && /blur/.test(band.backdropFilter || band.webkitBackdropFilter || "") };
 });
 
 const CLEAR = "rgba(0, 0, 0, 0)";
@@ -138,7 +143,8 @@ for (const width of [390, 1280]) {
         await chat(page);
         const c = await probeChat(page);
         if (!c.fade || !has(c.img, "linear-gradient")) throw new Error("the conversation has no fade above the composer: " + JSON.stringify(c));
-        if (!c.top || c.rule !== CLEAR) throw new Error("the conversation's header does not fade into the messages: " + JSON.stringify(c));
+        if (width < 1100) { if (!c.floating || c.top || !c.band) throw new Error("the phone's chat: no floating header with its blur band, or the old top fade is back: " + JSON.stringify(c)); }
+        else if (!c.top || c.rule !== CLEAR) throw new Error("the conversation's header does not fade into the messages: " + JSON.stringify(c));
       } finally { await browser.close(); }
     });
   }
@@ -166,8 +172,8 @@ for (const feature of OFF) {
         if (has(t.card, "gradient")) throw new Error("the release card still has its wash: " + t.card);
         await chat(page);
         const c = await probeChat(page);
-        if (c.fade || c.top) throw new Error("the conversation still fades: " + JSON.stringify(c));
-        if (feature[0] !== "forced-colors" && c.rule === CLEAR) throw new Error("the conversation's header lost its rule");
+        if (c.fade || c.top || c.band) throw new Error("the conversation still fades (or its band still blurs): " + JSON.stringify(c));
+        if (feature[0] !== "forced-colors" && !c.floating && c.rule === CLEAR) throw new Error("the conversation's header lost its rule");
       } finally { await browser.close(); }
     });
   }
@@ -256,16 +262,19 @@ const solidTop = async (page, where) => {
   const t = await topEdge(page);
   if (!t.container || !t.color || t.glass) throw new Error(`${where}: iOS would blur the top edge (no solid fixed or sticky bar there): ` + JSON.stringify(t));
 };
-// Nothing drawn over the header's own text and icons: the header (above its 2px busy bar) is the same with every
-// pseudo-element and view-transition name off.
 const PLAIN = NOPSEUDO + " * { view-transition-name: none !important; }";
-const headerPlain = async (page) => {
-  const h = await page.evaluate(() => { const r = document.querySelector("#detail > header").getBoundingClientRect(); return { x: 0, y: Math.max(0, Math.floor(r.top)), width: innerWidth, height: Math.floor(r.bottom - Math.max(0, r.top)) - 3 }; });
-  const a = await page.screenshot({ clip: h, animations: "disabled" });
-  const tag = await page.addStyleTag({ content: PLAIN });
-  const b = await page.screenshot({ clip: h, animations: "disabled" });
-  await tag.evaluate((e) => e.remove());
-  return (await differing(page, a, b)) === 0;
+// The capsules' own pixels: the same with every pseudo-element and view-transition name off but their own glass and the
+// band behind them (which is under the glass, not over the text).
+const capsPlain = async (page) => {
+  const boxes = await page.evaluate(() => [...document.querySelectorAll("#detail > header .d-cap")].map((e) => { const r = e.getBoundingClientRect(); return { x: Math.floor(r.left) + 2, y: Math.floor(r.top) + 2, width: Math.floor(r.width) - 4, height: Math.floor(r.height) - 4 }; }));
+  for (const clip of boxes) {
+    const a = await page.screenshot({ clip, animations: "disabled" });
+    const tag = await page.addStyleTag({ content: PLAIN + " #detail > header::before, #detail > header .d-cap::before { visibility: visible !important; }" });
+    const b = await page.screenshot({ clip, animations: "disabled" });
+    await tag.evaluate((e) => e.remove());
+    if ((await differing(page, a, b)) !== 0) return false;
+  }
+  return true;
 };
 const SCREENS = [["list", "/"], ["To do", "/#/todo"], ["Pages", "/#/pages"], ["Status", "/#/status"], ["Peers", "/#/peers"], ["Settings", "/#/settings"]];
 for (const [width, height] of [[390, 844], [844, 390]]) {
@@ -290,24 +299,37 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
           if (!(await sameWithout(page, y))) throw new Error(`${name}: something is drawn over the 24 px under its top bar (y ${y})`);
           await solidTop(page, name);
         }
+        // The status bar (and the notch, on its side), as an iPhone has them: the capsules must sit under the status bar.
+        const cdp = await browser.newCDPSession(page);
+        await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: width < height ? { top: 47, bottom: 34, left: 0, right: 0 } : { top: 0, bottom: 21, left: 47, right: 47 } });
         await chat(page);
         await page.waitForTimeout(300);
+        // The phone's chat has no bar (index.html "Floating chrome"): the header is a strip as tall as the status bar,
+        // solid, and that is what iOS takes the top edge's colour from, so it draws no blur at all; the capsules sit under
+        // it, and nothing of ours is drawn over their text but their own glass.
         await solidTop(page, "the conversation");
-        if (!(await headerPlain(page))) throw new Error("something is drawn over the conversation's header (its name, subtitle or icons)");
-        // The keyboard out: iOS pans the visual viewport and the header leaves the screen. Then the header is no longer
-        // the top edge's bar, so iOS's blur lies over the messages there, as the user likes it; back, it is again.
+        const geo = await page.evaluate(() => {
+          const r = (q) => { const e = document.querySelector(q).getBoundingClientRect(); return { t: e.top, b: e.bottom, l: e.left, r: e.right }; };
+          return { strip: r("#detail > header"), l: r("#detail > header .d-cap-l"), r: r("#detail > header .d-cap-r") };
+        });
+        const st = width < height ? 47 : 12;
+        if (Math.abs(geo.strip.b - st) > 0.5) throw new Error(`the top strip is ${geo.strip.b}px tall, want ${st} (the status bar, at least 12)`);
+        if (geo.l.t < geo.strip.b || geo.r.t < geo.strip.b) throw new Error("a capsule reaches into the status bar: " + JSON.stringify(geo));
+        if (!(await capsPlain(page))) throw new Error("something is drawn over the capsules (back, the name, the side panel or ⋮)");
+        // The keyboard out: iOS pans the visual viewport and the strip leaves the screen with the capsules. Then the strip
+        // is no longer the top edge's bar, so iOS's blur lies over the messages there, as the user likes it; back, it is again.
         const kbd = (top) => page.evaluate((top) => {
           Object.defineProperty(visualViewport, "offsetTop", { configurable: true, get: () => top });
           visualViewport.dispatchEvent(new Event("scroll"));
         }, top);
         await kbd(300);
         const k = await topEdge(page);
-        if (k.container) throw new Error("with the keyboard out the header still takes iOS's top edge (the blur would not lie over the messages): " + JSON.stringify(k));
+        if (k.container && k.color && !k.glass) throw new Error("with the keyboard out the strip still takes iOS's top edge (the blur would not lie over the messages): " + JSON.stringify(k));
         await kbd(0);
         await solidTop(page, "the conversation after the keyboard");
-        await page.screenshot({ path: `${out}/topedge-${width}x${height}-${theme}-chat.png`, clip: { x: 0, y: 0, width, height: 120 } });
+        await page.screenshot({ path: `${out}/topedge-${width}x${height}-${theme}-chat.png`, clip: { x: 0, y: 0, width, height: 140 } });
         // Enough messages to scroll, made with the app's own classes; then the band at rest from the first message down,
-        // and the band under the header once a message has scrolled under it.
+        // and the band over a message once it has scrolled under the capsules.
         await page.evaluate(() => {
           const c = document.getElementById("chat");
           c.replaceChildren();
@@ -317,13 +339,15 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         await page.waitForTimeout(200);
         const g = await page.evaluate(() => {
           const c = document.getElementById("chat").getBoundingClientRect(), m = document.querySelector("#chat .msg").getBoundingClientRect();
-          return { top: Math.ceil(c.top), first: Math.ceil(m.top), header: Math.ceil(document.querySelector("#detail > header").getBoundingClientRect().bottom) };
+          return { top: Math.ceil(c.top), first: Math.ceil(m.top), caps: Math.ceil(document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom),
+            strip: Math.ceil(document.querySelector("#detail > header").getBoundingClientRect().bottom) };
         });
-        if (g.first < g.top) throw new Error("the first message starts above the scroller: " + JSON.stringify(g));
-        if (!(await sameWithout(page, g.first, 24))) throw new Error("the top fade covers the first message at rest: " + JSON.stringify(g));
+        if (g.top > 0) throw new Error("the conversation does not run to the top of the screen, under the capsules: " + JSON.stringify(g));
+        if (g.first < g.caps) throw new Error("at rest the first message starts under the capsules: " + JSON.stringify(g));
+        if (!(await sameWithout(page, g.first, 24))) throw new Error("the band covers the first message at rest: " + JSON.stringify(g));
         await page.evaluate(() => { document.getElementById("chat").scrollTop = 200; });
         await page.waitForTimeout(200);
-        if (await sameWithout(page, g.top, 8)) throw new Error("no fade over a message scrolled under the conversation's header: " + JSON.stringify(g));
+        if (await sameWithout(page, g.strip, 8)) throw new Error("no band over a message scrolled under the capsules: " + JSON.stringify(g));
         await page.screenshot({ path: `${out}/topfade-${width}x${height}-${theme}-chat.png` });
       } finally { await browser.close(); owner.close(); }
     });

@@ -73,7 +73,10 @@ try {
           vw: innerWidth, sw: document.documentElement.scrollWidth,
           chat: content(document.querySelector("#detail #chat")),
           prompt: box(document.querySelector("#detail main > .prompt")),
-          header: { l: hdr.getBoundingClientRect().left + parseFloat(hcs.paddingLeft), r: hdr.getBoundingClientRect().right - parseFloat(hcs.paddingRight), h: hdr.getBoundingClientRect().height, b: hdr.getBoundingClientRect().bottom },
+          // Below 1100px the header floats (index.html "Floating chrome"): what it shows is its two capsules.
+          header: hdr.querySelector(".d-cap-l")?.getClientRects().length
+            ? { l: hdr.querySelector(".d-cap-l").getBoundingClientRect().left, r: hdr.querySelector(".d-cap-r").getBoundingClientRect().right, h: hdr.querySelector(".d-cap-l").getBoundingClientRect().height, b: hdr.querySelector(".d-cap-l").getBoundingClientRect().bottom }
+            : { l: hdr.getBoundingClientRect().left + parseFloat(hcs.paddingLeft), r: hdr.getBoundingClientRect().right - parseFloat(hcs.paddingRight), h: hdr.getBoundingClientRect().height, b: hdr.getBoundingClientRect().bottom },
           chatTop: document.querySelector("#detail #chat").getBoundingClientRect().top,
         };
       });
@@ -96,7 +99,8 @@ try {
         if (Math.abs(ml - mr) > 2) why.push(`chat column off centre: ${Math.round(ml)} px left, ${Math.round(mr)} px right`);
         if (Math.abs(g.prompt.l - g.chat.l) > 1 || Math.abs(g.prompt.r - g.chat.r) > 1) why.push(`composer not on the column: ${fmt(g.prompt)} vs ${fmt(g.chat)}`);
         // Height is scarce: a one-row header and the conversation right under it.
-        if (g.header.h > 46) why.push(`header ${Math.round(g.header.h)} px tall, want one 44px row`);
+        // (Below 1100px that row is the floating capsules, 48 px, and the conversation runs under them.)
+        if (g.header.h > 48) why.push(`header ${Math.round(g.header.h)} px tall, want one row`);
         if (g.chatTop - g.header.b > 1) why.push(`${Math.round(g.chatTop - g.header.b)} px between the header and the conversation`);
       } else if (s.name === "iphone-portrait") {
         // Unchanged: the transcript runs edge to edge less 6px, the composer less 12px a side.
@@ -284,7 +288,9 @@ try {
               if (g.scrollerBottom > g.vh + 0.5) why.push(`${sc.scroller} runs below the screen (bottom ${r1(g.scrollerBottom)})`);
               if (!sc.panel && !sc.full && (sh.l < L - 0.5 || sh.r > s.w - R + 0.5)) why.push(`${sc.sheet} under the notch: ${fmt(sh)}`);
               if (sc.panel) {
-                if (sh.t > 47) why.push(`side panel starts at ${r1(sh.t)}: it should take the height under the 44px header`);
+                // Under the floating capsule row (index.html "Floating chrome"), not over it: back, the name and ⋮ stay in reach.
+                const capB = await page.evaluate(() => document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom);
+                if (sh.t < capB - 0.5 || sh.t > capB + 8) why.push(`side panel starts at ${r1(sh.t)}: it should take the height under the capsules (${r1(capB)})`);
                 if (g.first.l < L - 0.5) why.push(`first side-panel tab under the notch at ${r1(g.first.l)}`);
                 if (g.panelBody.l < L - 0.5 || g.panelBody.r > s.w - R + 0.5) why.push(`side panel body under the notch: ${fmt(g.panelBody)}`);
               }
