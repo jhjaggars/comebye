@@ -1,6 +1,7 @@
 // The context usage chip in the agent view header: "ctx 62% · 124k" next to the status word, toned by how full
 // the window is (muted; warning from 80%, danger from 95%), hidden when nothing is known, tokens only when the
-// model's window is not known, a percentage only on a phone, and moving while the agent works.
+// model's window is not known, and moving while the agent works. Below 1100px the header has no chip: the context
+// is a ring round the status dot and a menu item there (slimheader.mjs), so this runs at desktop width.
 //
 //   node ctxchip.mjs BASE OUT_DIR       (env: SCHEME)
 // BASE is a hub on its own fake herdr (-context): ctx-ok 62% (sonnet 4.6, 200k), ctx-warn 83%, ctx-danger 96%,
@@ -18,7 +19,7 @@ async function check(name, fn) {
 
 const PANES = { ok: "w31:p1", warn: "w32:p1", danger: "w33:p1", nowindow: "w34:p1", pi: "w35:p1", live: "w38:p1", live2: "w39:p1", none: "w36:p1", compacted: "w37:p1" };
 
-for (const width of [390, 1280]) {
+for (const width of [1280]) {
   const { browser, page } = await launch({ width, height: width > 500 ? 800 : 844, dark });
   const open = async (pane) => {
     await page.goto(base + "/", { waitUntil: "load" });

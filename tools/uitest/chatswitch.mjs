@@ -3,6 +3,7 @@
 //
 //   node chatswitch.mjs BASE OUT_DIR       (env: SCHEME)
 // The transcript route of the terminal-only agent (bravo, w2:p1) is mocked: 404, then 200.
+// The switch is the header's button on desktop; below 1100px it is the agent menu's first action (#d-mx-term).
 import { launch } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
@@ -26,36 +27,56 @@ for (const width of [390, 1280]) {
     await page.waitForSelector("#detail", { state: "visible" });
   };
   const vis = (sel) => page.evaluate((s) => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display !== "none" && !e.hidden; }, sel);
+  const phone = width < 1100;
+  // The switch: offered (its hidden flag: the menu item is not drawn while the menu is shut), its label, a tap on it.
+  const swOffered = () => phone ? page.evaluate(() => !document.querySelector("#d-mx-term").hidden) : vis("#btn-terminal");
+  const swLabel = () => phone ? page.evaluate(() => document.querySelector("#d-mx-term").textContent) : page.locator("#btn-terminal").getAttribute("aria-label");
+  const menuOpen = async () => { await page.locator("#d-more").click(); await page.waitForSelector("#d-menu:not([hidden])"); await page.waitForTimeout(350); };
+  const swTap = async () => {
+    if (!phone) return page.locator("#btn-terminal").click();
+    await menuOpen();
+    await page.locator("#d-mx-term").click();
+    await page.waitForSelector("#d-menu", { state: "hidden" });
+  };
 
   await check(`no transcript: raw terminal, then the chat appears by itself at ${width}px`, async () => {
     await open();
     await page.waitForFunction(() => document.querySelector("#output")?.innerText.includes("bravo ready"), null, { timeout: 8000 });
     if (await vis("#chat")) throw new Error("chat visible before a session exists");
-    if (await vis("#btn-terminal")) throw new Error("a switch button shows with no transcript");
+    if (await swOffered()) throw new Error("a switch shows with no transcript");
     await page.screenshot({ path: `${out}/chatswitch-terminal-${width}.png` });
     transcriptUp = true; // no reselect from here
     await page.waitForFunction(() => document.querySelector("#chat")?.innerText.includes("the session is up"), null, { timeout: 10000 });
     if (await vis("#output")) throw new Error("raw output still visible");
     if (!(await vis("#chat"))) throw new Error("chat not visible");
-    const label = await page.locator("#btn-terminal").getAttribute("aria-label");
+    const label = await swLabel();
     if (!/raw terminal/i.test(label)) throw new Error("button label " + label);
     await page.screenshot({ path: `${out}/chatswitch-chat-${width}.png` });
+    if (phone) {
+      if (await vis("#btn-terminal")) throw new Error("the header's switch shows on a phone");
+      await menuOpen();
+      const h = await page.evaluate(() => document.querySelector("#d-mx-term").getBoundingClientRect().height);
+      if (h < 44) throw new Error("the menu's switch is " + h + "px tall");
+      await page.keyboard.press("Escape");
+      await page.waitForSelector("#d-menu", { state: "hidden" });
+      return;
+    }
     const g = await page.evaluate(() => { const b = document.querySelector("#btn-terminal").getBoundingClientRect(), c = document.querySelector("#d-ctx"), h = document.querySelector("#detail header"), hr = h.getBoundingClientRect(); return { w: b.width, h: b.height, inHeader: h.contains(document.querySelector("#btn-terminal")), right: b.right <= hr.right + 1, left: b.left >= 0, ctxHidden: c.hidden, title: document.querySelector("#btn-terminal").title, hdrH: hr.height, scroll: document.documentElement.scrollWidth <= innerWidth }; });
     if (!g.inHeader || g.w < 44 || g.h < 44 || !g.right || !g.left || !g.scroll) throw new Error("toggle geometry " + JSON.stringify(g));
     if (g.hdrH > 80) throw new Error("header wrapped: " + g.hdrH);
   });
 
   await check(`a raw terminal chosen by hand sticks until Show chat at ${width}px`, async () => {
-    await page.locator("#btn-terminal").click(); // chat -> raw
+    await swTap(); // chat -> raw
     await page.waitForFunction(() => document.querySelector("#output")?.innerText.includes("bravo ready"), null, { timeout: 5000 });
     if (await vis("#chat")) throw new Error("chat still visible after Show raw terminal");
-    const label = await page.locator("#btn-terminal").getAttribute("aria-label");
+    const label = await swLabel();
     if (!/show chat/i.test(label)) throw new Error("button label " + label);
     const before = hits;
     await page.waitForTimeout(5500); // past a retry interval and a poll
     if (await vis("#chat")) throw new Error("auto-switched back to the chat");
     await page.screenshot({ path: `${out}/chatswitch-manual-${width}.png` });
-    await page.locator("#btn-terminal").click(); // raw -> chat
+    await swTap(); // raw -> chat
     await page.waitForFunction(() => getComputedStyle(document.querySelector("#chat")).display !== "none" && document.querySelector("#chat").innerText.includes("the session is up"), null, { timeout: 5000 });
     if (await vis("#output")) throw new Error("raw output visible after Show chat");
   });

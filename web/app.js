@@ -4860,6 +4860,7 @@ function renderDetailMenu() {
   const can = !!state.selected && switchable(agentById(state.selected));
   const lon = ledger.on === true && !!state.selected;
   const off = ledger.on === false;
+  syncMenuExtras();
   $("d-model").hidden = !can;
   for (const id of ["d-mark", "d-role"]) { $(id).hidden = off; $(id).disabled = !lon; }
   $("d-transcript").hidden = !lon;
@@ -12209,6 +12210,7 @@ function renderStoppedDetail() {
   ds.textContent = "stopped";
   ds.title = "The host is off: this session is not running";
   ds.className = "status stopped";
+  renderDotRing();
   $("d-usage").innerHTML = ""; $("d-usage").hidden = true;
   renderWakeBanner();
   loadChat();
@@ -12242,7 +12244,7 @@ function renderDetail() {
   st.textContent = bgRunning(a) ? "running" + (bgSinceMs(a) ? " · " + fmtAgo(bgSinceMs(a)) : "") : a.agent_status;
   st.className = "status " + agentStatusCls(a);
   st.title = bgRunning(a) ? bgTitle(a) : "";
-  renderCtxChip();
+  renderCtxChip(); // and the dot and ring
   const why = $("d-why"), wt = whyBlocked(a) || (quietMs(a) ? quietText(a) : "") || noteOf(a) || (bgRunning(a) ? bgWhy(a) : "");
   why.classList.toggle("quiet", !whyBlocked(a) && !quietMs(a));
   why.classList.toggle("stuck", !whyBlocked(a) && !!quietMs(a));
@@ -12322,7 +12324,7 @@ function ctxDetail(c) {
 }
 
 function renderCtxChip() {
-  const el = $("d-ctx"), me = $("d-modelchip"), sm = $("d-submodel");
+  const el = $("d-ctx"), me = $("d-modelchip");
   const c = state.chat && state.chat.ctx;
   const m = agentModel();
   const detail = ctxDetail(c);
@@ -12331,8 +12333,9 @@ function renderCtxChip() {
     me.title = detail;
     me.setAttribute("aria-label", detail);
     me.hidden = false;
-    sm.textContent = me.textContent; sm.title = detail; sm.hidden = false;
-  } else { me.hidden = true; me.textContent = ""; sm.hidden = true; sm.textContent = ""; }
+  } else { me.hidden = true; me.textContent = ""; }
+  renderDotRing();
+  syncMenuExtras();
   if (!c || !(c.tokens > 0)) { el.hidden = true; el.textContent = ""; el.dataset.level = ""; return; }
   const lvl = ctxLevel(c);
   el.className = "chip d-ctx " + (lvl || "muted");
@@ -12346,7 +12349,46 @@ function renderCtxChip() {
   el.hidden = false;
 }
 
-for (const id of ["d-ctx", "d-modelchip", "d-submodel"]) {
+// ctxPct is the share of the window in use, 0-100, or null when the tokens or the window are not known.
+function ctxPct(c) {
+  return c && c.tokens > 0 && c.window ? Math.max(0, Math.min(100, Math.round((c.tokens / c.window) * 100))) : null;
+}
+
+// renderDotRing draws the slim header's status (below 1100px): the list's dot for the status, the word in its
+// aria-label, and the context used as a ring around it, toned like the chip (muted, warning from 80%, danger from 95%).
+function renderDotRing() {
+  const wrap = $("d-dot"), dot = $("d-dot-in"), st = $("d-status");
+  const word = st.textContent.trim();
+  dot.className = "dot " + (st.className.split(/\s+/).find((k) => k && k !== "status") || "idle"); // renderDetail's status class
+  const c = state.chat && state.chat.ctx, pct = ctxPct(c), lvl = ctxLevel(c);
+  wrap.classList.toggle("has-ctx", pct !== null);
+  wrap.classList.remove("ctx-yellow", "ctx-red");
+  if (lvl === "yellow" || lvl === "red") wrap.classList.add("ctx-" + lvl);
+  wrap.dataset.ctx = pct === null ? "" : String(pct);
+  $("d-ring-fill").setAttribute("stroke-dasharray", `${pct || 0} 100`);
+  const label = "Status: " + (word || "unknown") + (pct !== null ? `; context ${pct}% used` : "");
+  wrap.setAttribute("aria-label", label);
+  wrap.title = st.title ? st.title + (pct !== null ? ` · context ${pct}% used` : "") : label;
+}
+
+// syncMenuExtras fills the menu items that stand in for the header controls below 1100px: the model on a line at
+// the top, the terminal switch (as the header button would label it), Refresh, and the context used.
+function syncMenuExtras() {
+  const m = agentModel(), ml = $("d-mx-model");
+  ml.hidden = !m;
+  ml.textContent = m ? shortModel(m.model) : "";
+  ml.title = m ? "Model: " + modelFull(m) : "";
+  ml.setAttribute("aria-label", m ? "Model: " + shortModel(m.model) + ". Show the details" : "Model");
+  const b = $("btn-terminal"), t = $("d-mx-term");
+  t.hidden = b.hidden;
+  t.textContent = b.getAttribute("aria-label") || "Show raw terminal";
+  const c = state.chat && state.chat.ctx, pct = ctxPct(c), x = $("d-mx-ctx");
+  x.hidden = !(c && c.tokens > 0);
+  x.textContent = pct !== null ? `Context ${pct}% used` : c && c.tokens > 0 ? `Context ${fmtCtxTokens(c.tokens)} tokens used` : "";
+  x.dataset.level = ctxLevel(c);
+}
+
+for (const id of ["d-ctx", "d-modelchip"]) {
   $(id).addEventListener("click", () => {
     const d = ctxDetail(state.chat && state.chat.ctx);
     if (d) toast(d);
@@ -12467,13 +12509,14 @@ const TERM_ICON = {
 };
 function syncTermButton() {
   const b = $("btn-terminal"), chat = state.chat;
-  if (!chat || chat.auto) { b.hidden = true; return; }
+  if (!chat || chat.auto) { b.hidden = true; syncMenuExtras(); return; }
   const label = chat.terminal ? "Show chat" : "Show raw terminal";
   b.setAttribute("aria-label", label);
   b.title = label;
   const k = chat.terminal ? "chat" : "term";
   if (b.dataset.icon !== k) { b.innerHTML = TERM_ICON[k]; b.dataset.icon = k; }
   b.hidden = false;
+  syncMenuExtras();
 }
 
 // markSeen tells the hub the user has the finished agent's latest message on
@@ -13787,6 +13830,7 @@ function resetTerminalView() {
   copySrc.delete("term-screen");
   $("chat").style.display = "";
   $("btn-terminal").hidden = true;
+  $("d-mx-term").hidden = true;
 }
 
 async function refreshOutput(force) {
@@ -16434,6 +16478,14 @@ window.addEventListener("DOMContentLoaded", () => {
   $("rv-list").addEventListener("change", rvSelect);
   $("rv-bulk").addEventListener("change", rvSelect);
   $("d-refresh").addEventListener("click", refreshView);
+  // The menu's stand-ins for the header controls hidden below 1100px: each does what its header control does.
+  $("d-mx-term").addEventListener("click", () => { toggleDetailMenu(false); $("btn-terminal").click(); });
+  $("d-mx-refresh").addEventListener("click", () => { toggleDetailMenu(false); refreshView(); });
+  for (const id of ["d-mx-ctx", "d-mx-model"]) $(id).addEventListener("click", () => {
+    toggleDetailMenu(false);
+    const d = ctxDetail(state.chat && state.chat.ctx);
+    if (d) toast(d);
+  });
   $("d-more").addEventListener("click", (ev) => { ev.stopPropagation(); toggleDetailMenu(); });
   $("d-mark").addEventListener("click", toggleMark);
   $("d-transcript").addEventListener("click", detailTranscript);

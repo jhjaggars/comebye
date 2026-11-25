@@ -55,6 +55,9 @@ const TEXT = [
   ["scroll-thumb", "bg", UI, "scrollbar thumb"], ["scroll-thumb", "panel", UI, "scrollbar thumb on cards"],
   ...["blue", "orange", "green", "red"].flatMap((c) => [[c, "bg", UI, c + " status dot"], [c, "panel", UI, c + " status dot on cards"]]),
   ["muted", "bg", UI, "idle status dot"],
+  // The agent header's context ring below 1100px (the share used, toned muted / warning / danger) on the header's --bg,
+  // and on --s1 where Layered tones the bars.
+  ...["muted", "yellow", "red"].flatMap((c) => [[c, "bg", UI, c + " context ring"], [c, "s1", UI, c + " context ring on s1"]]),
   // Surfaces > Layered: the tonal scale (--panel and --panel2 are redefined as s1 and s2), the hover and selected tints.
   ...["s1", "s2", "s3", "hov", "sel"].flatMap((b) => [["text", b, AA, "text on " + b], ["muted", b, AA, "muted on " + b], ["quote", b, AA, "quote on " + b], ["snip", b, AA, "snippet on " + b],
     ...["blue", "orange", "green", "purple", "red", "yellow", "teal"].map((c) => [c, b, AA, c + " text on " + b])]),

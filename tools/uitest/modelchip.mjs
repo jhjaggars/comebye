@@ -1,6 +1,7 @@
 // The model chip beside the context chip in the agent view header: "Sonnet 4.6" for a Claude id, the last path
-// segment (minus a build stamp) otherwise, truncated on a phone, full provider/model in the tooltip, shown even
-// with no context figure, moving when the transcript reports another model, falling back to the launch model.
+// segment (minus a build stamp) otherwise, full provider/model in the tooltip, shown even with no context figure,
+// moving when the transcript reports another model, falling back to the launch model. A phone has no chip in the
+// header: the model is the first item of the agent's menu (#d-mx-model, slimheader.mjs), checked here the same way.
 //
 //   node modelchip.mjs BASE OUT_DIR       (env: SCHEME=light|dark)
 // BASE is the hub on the fake herdr -context (see ctxchip.mjs); adds ctx-pi-long (w40:p1) with a long enmaas model.
@@ -28,7 +29,7 @@ for (const width of [390, 1280]) {
     await page.waitForTimeout(500);
   };
   const geo = () => page.evaluate(() => {
-    const phone = innerWidth <= 480, q = (s) => document.querySelector(s), m = q(phone ? "#d-submodel" : "#d-modelchip"), c = q("#d-ctx"), r = m.getBoundingClientRect(), shown = getComputedStyle(m).display !== "none";
+    const phone = innerWidth <= 480, q = (s) => document.querySelector(s), m = q(phone ? "#d-mx-model" : "#d-modelchip"), c = q("#d-ctx"), r = m.getBoundingClientRect(), shown = phone || getComputedStyle(m).display !== "none";
     const hd = q("#detail header").getBoundingClientRect(), more = q("#d-more").getBoundingClientRect(), st = q("#d-status").getBoundingClientRect();
     return { mHidden: m.hidden || !shown, mText: m.textContent, mTitle: m.title, mH: r.height, mW: r.width, mRight: r.right, mTrunc: m.scrollWidth > m.clientWidth,
       cHidden: c.hidden, cText: c.innerText.replace(/\s+/g, " ").trim(), moreRight: more.right, hdRight: hd.right, statusH: st.height, stLeft: st.left,
@@ -58,7 +59,8 @@ for (const width of [390, 1280]) {
     if (g.mText !== "DeepSeek-V4.1-Flash") throw new Error("text " + g.mText);
     if (!/enmaas\/rits\/deepseek-ai\/DeepSeek-V4\.1-Flash-1017/.test(g.mTitle)) throw new Error("tooltip " + g.mTitle);
     sane(g, "pi-long"); await shot("pilong");
-    await page.locator(width < 500 ? "#d-submodel" : "#d-modelchip").click();
+    if (width < 500) { await page.locator("#d-more").click(); await page.waitForSelector("#d-menu:not([hidden])"); await page.waitForTimeout(350); }
+    await page.locator(width < 500 ? "#d-mx-model" : "#d-modelchip").click();
     await page.waitForFunction(() => /DeepSeek-V4\.1-Flash-1017/.test(document.querySelector("#toast")?.textContent || ""), null, { timeout: 3000 });
   });
 
