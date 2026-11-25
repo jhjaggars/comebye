@@ -5,8 +5,8 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 
 | Tier | Trigger | What runs | Target | A failure blocks |
 |---|---|---|---|---|
-| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched (a change that needs every script, such as one to CI or the driver, or whose smoke set plus extra scripts is estimated over 5 min from `tools/ci/browser-times.txt`, runs the merge tier's parallel browser jobs instead); `go test` in 2 jobs when `internal/server` is among the packages | 3.5 min (4 when `internal/server` changed) | merging the pull request |
-| Merge | a push to main (or `gh workflow run CI --ref BRANCH`) | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and the `rest` scripts in 6 parallel parts; the visual pass in dark and light, 2 parts each | 4 min | the next release of that commit (and the landing queue reads it) |
+| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched (a change that needs every script, such as one to CI or the driver, or whose smoke set plus extra scripts is estimated over 5 min from `tools/ci/browser-times.txt`, runs the merge tier's parallel browser jobs instead); `go test` in 3 jobs (`internal/server` in 2 halves, the rest beside them) when `internal/server` is among the packages | 3.5 min (4 when `internal/server` changed) | merging the pull request |
+| Merge | a push to main (or `gh workflow run CI --ref BRANCH`) | lint; all Go in 3 parts; every browser script once (dark), as a `drive` job and the `rest` scripts in 6 parallel parts; the visual pass in dark and light, 2 parts each | 4 min | the next release of that commit (and the landing queue reads it) |
 | Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
 The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
@@ -43,7 +43,7 @@ tools/ci/browser.sh drive light  # drive.mjs in the light scheme
 tools/ci/browser.sh rest dark "" 2/6  # part 2 of 6 of the rest scripts (what one CI job runs)
 tools/ci/browser.sh parts rest 6      # which scripts each of those parts runs (runs nothing)
 tools/ci/browser.sh full         # everything, one scheme (tools/uitest/run.sh runs both)
-tools/ci/gotest.sh --shard 1/2   # half of the Go work
+tools/ci/gotest.sh --shard 1/3   # a third of the Go work (CI's part 1: half of internal/server)
 SCRIPTS="sidepanel peers" tools/uitest/run.sh   # just these scripts
 SHOTS=1 tools/uitest/run.sh      # a screenshot after every drive.mjs check (otherwise only failed ones)
 UITEST_PROFILE=/tmp/p.txt tools/ci/browser.sh rest  # also log each Chrome start, for profiling

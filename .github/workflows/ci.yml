@@ -141,32 +141,38 @@ jobs:
         run: tools/ci/select_test.sh
 
 
-  # Merge tier: every Go test, in two halves of about equal length (tools/ci/gotest.sh).
+  # Merge tier: every Go test in 3 parts: internal/server's tests in 2 halves, every other package beside them
+  # (tools/ci/gotest.sh).
   go-full:
-    name: go test (${{ matrix.shard }}/2)
+    name: go test (${{ matrix.shard }}/3)
     needs: changes
     if: github.event_name != 'pull_request' && needs.changes.outputs.merge_go == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1", "2"]
+        shard: ["1", "2", "3"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Their own Go cache, with the -race builds in it: the shared one is saved by a job that builds without -race, so
-      # each test job used to compile the race-instrumented standard library and dependencies from scratch. One key a
-      # day (pushes to main save it, from the shard that builds every package); a pull request reads main's. Test
-      # results are never cached (-shuffle is not a cacheable flag), so every test still runs.
+      # each test job used to compile the race-instrumented standard library and dependencies from scratch. Two kinds,
+      # one key a day each: "server" (internal/server's tests, parts 1 and 2) and "others" (part 3, or a single
+      # go-changed job). Pushes to main save them (part 1 and part 3); a pull request reads main's. Test results are
+      # never cached (-shuffle is not a cacheable flag), so every test still runs.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - id: day
-        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        env:
+          KIND: ${{ matrix.shard == '3' && 'others' || 'server' }}
+        run: |
+          echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
 
       - id: racecache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -174,22 +180,22 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
-          restore-keys: go-race-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-
+          key: go-race-${{ steps.day.outputs.kind }}-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
+          restore-keys: go-race-${{ steps.day.outputs.kind }}-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-
 
       - name: go test -race
-        run: tools/ci/gotest.sh --shard ${{ matrix.shard }}/2
+        run: tools/ci/gotest.sh --shard ${{ matrix.shard }}/3
 
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.shard == '2' && steps.racecache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.shard != '2' && steps.racecache.outputs.cache-hit != 'true' }}
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
+          key: go-race-${{ steps.day.outputs.kind }}-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
 
   # Pre-submit tier: only the packages the change touches and the packages that import them. When internal/server is
-  # one of them (it takes most of the time), in two jobs split the way go-full splits it (select.sh's go_shards).
+  # one of them (it takes most of the time), in 3 jobs split the way go-full splits it (select.sh's go_shards).
   go-changed:
     name: go-changed (${{ matrix.shard }}/${{ needs.changes.outputs.go_shards }})
     needs: changes
@@ -198,23 +204,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.changes.outputs.go_shards == '2' && '["1", "2"]' || '["1"]') }}
+        shard: ${{ fromJSON(needs.changes.outputs.go_shards == '3' && '["1", "2", "3"]' || '["1"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Their own Go cache, with the -race builds in it: the shared one is saved by a job that builds without -race, so
-      # each test job used to compile the race-instrumented standard library and dependencies from scratch. One key a
-      # day (pushes to main save it, from the shard that builds every package); a pull request reads main's. Test
-      # results are never cached (-shuffle is not a cacheable flag), so every test still runs.
+      # each test job used to compile the race-instrumented standard library and dependencies from scratch. Two kinds,
+      # one key a day each: "server" (internal/server's tests, parts 1 and 2) and "others" (part 3, or a single
+      # go-changed job). Pushes to main save them (part 1 and part 3); a pull request reads main's. Test results are
+      # never cached (-shuffle is not a cacheable flag), so every test still runs.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
       - id: day
-        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        env:
+          KIND: ${{ (matrix.shard == '3' || needs.changes.outputs.go_shards == '1') && 'others' || 'server' }}
+        run: |
+          echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
 
       - id: racecache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -222,8 +233,8 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
-          restore-keys: go-race-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-
+          key: go-race-${{ steps.day.outputs.kind }}-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-${{ steps.day.outputs.day }}
+          restore-keys: go-race-${{ steps.day.outputs.kind }}-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/ci/go-cache-epoch') }}-
 
       - name: go test -race
         env:
@@ -231,8 +242,8 @@ jobs:
           SHARDS: ${{ needs.changes.outputs.go_shards }}
           SHARD: ${{ matrix.shard }}
         run: |
-          if [ "$SHARDS" = 2 ]; then
-            if [ "$PKGS" = all ]; then tools/ci/gotest.sh --shard "$SHARD/2"; else tools/ci/gotest.sh --shard "$SHARD/2" $PKGS; fi
+          if [ "$SHARDS" = 3 ]; then
+            if [ "$PKGS" = all ]; then tools/ci/gotest.sh --shard "$SHARD/3"; else tools/ci/gotest.sh --shard "$SHARD/3" $PKGS; fi
           elif [ "$PKGS" = all ]; then tools/ci/gotest.sh; else tools/ci/gotest.sh $PKGS; fi
 
   # The app in headless Chrome against a fake herdr (tools/uitest). Dev/CI only: its playwright-core is pinned by

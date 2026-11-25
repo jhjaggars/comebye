@@ -9,7 +9,7 @@
 #   visual=true|false       the two-theme visual pass is needed
 #   merge_go=true|false     merge: all Go tests
 #   merge_browser=true|false  merge: all browser checks
-#   go_shards=1|2           pre-submit: go-changed in 2 jobs when internal/server is among the packages (or go=all)
+#   go_shards=1|3           pre-submit: go-changed in 3 jobs when internal/server is among the packages (or go=all)
 #   browser_parallel=true|false  pre-submit: run the browser checks as the merge tier's parallel jobs (drive and the rest
 #                           parts), not the one serial smoke job: when scripts=all, or when the smoke set plus the extra
 #                           scripts is estimated over SMOKE_MAX seconds (300) from tools/ci/browser-times.txt. The
@@ -96,7 +96,7 @@ done <<< "$files"
 
 if $everything; then
   echo "lint=true"; echo "go=all"; echo "scripts=all"; echo "smoke=true"; echo "visual=true"
-  echo "merge_go=true"; echo "merge_browser=true"; echo "go_shards=2"; echo "browser_parallel=true"; exit 0
+  echo "merge_go=true"; echo "merge_browser=true"; echo "go_shards=3"; echo "browser_parallel=true"; exit 0
 fi
 
 # The smoke job's estimated script time: its own set (drive's smoke groups, pages, usage, peers: about 130 s on a
@@ -140,5 +140,5 @@ echo "smoke=$smoke"
 echo "visual=$visual"
 echo "merge_go=$merge_go"
 echo "merge_browser=$merge_browser"
-case " $go_out " in *" ./internal/server "*) echo "go_shards=2" ;; *) echo "go_shards=1" ;; esac
+case " $go_out " in *" ./internal/server "*) echo "go_shards=3" ;; *) echo "go_shards=1" ;; esac
 echo "browser_parallel=$browser_parallel"
