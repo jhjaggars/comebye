@@ -29,17 +29,17 @@ const reqs = [];
 page.on("request", (r) => { const u = new URL(r.url()); if (u.pathname.startsWith("/api/")) reqs.push({ path: u.pathname, at: Date.now() }); });
 const asked = (p, since) => reqs.filter((r) => r.path === p && r.at >= since).length;
 
-// The spinner's life, seen from the page: every frame notes whether #ptr is spinning, so its time on screen is measured
-// where it is drawn, not across round trips.
+// The spinner's life, seen from the page: a MutationObserver notes the moment #ptr starts and stops spinning (its class
+// and hidden attribute), in the task that changed them, so the time is the app's own and not across round trips. It
+// used to sample once a frame, and a first frame that came late cut the spin short (483 ms, 1 run in 3).
 await page.addInitScript(() => {
   window.__spin = [];
   let last = false;
-  const tick = () => {
+  const note = () => {
     const on = !!document.querySelector("#ptr.spin:not([hidden])");
     if (on !== last) { last = on; window.__spin.push({ on, t: performance.now() }); }
-    requestAnimationFrame(tick);
   };
-  requestAnimationFrame(tick);
+  new MutationObserver(note).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
 });
 // navigator.vibrate stubbed (headless Chrome has none): each call is recorded, for the Settings › Vibrate check.
 await page.addInitScript(() => {
