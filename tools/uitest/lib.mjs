@@ -1,6 +1,18 @@
-// Shared by drive.mjs (the scripted regression run) and shot.mjs (the dev
-// loop's screenshot CLI): the headless Chrome setup and the mocked routes
-// for the launch sheet, so neither depends on which agents the host has.
+// Shared by the uitest scripts: the headless Chrome setup, the mocked routes for the launch sheet, the failure dump, and
+// the helpers every check should use against a page that redraws (clickStable, readInPage, makeCheck).
+//
+// THE RULE: never hold an element handle (or a value read from one) across a redraw.
+// The app redraws whole panels with innerHTML on every poll (300 ms in test mode) and on every event: a handle taken
+// before a redraw points at a detached node (empty computed style, no box), and a click whose press and release land on
+// two different nodes fires nothing. So:
+//   - find an element by selector each time you use it (a locator, or a selector string passed to the helpers below),
+//     never by a handle kept from an earlier step;
+//   - read what you assert (text, attributes, box, computed style) in one evaluate inside the page (readInPage), not
+//     in several round trips that a redraw can land between;
+//   - click with clickStable, which waits until the element is attached, still and on top before it clicks;
+//   - wait on a condition (waitForFunction, until), never on a fixed sleep sized for a fast laptop.
+// When a check is about a redraw under the user's finger, force the redraw (call the app's render function between
+// the press and the release, as reviewcard.mjs does) instead of hoping a poll lands there.
 import { chromium } from "playwright-core";
 
 export const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
@@ -162,4 +174,96 @@ export function stamped(log, t0 = Date.now()) {
 export async function shotOf(page, selector, path) {
   const box = await page.evaluate((sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return { x: b.left + scrollX, y: b.top + scrollY, width: b.width, height: b.height }; }, selector);
   await page.screenshot({ path, clip: box, fullPage: true });
+}
+
+// readInPage finds the first element that matches selector and reads it in one evaluate inside the page, so a redraw
+// cannot land between finding it and reading it. It waits (one animation frame at a time, up to timeout ms) for the
+// element to exist. Returns null when there is none by then, else { text, attrs, box, style, connected } with:
+//   text   innerText, trimmed;
+//   attrs  { name: value or null } for each name in opts.attrs, plus "class" when asked for;
+//   box    the bounding client rect { x, y, width, height };
+//   style  { prop: computed value } for each name in opts.style (CSS property names or custom properties).
+// opts.all: read every match instead (an array, [] when there is none by timeout).
+export async function readInPage(page, selector, { attrs = [], style = [], all = false, timeout = 2000 } = {}) {
+  return page.evaluate(async ({ selector, attrs, style, all, timeout }) => {
+    const read = (el) => {
+      const r = el.getBoundingClientRect(), cs = style.length ? getComputedStyle(el) : null;
+      return {
+        text: (el.innerText ?? el.textContent ?? "").trim(),
+        attrs: Object.fromEntries(attrs.map((a) => [a, el.getAttribute(a)])),
+        box: { x: r.x, y: r.y, width: r.width, height: r.height },
+        style: Object.fromEntries(style.map((p) => [p, p.startsWith("--") ? cs.getPropertyValue(p).trim() : cs[p]])),
+        connected: el.isConnected,
+      };
+    };
+    const end = performance.now() + timeout;
+    for (;;) {
+      const els = [...document.querySelectorAll(selector)];
+      if (els.length) return all ? els.map(read) : read(els[0]);
+      if (performance.now() > end) return all ? [] : null;
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+  }, { selector, attrs, style, all, timeout });
+}
+
+// clickStable clicks the first visible element that matches selector once it is attached, has kept the same node and
+// the same box for two animation frames, and is what the browser hits at its centre (not covered, not mid-redraw).
+// The element is found again by selector on every try, never kept as a handle across a redraw. It waits up to timeout
+// ms for that, then clicks with Playwright's own locator click (which re-resolves the selector again). opts.position
+// and opts.button pass through. Throws, naming what it saw last, when the element never settles.
+export async function clickStable(page, selector, { timeout = 8000, position, button } = {}) {
+  const end = Date.now() + timeout;
+  let last = "";
+  for (;;) {
+    const r = await page.evaluate(async (selector) => {
+      const frame = () => new Promise((res) => requestAnimationFrame(() => res()));
+      const pick = () => [...document.querySelectorAll(selector)].find((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");
+      const a = pick();
+      if (!a) return { ok: false, why: "no visible element" };
+      const r0 = a.getBoundingClientRect(), cx = r0.x + r0.width / 2, cy = r0.y + r0.height / 2;
+      if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) { a.scrollIntoView({ block: "center", inline: "center" }); return { ok: false, why: "scrolled into view" }; }
+      const ra = a.getBoundingClientRect();
+      await frame(); await frame();
+      const b = pick();
+      if (b !== a) return { ok: false, why: "redrawn (another node) while waiting for it to settle" };
+      const rb = b.getBoundingClientRect();
+      if (ra.x !== rb.x || ra.y !== rb.y || ra.width !== rb.width || ra.height !== rb.height) return { ok: false, why: "still moving" };
+      const hit = document.elementFromPoint(rb.x + rb.width / 2, rb.y + rb.height / 2);
+      if (!hit || !(hit === b || b.contains(hit))) return { ok: false, why: "covered by " + (hit ? hit.tagName + (hit.id ? "#" + hit.id : "") + (hit.className && typeof hit.className === "string" ? "." + hit.className.split(" ")[0] : "") : "nothing") };
+      return { ok: true };
+    }, selector).catch((e) => ({ ok: false, why: String(e.message).split("\n")[0] })); // a navigation mid-evaluate
+    if (r.ok) break;
+    last = r.why;
+    if (Date.now() > end) throw new Error(`clickStable ${selector}: never settled (${last})`);
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  await page.locator(selector).locator("visible=true").first().click({ timeout: Math.max(1000, end - Date.now()), position, button });
+}
+
+// makeCheck returns check(name, fn), the one every script uses: it runs fn, prints "ok   NAME" or "FAIL NAME" with the
+// error's lines indented under it (tools/ci/flakes.sh and run.sh read these lines), and keeps the count. On a failure
+// it calls opts.onFail(name, err) (a screenshot, say), and with opts.page and opts.out it writes dumpFailure's file
+// too; neither may fail the run. check.failed is the number of failed checks; check.results the [name, ok, why] list.
+// ONLY=regex in the environment runs only the checks whose names match (a quick look at one).
+export function makeCheck({ page, out, log, onFail } = {}) {
+  const results = [];
+  const check = async (name, fn) => {
+    if (process.env.ONLY && !new RegExp(process.env.ONLY).test(name)) return; // ONLY=regex: just those checks
+    try {
+      await fn();
+      results.push([name, true, ""]);
+      console.log("ok   " + name);
+    } catch (e) {
+      check.failed++;
+      const why = String((e && e.message) || e);
+      results.push([name, false, why.split("\n")[0]]);
+      console.log("FAIL " + name + "\n     " + why.split("\n").join("\n     "));
+      const pg = typeof page === "function" ? page() : page;
+      if (onFail) await Promise.resolve().then(() => onFail(name, e)).catch(() => {});
+      if (pg && out) await dumpFailure({ page: pg, out, name, err: e, log: log || [] });
+    }
+  };
+  check.failed = 0;
+  check.results = results;
+  return check;
 }
