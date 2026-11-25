@@ -2341,11 +2341,11 @@ function renderListRows() {
     el.addEventListener("click", (e) => {
       const more = e.target.closest(".row-more");
       if (more) { e.stopPropagation(); openRowMenu(more); return; }
-      openDetail(el.dataset.id);
+      vtOpenAgent(el.dataset.id);
     });
     el.addEventListener("keydown", (e) => {
       if (e.target.closest(".row-more")) return;
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vtOpenAgent(el.dataset.id); }
     });
   });
 }
@@ -9169,6 +9169,77 @@ function syncScreens() {
   renderNav();
 }
 
+/* ---------- View Transitions between screens (#135 slice 5) ---------- */
+//
+// A screen change (list -> agent, Back, Pages, Settings, Search ...) runs inside document.startViewTransition where the
+// browser has it: a 200 ms slide on a phone (forward from the right, back to the right), a 120 ms cross-fade on the
+// desktop, where the list stays put beside the pane. No API or reduced motion: the update runs at once, as before.
+// Input is never held up: ::view-transition takes no pointer events (index.html), so a tap goes to the live page under
+// it, and any pointerdown or key during a transition skips to its end, running a pending update first, so what the tap
+// or key acts on is the new screen. The phone's Status screen has its own slide and is left out.
+const vt = { cur: null, pend: null, kind: "", inUpdate: false, hash: null };
+const vtSupported = () => typeof document.startViewTransition === "function";
+// vtKey is the screen a hash names: its path without a query, so typing a search does not count as a screen change.
+const vtKey = (h) => (h || "").split("?")[0].replace(/^#\/?$/, "");
+// vtDepth orders screens so a step to a shallower one slides back: the list, then a screen, then an item on it.
+function vtDepth(k) {
+  if (!k || k === LIST_HASH) return 0;
+  const n = k.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (n[0] === "agent") return 1;
+  return Math.min(n.length, 2);
+}
+// vtRun runs update inside a view transition going dir ("fwd", "back"), or at once when there is none to run.
+function vtRun(dir, update, kind = "") {
+  if (vt.inUpdate) { update(); return; }
+  vtFlush();
+  if (!vtSupported() || reducedMotion() || document.visibilityState !== "visible") { update(); return; }
+  const root = document.documentElement;
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    if (vt.pend === run) { vt.pend = null; vt.kind = ""; }
+    vt.inUpdate = true;
+    try { update(); } catch (e) { setTimeout(() => { throw e; }); } // still a page error, not a rejected promise
+    finally { vt.inUpdate = false; }
+  };
+  vt.pend = run; vt.kind = kind;
+  root.dataset.vt = isDesktop() ? "fade" : dir;
+  let t;
+  try { t = document.startViewTransition(run); } catch { run(); delete root.dataset.vt; return; }
+  vt.cur = t;
+  const end = () => { if (vt.cur === t) { vt.cur = null; delete root.dataset.vt; } };
+  t.finished.then(end, end);
+  t.ready.catch(() => {}); t.updateCallbackDone.catch(() => {});
+}
+// vtFlush ends the transition in hand: its update runs now if it has not, and the animation skips to its end.
+function vtFlush() {
+  if (vt.pend) vt.pend();
+  if (vt.cur) { try { vt.cur.skipTransition(); } catch {} }
+}
+addEventListener("pointerdown", () => { if (vt.pend || vt.cur) vtFlush(); }, { capture: true, passive: true });
+addEventListener("keydown", () => { if (vt.pend || vt.cur) vtFlush(); }, true);
+// vt.hash is the screen on show: the app's own pushState and replaceState keep it, so a popstate or hashchange compares
+// the screen it brings with the one it leaves.
+for (const m of ["pushState", "replaceState"]) {
+  const o = history[m];
+  history[m] = function (...a) { const r = o.apply(this, a); vt.hash = vtKey(location.hash); return r; };
+}
+// vtRoute is route() for Back, Forward and a hash link. popstate and hashchange both come for one step: the second
+// finds the first's update still pending and leaves it, since route() reads the URL when it runs.
+function vtRoute() {
+  if (vt.pend && vt.kind === "route") return;
+  const to = vtKey(location.hash), from = vt.hash == null ? to : vt.hash;
+  vt.hash = to;
+  const status = !isDesktop() && (from === STATUS_HASH || to === STATUS_HASH); // it slides itself
+  if (from === to || status) { vtFlush(); route(); return; }
+  vtRun(vtDepth(to) < vtDepth(from) ? "back" : "fwd", route, "route");
+}
+// vtOpenAgent is a tap or Enter on an agent row.
+function vtOpenAgent(id) {
+  vtRun("fwd", () => openDetail(id));
+}
+
 function route() {
   syncScreens();
   syncStatusScreen();
@@ -11648,6 +11719,7 @@ const VIBRATES = [
   { id: "", name: "Off", sub: "the default" },
   { id: "on", name: "On", sub: "a short buzz on Send, Answer and tab switches" },
 ];
+// A touch screen with the API: desktop Chrome and Firefox have navigator.vibrate too, and it does nothing there.
 // A touch screen with the API: desktop Chrome and Firefox have navigator.vibrate too, and it does nothing there.
 const vibrateOK = () => typeof navigator !== "undefined" && typeof navigator.vibrate === "function" && !!window.matchMedia?.("(pointer: coarse)").matches;
 const vibrateOn = () => lsGet(VIBRATE_KEY) === "on";
@@ -16522,7 +16594,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // Pop our own history entry (popstate then closes the view); a deep
     // link has no list entry behind it, so just close in place.
     if (state.pushedRoute) history.back();
-    else closeDetail();
+    else vtRun("back", closeDetail);
   });
   $("sv-back").addEventListener("click", () => {
     if (history.state && history.state.subagent) history.back(); // popstate -> syncSubview
@@ -16533,8 +16605,8 @@ window.addEventListener("DOMContentLoaded", () => {
     const card = b && b.closest(".subrun");
     if (card && card._m) openSubview(card._m);
   });
-  window.addEventListener("popstate", route);
-  window.addEventListener("hashchange", route);
+  window.addEventListener("popstate", vtRoute);
+  window.addEventListener("hashchange", vtRoute);
   initStatusScreen();
   initRecall();
   initPlans();
@@ -16543,6 +16615,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initUsage();
   initSettings();
   initArchived();
+  vt.hash = vtKey(location.hash);
   route(); // cold start on #/agent/[<host>/]<pane>
   $("btn-terminal").addEventListener("click", () => {
     const chat = state.chat;
