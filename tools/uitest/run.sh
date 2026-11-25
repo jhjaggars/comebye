@@ -108,6 +108,9 @@ fi
 for _ in $(seq 300); do curl -sf "http://127.0.0.1:$port/api/agents" >/dev/null && break; sleep 0.1; done
 
 echo "app: $app ($(git -C "$app" log -1 --format='%h %s'))"
+# The first script's time starts here, not at the top: the builds and the hub's start are no script's (they made the
+# first script of every CI shard look 15 to 20 s slower than it was).
+_prev_at=$SECONDS
 cd "$here"
 rc=0
 if want drive; then node drive.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
