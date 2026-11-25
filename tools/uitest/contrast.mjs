@@ -10,6 +10,7 @@
 //   - a non-text indicator (focus ring, the status-dot accents) is under 3:1
 //     against the page and panel backgrounds;
 //   - text stops reading on a surface while it is pressed (the press layer's 10% --text);
+//   - text, or a status dot, stops reading on a gradient stop (--g-attn, --g-blk, --g-off) or muted on a blocked row;
 //   - a var(--token) used by index.html is missing from the theme.
 // Tokens themes.js nudged to pass (an official palette colour that failed
 // AA) are listed under "adjusted" in the output.
@@ -34,6 +35,7 @@ const TEXT = [
   ["text", "code-bg", AA, "text on code"], ["code-text", "code-bg", AA, "code text"], ["text", "btn-bg", AA, "button text"],
   ["text", "th-bg", AA, "table header"], ["text", "bubble", AA, "chat bubble"], ["text", "rc-user", AA, "recall bubble"],
   ["text", "rc-out", AA, "recall output"], ["text", "mark-bg", AA, "highlight"], ["text", "blocked-bg", AA, "blocked row"],
+  ["muted", "blocked-bg", AA, "muted line on a blocked row"],
   ["muted", "bg", AA, "muted text"], ["muted", "panel", AA, "muted on cards"], ["muted", "panel2", AA, "muted on raised"],
   ["muted", "code-bg", AA, "muted on code"], 
   ["quote", "bg", AA, "quote"], ["quote", "panel", AA, "quote on cards"], ["snip", "panel", AA, "snippet"], ["snip", "rc-out", AA, "snippet on output"],
@@ -59,10 +61,19 @@ const TEXT = [
   ["focus", "s1", UI, "focus ring on s1"], ["focus", "sel", UI, "selected row outline on its --sel fill"], ["focus", "s3", UI, "focus ring on menus"],
   ["scroll-thumb", "s1", UI, "scrollbar thumb on s1"],
   ...["blue", "orange", "green", "red"].map((c) => [c, "s1", UI, c + " status dot on s1"]),
+  // Gradients (web/index.html "Gradients"; themes.js gradient()): every stop with something on it. A stop runs to a
+  // transparent copy of itself over its base, which is checked above, so the stop is the end that matters.
+  //   g-attn: the wash at the top of a card that needs you, under its title, text, muted lines, chips and buttons.
+  ...["text", "muted", "quote", "blue", "orange", "green", "purple", "red", "yellow", "teal"].map((c) => [c, "g-attn", AA, c + " text on the attention wash"]),
+  //   g-blk: a blocked row's edge glow, 32px under the status dot only (the text starts after it).
+  ["orange", "g-blk", UI, "blocked dot on the blocked row's glow"],
+  //   g-off: the offline strip's wash, under its muted text, bold text, Retry and its blue (updating) or green (back) dot.
+  ["text", "g-off", AA, "text on the offline strip"], ["muted", "g-off", AA, "muted on the offline strip"],
+  ["blue", "g-off", UI, "updating dot on the offline strip"], ["green", "g-off", UI, "back dot on the offline strip"],
 ];
 // The scale must rise: the page to s1 and s1 to s2 by at least 1.05, in every theme (s2 to s3 may collapse where muted text leaves no room).
 const STEPS = [["bg", "s1", 1.05], ["s1", "s2", 1.05]];
-const DEPTH = ["s1", "s2", "s3", "edge", "hi", "hov", "sel", "sh-sm"];
+const DEPTH = ["s1", "s2", "s3", "edge", "hi", "hov", "sel", "sh-sm", "g-attn", "g-blk", "g-off"];
 
 // Tokens index.html uses; every theme must define all of them.
 const html = fs.readFileSync(path.join(web, "index.html"), "utf8");
@@ -82,6 +93,9 @@ const PRESSED = [
   ...["bg", "panel", "panel2", "s1", "s2", "s3"].flatMap((b) => [["text", b, UI, "text on pressed " + b], ["muted", b, UI, "muted on pressed " + b]]),
   ["text", "btn-bg", UI, "text on a pressed button"],
   ["text", "blocked-bg", UI, "text on a pressed blocked row"], ["blocked-name", "blocked-bg", UI, "blocked name on a pressed blocked row"],
+  ["muted", "blocked-bg", UI, "muted on a pressed blocked row"],
+  // The press layer draws over a surface's gradient: the stops with text on them, held.
+  ...["g-attn", "g-off"].flatMap((b) => [["text", b, UI, "text on pressed " + b], ["muted", b, UI, "muted on pressed " + b]]),
 ];
 
 let fails = 0, checks = 0;

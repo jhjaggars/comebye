@@ -117,6 +117,35 @@
     return Object.assign(d, over || {});
   }
 
+  // gradient(): the stops of the slight gradients (Surfaces: Layered; web/index.html "Gradients"), each a mix of two of
+  // the theme's own tokens. Like depth(), each starts at a target mix and backs off until what sits on it still reads:
+  //   g-attn  the warm wash at the top of a card that needs you (the proposed release): orange into s1. Body, muted,
+  //           quote and accent text sit on it, so all of them stay at 4.5:1, and text and muted at 3:1 while pressed.
+  //   g-blk   the glow from a blocked row's orange edge: orange into blocked-bg. It fades out within 32 px, under the
+  //           status dot and before the text starts (34 px in on the densest row), so only the dot sits on it: 3:1.
+  //   g-off   the wash from the offline strip's dot: muted into s1, under the strip's muted and bold text (4.5:1) and
+  //           its blue or green dot (3:1).
+  // The bars' fades (B) need no token: they run from a surface to a transparent copy of the same colour.
+  const GRAD_KEYS = ["g-attn", "g-blk", "g-off"];
+  const PRESS = 0.1; // the press layer's share of --text (web/index.html "Press layer"; tools/uitest/contrast.mjs)
+  function gradient(v, dark) {
+    const ACC = [v.blue, v.orange, v.green, v.purple, v.red, v.yellow, v.teal];
+    const ok = (c, list) => list.every(([f, min]) => contrast(f, c) >= min);
+    const stop = (toward, from, t, list) => {
+      let c = mix(toward, from, t);
+      while (t > 0 && !ok(c, list)) { t = Math.max(0, t - 0.005); c = mix(toward, from, t); }
+      return c;
+    };
+    const read = (fgs, min) => fgs.map((f) => [f, min]);
+    const held = (c) => mix(v.text, c, PRESS);
+    const attn = stop(v.orange, v.s1, dark ? 0.08 : 0.06, read([v.text, v.muted, v.quote, ...ACC], 4.5));
+    const blk = stop(v.orange, v["blocked-bg"], dark ? 0.2 : 0.16, [[v.orange, 3]]);
+    const off = stop(v.muted, v.s1, dark ? 0.12 : 0.1, [...read([v.text, v.muted], 4.5), [v.blue, 3], [v.green, 3]]);
+    // While pressed, text and muted must keep 3:1 (as on every other surface).
+    const pressOk = (c) => [v.text, v.muted].every((f) => contrast(f, held(c)) >= 3);
+    return { "g-attn": pressOk(attn) ? attn : v.s1, "g-blk": blk, "g-off": pressOk(off) ? off : v.s1 };
+  }
+
   // theme() derives the full token set from a core palette.
   function theme(p) {
     const dark = p.mode === "dark";
@@ -139,10 +168,12 @@
     };
     // tint: a surface that is `r` of colour c over `base`, backed off until
     // the body text reads on it.
+    // fg is one colour or a list; every one of them must read.
     const tint = (c, base, r, fg) => {
+      const fgs = [].concat(fg), ok = (x) => fgs.every((f) => contrast(f, x) >= MIN);
       let x = mix(c, base, r);
-      while (r > 0.03 && contrast(fg, x) < MIN) { r -= 0.02; x = mix(c, base, r); }
-      return contrast(fg, x) < MIN ? base : x;
+      while (r > 0.03 && !ok(x)) { r -= 0.02; x = mix(c, base, r); }
+      return ok(x) ? x : base;
     };
     const base = [bg, panel, panel2];
     const text = fit("text", p.text, () => base);
@@ -171,7 +202,8 @@
     v["on-orange"] = best(v.orange, [bg, "#ffffff", "#000000"]);
     v.quote = fit("quote", mix(text, v.muted, 0.5), () => surf);
     v.snip = fit("snip", mix(text, v.muted, 0.7), () => surf);
-    v["blocked-bg"] = tint(v.orange, panel, dark ? 0.12 : 0.1, text);
+    // A blocked row carries muted text too (its host, repo and kind line), so the wash backs off for it as well.
+    v["blocked-bg"] = tint(v.orange, panel, dark ? 0.12 : 0.1, [text, v.muted]);
     v["blocked-name"] = fit("blocked-name", mix(v.orange, text, 0.45), () => [v["blocked-bg"]]);
     v.bubble = tint(v.blue, bg, dark ? 0.3 : 0.2, text);
     v["rc-user"] = tint(v.blue, bg, dark ? 0.22 : 0.16, text);
@@ -299,9 +331,13 @@
   ];
 
   const byId = {};
-  THEMES.forEach((t) => { if (!t.vars["nav-bg"]) t.vars["nav-bg"] = navBg(t.vars.bg, t.mode === "dark"); byId[t.id] = t; });
+  THEMES.forEach((t) => {
+    if (!t.vars["nav-bg"]) t.vars["nav-bg"] = navBg(t.vars.bg, t.mode === "dark");
+    for (const [k, c] of Object.entries(gradient(t.vars, t.mode === "dark"))) if (!(k in t.vars)) t.vars[k] = c;
+    byId[t.id] = t;
+  });
 
-  const API = { THEMES, byId, mix, contrast, KEY: "comebye.theme", KEY_LIGHT: "comebye.theme.light", KEY_DARK: "comebye.theme.dark" };
+  const API = { THEMES, byId, mix, contrast, GRAD_KEYS, KEY: "comebye.theme", KEY_LIGHT: "comebye.theme.light", KEY_DARK: "comebye.theme.dark" };
   root.ComebyeThemes = API;
   if (typeof document === "undefined") return; // node (tools/uitest/contrast.mjs)
 
@@ -435,11 +471,12 @@
   const dep = pref("depth", API.DEPTHS);
   API.KEY_DEPTH = dep.key; API.depthChoice = dep.choice; API.depthApply = dep.apply; API.depthSet = dep.set;
   dep.apply();
-  // The depth tokens a Page should use: the theme's own under Layered, and under Flat the plain panel, border and shadow
+  // The depth and gradient tokens a Page should use: the theme's own under Layered, and under Flat the plain panel, border and shadow
   // tokens, so a Page that draws its cards from --s1 and --edge looks as it did before.
   API.depthTokens = (vars) => {
-    if (dep.choice() !== "flat") return DEPTH_KEYS.reduce((o, k) => (o[k] = vars[k], o), {});
-    return { s1: vars.panel, s2: vars.panel2, s3: vars.panel, edge: vars.border, hi: "rgba(0, 0, 0, 0)", hov: vars.panel2, sel: vars.panel2, "sh-sm": "rgba(0, 0, 0, 0)" };
+    if (dep.choice() !== "flat") return DEPTH_KEYS.concat(GRAD_KEYS).reduce((o, k) => (o[k] = vars[k], o), {});
+    return { s1: vars.panel, s2: vars.panel2, s3: vars.panel, edge: vars.border, hi: "rgba(0, 0, 0, 0)", hov: vars.panel2, sel: vars.panel2, "sh-sm": "rgba(0, 0, 0, 0)",
+      "g-attn": vars.panel, "g-blk": vars["blocked-bg"], "g-off": vars.panel };
   };
   // Open by default: whether a thinking line and a tool run list start open ("", "think", "tools", "both"). It only
   // sets a line's first state; a line the user opened or closed by hand keeps theirs (web/app.js).

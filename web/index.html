@@ -2323,7 +2323,8 @@
        background image over the element's own background, so the element keeps its colour, border and shadows, and
        it reads in every theme: dark on light ones, light on dark ones. --press-c is registered so the fade can animate. */
     @property --press-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
-    .is-pressed, .is-released { background-image: linear-gradient(var(--press-c), var(--press-c)) !important; }
+    /* The layer draws over a surface's own gradient (--grad, "Gradients" at the end of this sheet) instead of replacing it. */
+    .is-pressed, .is-released { background-image: linear-gradient(var(--press-c), var(--press-c)), var(--grad, none) !important; }
     .is-pressed { --press-c: color-mix(in srgb, var(--text) 10%, transparent); transition: none !important; }
     .is-released { transition: --press-c .18s ease-out !important; }
     @media (prefers-reduced-motion: reduce) { .is-released { transition: none !important; } }
@@ -3108,6 +3109,66 @@
     @media (prefers-contrast: more), (forced-colors: active) {
       :root:not([data-depth="flat"]) { --card-edge: var(--border); --lift-1: none; --lift-2: none; --lift-3: none; }
       :root:not([data-depth="flat"]) :is(.pop, .attach-menu, .pal) { border-color: var(--border); }
+    }
+    /* ---- Gradients (Surfaces: Layered only): soft chrome and accent threads ----
+       Soft chrome: a bar (the header, the tab bar, the offline strip, the Pages and Search bars) ends in a 16px fade of its own
+       colour over what scrolls under it, instead of a 1px rule; a scrolling list (the conversation, the agents list, the
+       screens' lists) fades out at its bottom edge, and the agents column on a desktop at its top. Each fade is a sticky
+       pseudo-element that sits in the list's own padding or after its last row, so it covers content only while that content
+       scrolls under it. Accent threads: a 2px blue line under the current tab that fades at both ends, an orange glow from a
+       blocked row's edge (under the status dot, before the text), a warm wash at the top of a card that needs you, a soft
+       wash from the offline strip's dot, and a lit working and blocked dot.
+       The stops are themes.js tokens (--g-attn, --g-blk, --g-off), each a mix of the theme's own tokens backed off until what
+       sits on it reads (tools/uitest/contrast.mjs checks them). A fade runs to a transparent copy of the same colour, so it
+       has no grey fringe. No gradient sits under body text, nothing blurs and nothing moves.
+       A surface's own gradient is --grad, registered so it does not inherit (a row's children would repaint it); the press
+       layer draws over it. The off switch is the positive media query below: written as "no-preference", a browser that does
+       not know prefers-reduced-transparency (Safari, Firefox) would lose the gradients. */
+    @property --grad { syntax: "*"; inherits: false; }
+    :root:not([data-depth="flat"]) :is(header, .pr-tabs, .hub-strip, .rs-bar, .pgs-bar) { border-bottom-color: transparent; --fade: var(--s1); }
+    :root:not([data-depth="flat"]) :is(.pr-tabs, .hub-strip:not(.sticky), .rs-bar, .pgs-bar) { position: relative; }
+    :root:not([data-depth="flat"]) :is(header, .pr-tabs, .hub-strip, .rs-bar, .pgs-bar)::after {
+      content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 16px; z-index: var(--z-raised); pointer-events: none;
+      background: linear-gradient(var(--fade), color-mix(in srgb, var(--fade) 0%, transparent));
+    }
+    /* The list column's header on a desktop is transparent over --nav-bg and has its own scroller under it (below). */
+    @media (min-width: 1100px) { :root:not([data-depth="flat"]) #list header::after { content: none; } }
+    /* A sticky edge stops at the scroller's padding, so --fade-pb (the list's bottom padding) takes it down to the real edge. */
+    :root:not([data-depth="flat"]) :is(#chat, #sv-chat, #agents, .pr-list, .pgs-list, .rl-pane, #sx-body, #us-body, #ar-body) { --fade: var(--bg); }
+    :root:not([data-depth="flat"]) :is(#chat, #sv-chat) { --fade-pb: var(--sp-14); }
+    :root:not([data-depth="flat"]) :is(.pr-list, .pgs-list, .rl-pane) { --fade-pb: calc(var(--sp-20) + var(--safe-bottom)); }
+    :root:not([data-depth="flat"]) :is(#sx-body, #us-body, #ar-body) { --fade-pb: calc(var(--sp-24) + var(--safe-bottom)); }
+    :root:not([data-depth="flat"]) :is(#chat, #sv-chat, #agents, .pr-list, .pgs-list, .rl-pane, #sx-body, #us-body, #ar-body)::after {
+      content: ""; display: block; flex: none; position: sticky; bottom: calc(-1 * var(--fade-pb, 0px)); height: 24px; pointer-events: none;
+      background: linear-gradient(color-mix(in srgb, var(--fade) 0%, transparent), var(--fade));
+    }
+    /* In the conversation the fade takes the place of the gap after the last message, so the column ends where it did. */
+    :root:not([data-depth="flat"]) :is(#chat, #sv-chat)::after { margin-top: calc(-1 * var(--gap)); }
+    @media (min-width: 1100px) {
+      :root:not([data-depth="flat"]) #agents { --fade: var(--nav-bg); --fade-pb: var(--sp-20); }
+      /* The top fade fills the column's 10px top padding, so the first row starts where it did. */
+      :root:not([data-depth="flat"]) #agents::before { content: ""; display: block; position: sticky; top: 0; z-index: var(--z-raised); height: var(--sp-10); margin-top: calc(-1 * var(--sp-10)); pointer-events: none;
+        background: linear-gradient(var(--fade), color-mix(in srgb, var(--fade) 0%, transparent)); }
+    }
+    :root:not([data-depth="flat"]) :is(.pr-tabs button, #sp .sp-tab)[aria-selected="true"] { position: relative; border-bottom-color: transparent; }
+    :root:not([data-depth="flat"]) :is(.pr-tabs button, #sp .sp-tab)[aria-selected="true"]::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; pointer-events: none;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--blue) 0%, transparent), var(--blue) 30%, var(--blue) 70%, color-mix(in srgb, var(--blue) 0%, transparent));
+    }
+    :root:not([data-depth="flat"]) .agent.blocked { --grad: linear-gradient(90deg, var(--g-blk), color-mix(in srgb, var(--g-blk) 0%, transparent) 32px); background-image: var(--grad); }
+    :root:not([data-depth="flat"]) .stale .agent.blocked { --grad: none; }
+    :root:not([data-depth="flat"]) .rl-card.rl-attn { --grad: linear-gradient(var(--g-attn), color-mix(in srgb, var(--g-attn) 0%, transparent) 96px); background-image: var(--grad); }
+    :root:not([data-depth="flat"]) .hub-strip { --grad: linear-gradient(90deg, var(--g-off), color-mix(in srgb, var(--g-off) 0%, transparent) 70%); background-image: var(--grad); }
+    :root:not([data-depth="flat"]) .dot.working { background-image: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--blue) 55%, var(--text)), var(--blue) 65%); }
+    :root:not([data-depth="flat"]) .dot.blocked { background-image: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--orange) 55%, var(--text)), var(--orange) 65%); }
+    /* Off when the device asks for plainness: every gradient goes, and the hard rules come back. */
+    @media (prefers-contrast: more), (prefers-reduced-transparency: reduce), (forced-colors: active) {
+      :root:not([data-depth="flat"]) :is(header, .pr-tabs, .hub-strip, .rs-bar, .pgs-bar) { border-bottom-color: var(--border); }
+      :root:not([data-depth="flat"]) :is(header, .pr-tabs, .hub-strip, .rs-bar, .pgs-bar, #chat, #sv-chat, #agents, .pr-list, .pgs-list, .rl-pane, #sx-body, #us-body, #ar-body)::after,
+      :root:not([data-depth="flat"]) #agents::before, :root:not([data-depth="flat"]) :is(.pr-tabs button, #sp .sp-tab)[aria-selected="true"]::after { content: none; }
+      :root:not([data-depth="flat"]) :is(.pr-tabs button, #sp .sp-tab)[aria-selected="true"] { border-bottom-color: var(--blue); }
+      :root:not([data-depth="flat"]) :is(.agent.blocked, .rl-card.rl-attn, .hub-strip) { --grad: none; }
+      :root:not([data-depth="flat"]) :is(.dot.working, .dot.blocked) { background-image: none; }
     }
   </style>
 </head>

@@ -46,6 +46,24 @@ In `web/index.html`, write `var(--card-edge)`, `var(--lift-1)` (card), `var(--li
 end of the sheet redefines them, and redefines `--panel` and `--panel2` as `--s1` and `--s2`. Pages receive the same tokens in
 `{type:"comebye-theme"}` (the Flat equivalents under Flat), and the Page template draws its cards from `--s1` and `--edge`.
 
+### Gradients (part of Layered)
+
+Slight gradients (the "Gradients" block at the end of `web/index.html`): bars and the composer fade into the content instead of
+ending in a rule, scrolling lists fade at their edges, and a thin accent marks what is current or needs you. No gradient sits
+under body text, nothing blurs and nothing animates. `gradient()` in `web/themes.js` derives three stops for every theme, each
+a mix of two of its own tokens, backed off like `depth()` until what sits on it reads (`contrast.mjs` checks each stop):
+
+| Token | Mix | Used by |
+|---|---|---|
+| `--g-attn` | orange into `--s1` (8% dark, 6% light) | the wash at the top of a card that needs you (the proposed release) |
+| `--g-blk` | orange into `--blocked-bg` (20% / 16%) | a blocked row's edge glow, 32px, under the status dot only |
+| `--g-off` | `--muted` into `--s1` (12% / 10%) | the wash from the offline strip's dot |
+
+The fades need no token: a surface runs to a transparent copy of itself (`color-mix(in srgb, var(--s1) 0%, transparent)`).
+A surface's own gradient is `--grad` (registered with `inherits: false`), and the press layer draws over it. Gradients are off
+under Flat and under `(prefers-contrast: more), (prefers-reduced-transparency: reduce), (forced-colors: active)`; keep that
+query positive, since a browser that does not know reduced-transparency treats it as false.
+
 ## Rules
 
 1. In `padding`, `margin`, `gap`, `border-radius` and `font-size`, write the token, not the number.

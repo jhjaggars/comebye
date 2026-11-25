@@ -135,6 +135,8 @@ if want stt; then node stt.mjs "http://127.0.0.1:$port" "$out" $inst || rc=1 ; f
 if want copycode; then node copycode.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want appearance; then node appearance.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Slight gradients (soft chrome, accent threads): on by default, off under more contrast, reduced transparency, forced colours and Flat.
+if want gradients; then node gradients.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want leftnav; then node leftnav.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want hostpicker; then node hostpicker.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want listfilter; then node listfilter.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

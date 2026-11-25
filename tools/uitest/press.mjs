@@ -1,8 +1,9 @@
 // The press layer (#135): every tappable kind shows a pressed look while a finger is down, at phone size, driven with
 // real touch input (CDP Input.dispatchTouchEvent, which fires pointer events as a phone does). Checks, per kind: the
 // layer is there while held, still there just after a quick release (the 100 ms minimum), gone after the fade. Then: a
-// scroll gesture never shows it, a held row inside a scroller waits ~60 ms, reduced motion drops the fade, and no
-// highlight stays on a card after a tap on a device without hover (every :hover rule sits in @media (hover: hover)).
+// scroll gesture never shows it, the layer draws over a surface's own gradient (a blocked row's glow), a held row inside
+// a scroller waits ~60 ms, reduced motion drops the fade, and no highlight stays on a card after a tap on a device
+// without hover (every :hover rule sits in @media (hover: hover)).
 //
 //   node press.mjs BASE OUT_DIR      (env: SCHEME; COMEBYE_BIN + COMEBYE_STATE_DIR to publish a page for the Pages card)
 import { launch } from "./lib.mjs";
@@ -48,10 +49,15 @@ const layer = (h) => h.evaluate((el) => {
   const c = cs.getPropertyValue("--press-c").trim();
   const a = /rgba?\(([^)]+)\)/.exec(c)?.[1].split(/[ ,/]+/).filter(Boolean);
   const alpha = c.startsWith("color(") ? parseFloat(c.split("/")[1] ?? "1") : a ? (a.length > 3 ? parseFloat(a[3]) : 1) : 0;
-  return { pressed: el.classList.contains("is-pressed"), released: el.classList.contains("is-released"), img: cs.backgroundImage, alpha, c, transition: cs.transitionDuration };
+  // A surface may have a gradient of its own (--grad: a blocked row's edge glow, web/index.html "Gradients"); the layer
+  // is drawn over it, so the layer is one background layer more than the surface's own.
+  // Layers that draw: "none" (the fallback when a surface has no --grad) is a layer that draws nothing.
+  const layers = (v) => { const parts = []; let d = 0, cur = ""; for (const ch of v || "") { if (ch === "(") d++; else if (ch === ")") d--; if (ch === "," && !d) { parts.push(cur); cur = ""; } else cur += ch; } parts.push(cur); return parts.filter((x) => x.trim() && x.trim() !== "none").length; };
+  const grad = cs.getPropertyValue("--grad").trim();
+  return { pressed: el.classList.contains("is-pressed"), released: el.classList.contains("is-released"), img: cs.backgroundImage, n: layers(cs.backgroundImage), own: layers(grad), grad, alpha, c, transition: cs.transitionDuration };
 });
-const shown = (l) => l.pressed && l.img.includes("gradient") && l.alpha > 0.05;
-const gone = (l) => !l.pressed && !l.released && !l.img.includes("gradient");
+const shown = (l) => l.pressed && l.n === l.own + 1 && l.img.includes("gradient") && l.alpha > 0.05;
+const gone = (l) => !l.pressed && !l.released && l.n === l.own;
 
 async function go(hash, ready) {
   await page.goto("about:blank");
@@ -70,7 +76,7 @@ async function press(name, sel, { opts = {} } = {}) {
   const b = await h.boundingBox();
   const x = b.x + Math.min(b.width / 2, 40), y = b.y + b.height / 2;
   const rest = await layer(h);
-  if (rest.pressed || rest.img.includes("gradient")) throw new Error("drawn before the press: " + JSON.stringify(rest));
+  if (rest.pressed || rest.n !== rest.own) throw new Error("drawn before the press: " + JSON.stringify(rest));
   await touch("touchStart", x, y);
   await page.waitForTimeout(110);
   const held = await layer(h);
@@ -158,6 +164,27 @@ await check("press: a blocked row keeps its colour under the layer", async () =>
   await touch("touchEnd");
   if (bg1 !== bg0) throw new Error(`background changed ${bg0} -> ${bg1}`);
   if (!shown(l)) throw new Error("no layer: " + JSON.stringify(l));
+});
+
+// A surface's own gradient (Surfaces: Layered): the layer draws over a blocked row's edge glow, it does not replace it,
+// and the glow is still there after the release.
+await check("press: a held blocked row shows the layer over its edge glow", async () => {
+  await go("#/list", ".agent.blocked");
+  const h = await page.locator(".agent.blocked").first().elementHandle();
+  await h.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const rest = await layer(h);
+  if (rest.own < 1 || !rest.img.startsWith("linear-gradient(90deg")) throw new Error("the blocked row has no glow at rest: " + JSON.stringify(rest));
+  const b = await h.boundingBox();
+  await touch("touchStart", b.x + 30, b.y + b.height / 2);
+  await page.waitForTimeout(110);
+  const l = await layer(h);
+  await page.screenshot({ path: `${out}/press-${tag}-blocked-glow.png`, clip: { x: 0, y: Math.max(0, b.y - 8), width: page.viewportSize().width, height: b.height + 16 } }).catch(() => {});
+  await touch("touchEnd");
+  await page.waitForTimeout(450);
+  const end = await layer(h);
+  if (!shown(l)) throw new Error("no layer: " + JSON.stringify(l));
+  if (!l.img.includes("linear-gradient(90deg")) throw new Error("the glow went under the layer: " + l.img);
+  if (end.img !== rest.img) throw new Error(`the row did not come back as it was: ${rest.img} -> ${end.img}`);
 });
 
 // ---- a scroll is not a press ----
