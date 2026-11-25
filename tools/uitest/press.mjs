@@ -250,8 +250,9 @@ await check("press: a held blocked row shows the layer over its edge glow", () =
   if (end.img !== rest.img) throw new Error(`the row did not come back as it was: ${rest.img} -> ${end.img}`);
 }));
 
-// A poll re-renders the agent rows (renderList replaces them): one that lands while a row is held, or fading after the
-// release, must not drop the layer or leave it stuck on the new row. Forced here, so it is not left to a poll's timing.
+// A poll redraws the agent rows (renderList patches them, #139 slice 4: the held row stays the same element): one that
+// lands while a row is held, or fading after the release, must not drop the layer or leave it stuck. Forced here, so it
+// is not left to a poll's timing.
 await check("press: a list redraw while a row is held keeps the layer, and it still fades after", () => gesture(async () => {
   await go("#/list", ".agent.idle");
   const cur = await follow(await page.locator(".agent.idle").first().elementHandle());
@@ -264,11 +265,11 @@ await check("press: a list redraw while a row is held keeps the layer, and it st
   try {
     // Held: wait for the layer to show (60 ms in a scroller; longer on a loaded runner) before the redraw.
     await page.waitForSelector(".agent.is-pressed", { state: "attached", timeout: 1000 }).catch(() => { throw new Error("the held row never showed the layer"); });
-    const [old, again] = await page.evaluate(async () => { const o = document.querySelector(".agent.is-pressed"); renderList(); await Promise.resolve(); return [o && !o.isConnected, !!document.querySelector(".agent.is-pressed")]; });
-    if (!old) throw new Error("the redraw did not replace the held row (the check proves nothing)");
+    const [kept, again] = await page.evaluate(async () => { const o = document.querySelector(".agent.is-pressed"); renderList(); await Promise.resolve(); return [!!o && o.isConnected && o === document.querySelector(".agent.is-pressed"), !!document.querySelector(".agent.is-pressed")]; });
+    if (!kept) throw new Error("the redraw replaced the held row (a patched list keeps it)");
     if (!again) throw new Error("the layer was dropped by the redraw");
     const first = await cur.read();
-    if (!shown(first)) throw new Error("not drawn on the new row: " + JSON.stringify({ first, then: await cur.read(), rows: await page.evaluate(() => [...document.querySelectorAll(".agent.is-pressed, .agent.is-released")].map((e) => e.className)) }));
+    if (!shown(first)) throw new Error("not drawn on the row after the redraw: " + JSON.stringify({ first, then: await cur.read(), rows: await page.evaluate(() => [...document.querySelectorAll(".agent.is-pressed, .agent.is-released")].map((e) => e.className)) }));
     await touch("touchEnd"); up = true;
   } finally { if (!up) await touch("touchEnd"); } // a finger left down would break the checks after this one
   await page.waitForTimeout(30);
@@ -277,7 +278,7 @@ await check("press: a list redraw while a row is held keeps the layer, and it st
   if (!(mid.pressed || mid.released)) throw new Error("the fade was dropped by a redraw: " + JSON.stringify(mid));
   await page.waitForTimeout(450);
   const end = await cur.read();
-  if (!gone(end)) throw new Error("stuck on the new row 450 ms after release: " + JSON.stringify(end));
+  if (!gone(end)) throw new Error("stuck on the row 450 ms after release: " + JSON.stringify(end));
 }));
 
 // ---- a scroll is not a press ----
