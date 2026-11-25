@@ -109,7 +109,14 @@ async function phase(width) {
         rq.onerror = () => res([]);
         rq.onsuccess = () => { const db = rq.result; if (!db.objectStoreNames.contains("src")) { db.close(); res([]); return; } const g = db.transaction("src").objectStore("src").getAll(); g.onsuccess = () => { db.close(); res(g.result.map((r) => r.name)); }; g.onerror = () => { db.close(); res([]); }; };
       }));
-      for (let end = Date.now() + 20000; !(await dump()).includes("agents"); await sleep(250)) if (Date.now() > end) throw new Error("the agents list was never saved");
+      // Every list answered so far, not just the agents: the strip follows the screen in front (a desktop can open on
+      // To do), and a screen with nothing saved says so in its body instead.
+      await page.evaluate(() => { cacheFlush(true); });
+      for (let end = Date.now() + 20000; ; await sleep(250)) {
+        const pending = await page.evaluate(() => cache.dirty.size + (cache.flushing ? 1 : 0));
+        if ((await dump()).includes("agents") && !pending) break;
+        if (Date.now() > end) throw new Error(`not all saved: store ${await dump()}, ${pending} waiting`);
+      }
       await ctx.setOffline(true);
       await page.reload();
       if (page.url().startsWith("chrome-error:") || !(await isApp(page))) throw new Error("no app offline: " + page.url() + " " + (await page.evaluate(() => document.body.innerText.slice(0, 200))));
