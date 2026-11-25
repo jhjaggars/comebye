@@ -60,8 +60,8 @@ while IFS= read -r f; do
     web/themes.js) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
     web/sidepanel.js) lint=true; smoke=true; add_script sidepanel; add_script statussplit; add_script pagessplit; add_script offline; add_script saved; add_script shell; merge_browser=true; add_pkg ./web ;;
     web/test/*) lint=true; add_script markdown; merge_browser=true ;;
-    web/app.js) lint=true; smoke=true; visual=true; add_script offline; add_script saved; add_script shell; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
-    web/sw.js|web/index.html|web/manifest.webmanifest) lint=true; smoke=true; visual=true; add_script shell; add_script offline; add_script saved; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
+    web/app.js) lint=true; smoke=true; visual=true; add_script offline; add_script saved; add_script shell; add_script pullrefresh; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
+    web/sw.js|web/index.html|web/manifest.webmanifest) lint=true; smoke=true; visual=true; add_script shell; add_script offline; add_script saved; add_script pullrefresh; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
     web/*) lint=true; smoke=true; visual=true; merge_browser=true; merge_go=true; add_pkg ./web; add_pkg ./internal/server; add_pkg ./internal/pageskit ;;
     main.go|announce.go|main_test.go) lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg . ;;
     internal/server/*|internal/herdr/*|internal/state/*)

@@ -1639,7 +1639,7 @@ const srcs = new Map(); // name -> source, for the Try again buttons
 // srcNew makes (or, for the same name, replaces) a source. retry asks again; redraw repaints the screens that show it.
 // The wait counts from now, or for a lazy source (read only when its screen opens) from its first read (srcStart).
 function srcNew(name, retry, redraw, lazy) {
-  const s = { name, at: 0, err: "", since: Date.now(), started: !lazy, retry, redraw, timer: null, saved: false };
+  const s = { name, at: 0, err: "", since: Date.now(), started: !lazy, retry, redraw, timer: null, saved: false, waiters: [] };
   const old = srcs.get(name);
   if (old) clearTimeout(old.timer);
   srcs.set(name, s);
@@ -1652,9 +1652,12 @@ function srcArm(s) {
   s.timer = setTimeout(() => { s.timer = null; if (!s.at) s.redraw(); }, Math.max(0, s.since + SRC_GIVEUP_MS - Date.now()) + 50);
 }
 // A fresh answer replaces one shown from what this device saved (saved), and is saved in turn (cacheFresh).
-function srcOk(s) { s.at = Date.now(); s.err = ""; s.saved = false; clearTimeout(s.timer); s.timer = null; stripSoon(); cacheFresh(s); }
+function srcOk(s) { s.at = Date.now(); s.err = ""; s.saved = false; clearTimeout(s.timer); s.timer = null; stripSoon(); cacheFresh(s); srcWake(s, null); }
 // srcFail notes why the last try failed. Before any answer the screen says so; after one it keeps its rows, marked as old.
-function srcFail(s, e) { s.err = hubErrText(e); stripSoon(); }
+function srcFail(s, e) { s.err = hubErrText(e); stripSoon(); srcWake(s, e || { network: true }); }
+// srcNext: a promise of s's next answer (null) or failure (the error), for a refresh that waits on it (hubRefresh).
+function srcNext(s) { return new Promise((ok) => s.waiters.push(ok)); }
+function srcWake(s, e) { const w = s.waiters; if (!w.length) return; s.waiters = []; for (const ok of w) ok(e); }
 // srcDown: nothing has come from the hub, and the last try failed or has taken too long.
 function srcDown(s) { return !s.at && (!!s.err || (s.started && Date.now() - s.since >= SRC_GIVEUP_MS)); }
 // srcAgain: Try again. The wait starts over, so the skeleton shows while the new try is out.
@@ -2071,13 +2074,238 @@ function stripSync() {
 // stripRetry: the strip's Retry asks again now, without the reconnect backoff: the live connection and this screen's list.
 function stripRetry() {
   hub.tryUntil = Date.now() + 2000;
-  const s = stripView().src;
-  state.retryDelay = 1000;
-  connectEvents();
-  refreshAgents().catch(agentsFailed);
-  if (s !== agentsSrc && s.retry) s.retry();
+  hubRefresh([stripView().src]);
   stripSync();
 }
+// hubRefresh asks again now, without the reconnect backoff: the live connection, the agents, and each list in list.
+// The strip's Retry, ⋮ › Refresh and a pull all use it. It resolves once every one has answered (null) or one has
+// failed (its error, for hubErrText); a list that has not answered in HUB_REFRESH_MS counts as failed. Each answer
+// goes through srcOk as any other does, so it is saved (cacheFresh) and the strip's age starts again from it.
+const HUB_REFRESH_MS = 12000;
+function hubRefresh(list) {
+  state.retryDelay = 1000;
+  connectEvents();
+  const waits = [refreshAgents().then(() => null, (e) => { agentsFailed(e); return e || { network: true }; })];
+  for (const s of new Set(list)) {
+    if (!s || s === agentsSrc || !s.retry) continue;
+    waits.push(srcNext(s));
+    s.retry();
+  }
+  const late = new Promise((ok) => setTimeout(() => ok({ timeout: true }), HUB_REFRESH_MS));
+  return Promise.race([Promise.all(waits).then((r) => r.find(Boolean) || null), late]);
+}
+
+// ---- Pull to refresh (#136 slice 6) ----
+//
+// On a phone, pulling down at the top of the agents list, Status, Pages, Peers (hosts or releases), Usage or Archived
+// asks the hub again (hubRefresh, as the strip's Retry does). A ring under the header fills as the finger pulls and
+// pulses once at PTR_ARM px, where letting go refreshes; short of it nothing happens. Let go past it and the ring holds
+// at PTR_HOLD px and spins until the screen's lists have answered, for at least PTR_SPIN ms so a quick answer is still
+// seen. A failure says why in a toast (the strip says it too), and the rows that were there stay. The chat, Search,
+// Settings, a page being read, menus and sheets, and the desktop never pull. Each screen's ⋮ › Refresh does the same.
+// - The touch listeners are passive: nothing is prevented. At the top a screen has nothing to scroll up to, and
+//   html.ptr-on (set only while one of these screens is in front, ptrSync) turns off the browser's own bounce and
+//   its own pull to refresh, so this ring is the only thing that moves.
+// - The pull gets heavier as it goes: the ring's offset is PTR_MAX·(1−e^(−d/PTR_MAX)) for d px of finger travel.
+// - Android's vibrate waits for the haptics setting (#135 slice 6); none is made here yet.
+const PTR_MAX = 140, PTR_ARM = 64, PTR_HOLD = 48, PTR_SPIN = 500, PTR_SLOP = 10, PTR_SIZE = 36;
+// Each screen that pulls: the element that scrolls (the list's is the document), and the lists it shows beside the
+// agents (which every refresh reads). The To do list, Status's ledger and Archived come only from a hub with a ledger.
+const PTR_VIEWS = [
+  { sel: "#list", doc: true, srcs: () => (ledger.on === true ? [todosSrc] : []) },
+  { sel: "#ss-body", srcs: () => [ledgerSrc, ...(ledger.on === true ? [todosSrc] : [])] },
+  { sel: "#pages .pgs-list", srcs: () => [pagesSrc] },
+  { sel: "#peers .pr-list", srcs: () => [] },
+  { sel: "#pr-releases", srcs: () => [rlsSrc] },
+  { sel: "#us-body", srcs: () => [usageSrc] },
+  { sel: "#ar-body", srcs: () => (ledger.on === true ? [archSrc] : [ledgerSrc]) },
+];
+const PTR_SKIP = "input, textarea, select, [contenteditable]:not([contenteditable='false']), .attach-menu, .pop, dialog, [role='dialog'], #keybar";
+const ptr = { at: null, tgt: null, id: -1, x0: 0, y0: 0, base: 0, top: 0, pulling: false, off: 0, armed: false, busy: false, runs: 0, el: null };
+// ptrFront: is one of the pulling screens in front (a phone, no agent open, no screen of another kind over it)?
+function ptrFront() {
+  if (isDesktop() || state.selected != null || rc.route || sx.route || review.open) return false;
+  if (pgs.route && pgs.route.id) return false; // a page being read
+  return true;
+}
+function ptrSync() {
+  document.documentElement.classList.toggle("ptr-on", ptrFront());
+  const m = $("scr-menu"); // its screen went away under it (back, a route): close it
+  if (m && !m.hidden && !(scrMenu.from && scrMenu.from.closest("#st-screen.open, .screen:not([hidden])") && m.getClientRects().length)) toggleScreenMenu(false);
+}
+// ptrFind: the pulling screen a touch on t starts in, if it is at its top (and so is everything between t and it).
+function ptrFind(t) {
+  if (!t || !t.closest || !ptrFront() || t.closest(PTR_SKIP)) return null;
+  for (const v of PTR_VIEWS) {
+    const root = t.closest(v.sel);
+    if (!root) continue;
+    if (root.closest("[hidden], [inert]") || !root.getClientRects().length) return null;
+    const scroller = v.doc ? document.scrollingElement : root;
+    return ptrAtTop(t, root, scroller) ? { v, root, scroller } : null;
+  }
+  return null;
+}
+function ptrAtTop(t, root, scroller) {
+  if (scroller.scrollTop > 0) return false;
+  for (let n = t; n && n !== root; n = n.parentElement) if (n.scrollTop > 0) return false;
+  return true;
+}
+// ptrViewIn: the pulling view shown in a screen (for its ⋮ › Refresh): Peers shows its hosts or its releases.
+function ptrViewIn(screen) {
+  for (const v of PTR_VIEWS) {
+    const root = screen.matches(v.sel) ? screen : screen.querySelector(v.sel);
+    if (root && !root.closest("[hidden]") && root.getClientRects().length) return v;
+  }
+  return null;
+}
+function ptrEl() {
+  if (ptr.el) return ptr.el;
+  const el = document.createElement("div");
+  el.id = "ptr"; el.className = "ptr"; el.hidden = true;
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ptr-track" cx="12" cy="12" r="9"/><circle class="ptr-fill" cx="12" cy="12" r="9" pathLength="100"/></svg>';
+  document.body.appendChild(el);
+  return (ptr.el = el);
+}
+// ptrEdge: the top of the pulling screen's rows on screen (under its header, and under the strip on the list).
+function ptrEdge(at) {
+  if (!at.v.doc) return at.root.getBoundingClientRect().top;
+  let y = 0;
+  for (const e of [at.root.querySelector(":scope > header"), $("hub-strip")]) if (e && !e.hidden && at.root.contains(e)) y = Math.max(y, e.getBoundingClientRect().bottom);
+  return y;
+}
+// ptrDraw puts the ring off px below the edge (hidden above it at 0); fill is how far to the arm point, 0..1.
+function ptrDraw(off, fill) {
+  const el = ptrEl();
+  el.style.transform = `translateY(${Math.round(ptr.top + off - PTR_SIZE)}px)`;
+  el.style.opacity = String(Math.min(1, off / PTR_HOLD));
+  el.querySelector(".ptr-fill").style.strokeDashoffset = String(100 * (1 - Math.max(0, Math.min(1, fill))));
+}
+function ptrHide() {
+  const el = ptrEl();
+  el.classList.remove("spin", "armed");
+  el.classList.add("settle");
+  ptrDraw(0, 0);
+  el.dataset.state = "";
+  clearTimeout(ptr.hideTimer);
+  ptr.hideTimer = setTimeout(() => { if (!ptr.pulling && !ptr.busy) el.hidden = true; }, 220);
+}
+// ptrRun refreshes what the view shows. pulled: the ring spins (at least PTR_SPIN ms); otherwise (⋮ › Refresh) a toast
+// says it is under way. Either way a failure is said in words.
+async function ptrRun(v, pulled) {
+  if (ptr.busy) return;
+  ptr.busy = true;
+  ptr.runs++;
+  const t0 = performance.now(), el = ptrEl();
+  if (pulled) {
+    el.classList.remove("armed");
+    el.classList.add("settle", "spin");
+    el.dataset.state = "spin";
+    ptrDraw(PTR_HOLD, 1);
+  } else toast("Refreshing…");
+  let err = null;
+  try { err = await hubRefresh(v.srcs()); } catch (e) { err = e || { network: true }; }
+  const left = PTR_SPIN - (performance.now() - t0);
+  if (pulled && left > 0) await new Promise((ok) => setTimeout(ok, left));
+  ptr.busy = false;
+  if (pulled) ptrHide();
+  if (err) toast("Couldn’t refresh · " + hubErrText(err));
+  else if (!pulled) toast("Refreshed");
+  stripSync();
+}
+// The move, end and cancel listeners go on the touch's own target, where the browser sends them for the rest of the
+// touch: a poll that redraws the rows under the finger (the list's, Releases') takes that element out of the document,
+// and an event on an element out of the document never reaches window.
+const PTR_TOUCH = { passive: true };
+addEventListener("touchstart", (ev) => {
+  ptrSync();
+  if (ptr.busy || ev.touches.length !== 1) { ptrLetGo(false); return; }
+  const at = ptrFind(ev.target);
+  if (!at) return;
+  ptrLetGo(false);
+  const t = ev.touches[0], tgt = ev.target;
+  Object.assign(ptr, { at, tgt, id: t.identifier, x0: t.clientX, y0: t.clientY, pulling: false, off: 0, armed: false });
+  tgt.addEventListener("touchmove", ptrMove, PTR_TOUCH);
+  tgt.addEventListener("touchend", ptrEnd, PTR_TOUCH);
+  tgt.addEventListener("touchcancel", ptrCancel, PTR_TOUCH);
+}, PTR_TOUCH);
+function ptrMove(ev) {
+  if (!ptr.at) return;
+  const t = [...ev.touches].find((x) => x.identifier === ptr.id);
+  if (!t || ev.touches.length !== 1) { ptrLetGo(false); return; }
+  const dx = t.clientX - ptr.x0, dy = t.clientY - ptr.y0;
+  if (!ptr.pulling) {
+    if (Math.abs(dx) > PTR_SLOP && Math.abs(dx) > Math.abs(dy)) { ptrLetGo(false); return; } // a sideways swipe
+    if (dy < -PTR_SLOP) { ptrLetGo(false); return; } // a scroll down the list
+    if (dy <= PTR_SLOP) return;
+    if (!ptrAtTop(ptr.tgt, ptr.at.root, ptr.at.scroller)) { ptrLetGo(false); return; } // it scrolled after all
+    ptr.pulling = true;
+    ptr.base = ptr.y0 + PTR_SLOP;
+    ptr.top = ptrEdge(ptr.at);
+    const el = ptrEl();
+    clearTimeout(ptr.hideTimer);
+    el.classList.remove("settle", "spin", "armed");
+    el.dataset.state = "pull";
+    el.hidden = false;
+  }
+  const d = Math.max(0, t.clientY - ptr.base);
+  ptr.off = PTR_MAX * (1 - Math.exp(-d / PTR_MAX));
+  ptrDraw(ptr.off, ptr.off / PTR_ARM);
+  const armed = ptr.off >= PTR_ARM;
+  if (armed !== ptr.armed) {
+    ptr.armed = armed;
+    ptr.el.classList.toggle("armed", armed); // the pulse: letting go now refreshes
+    ptr.el.dataset.state = armed ? "armed" : "pull";
+  }
+}
+function ptrEnd(ev) { if (ptr.at && ![...ev.touches].some((x) => x.identifier === ptr.id)) ptrLetGo(true); }
+function ptrCancel() { ptrLetGo(false); }
+// ptrLetGo ends a pull: past the arm point (and not cancelled) it refreshes, otherwise the ring goes back up.
+function ptrLetGo(go) {
+  const at = ptr.at, pulled = ptr.pulling, armed = ptr.armed, tgt = ptr.tgt;
+  ptr.at = null; ptr.tgt = null; ptr.pulling = false; ptr.armed = false;
+  if (tgt) {
+    tgt.removeEventListener("touchmove", ptrMove, PTR_TOUCH);
+    tgt.removeEventListener("touchend", ptrEnd, PTR_TOUCH);
+    tgt.removeEventListener("touchcancel", ptrCancel, PTR_TOUCH);
+  }
+  if (!at || !pulled) return;
+  if (go && armed) ptrRun(at.v, true); else ptrHide();
+}
+
+// The screens' ⋮ menu (Status, Pages, Peers, Usage, Archived on a phone): Refresh, as a pull does. One menu, moved
+// into the .screen whose ⋮ opened it so it stacks with that screen; it closes when that screen goes (ptrSync).
+const scrMenu = { from: null };
+function toggleScreenMenu(show, btn) {
+  const el = $("scr-menu");
+  const open = show ?? (el.hidden || btn !== scrMenu.from); // another screen's ⋮ moves it there
+  if (open === !el.hidden && (!open || btn === scrMenu.from)) return;
+  if (open) {
+    if (!el.hidden) toggleScreenMenu(false);
+    scrMenu.from = btn;
+    // Inside a .screen, to stack with it; Status (#st-screen) sits under the sheet backdrop, so there it stays on body.
+    const host = btn.closest(".screen") || document.body;
+    if (el.parentElement !== host) host.appendChild(el);
+    el.hidden = false;
+    popOpened("screen");
+    placePop("screen", btn);
+    btn.setAttribute("aria-expanded", "true");
+    popItems(el)[0]?.focus();
+  } else {
+    el.hidden = true;
+    popClosed("screen");
+    if (scrMenu.from) scrMenu.from.setAttribute("aria-expanded", "false");
+  }
+}
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest(".scr-more");
+  if (b) { ev.stopPropagation(); toggleScreenMenu(undefined, b); return; }
+  if (ev.target.closest && ev.target.closest("#scr-refresh")) {
+    const screen = scrMenu.from && scrMenu.from.closest(".screen, #st-screen"), v = screen && ptrViewIn(screen);
+    toggleScreenMenu(false);
+    if (v) ptrRun(v, false);
+  }
+});
 
 // ---- Actions while offline (#136 slice 3) ----
 //
@@ -4971,6 +5199,7 @@ function setStatusScreenOpen(open, animate) {
   p.style.transform = "";
   p.classList.toggle("open", open);
   p.inert = !open;
+  ptrSync();
   if (open && !was) {
     const el = $("ss-body");
     if (el) el._html = "";
@@ -5880,6 +6109,7 @@ const POPS = {
   theme: { id: "theme-panel", close: () => toggleThemePanel(false), trigger: () => sxRow("theme") || $("btn-fleet") },
   pgsmenu: { id: "pgs-menu", close: () => pgsPop("pgsmenu", false), trigger: () => $("pgs-menub") },
   pgsinfo: { id: "pgs-infopop", close: () => pgsPop("pgsinfo", false), trigger: () => $("pgs-infob") },
+  screen: { id: "scr-menu", close: () => toggleScreenMenu(false), trigger: () => scrMenu.from },
   notify: { id: "notify-panel", close: () => toggleNotifyPanel(false), trigger: () => $("btn-notify") },
 };
 const sheetMQ = window.matchMedia("(max-width: 600px)");
@@ -6180,11 +6410,10 @@ function fleetAction(fn) {
   return () => { toggleFleetMenu(false); fn(); };
 }
 
+// fleetRefresh: the list's ⋮ › Refresh, as a pull on the list does (and the ledger, for the board and Status beside it).
 function fleetRefresh() {
   ledger.loadedAt = 0;
-  refreshAgents().catch(() => setConn(false));
-  loadLedger();
-  toast("Refreshing");
+  ptrRun({ srcs: () => [...(ledger.on !== false ? [ledgerSrc] : []), ...PTR_VIEWS[0].srcs()] }, false);
 }
 
 /* ---------- Archived: a screen (#/archived) ---------- */
@@ -9167,6 +9396,7 @@ function syncScreens() {
   syncArchived();
   document.body.classList.toggle("has-screen", !!(rc.route || pgs.route || prs.route || us.route || sx.route || review.open || arch.route));
   renderNav();
+  ptrSync();
 }
 
 function route() {

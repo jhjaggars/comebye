@@ -2141,6 +2141,29 @@
       position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
     }
     .screen[hidden] { display: none; }
+    /* Pull to refresh (#136 slice 6, app.js "Pull to refresh"): while a screen that pulls is in front on a phone, the
+       browser's own bounce and pull to refresh are off, so the ring is the only thing that moves. */
+    html.ptr-on, html.ptr-on body, html.ptr-on :is(#ss-body, .pgs-list, .pr-list, .rl-pane, #us-body, #ar-body) { overscroll-behavior-y: none; }
+    .ptr {
+      position: fixed; top: 0; left: 50%; z-index: calc(var(--z-screen) + 1); width: 36px; height: 36px; margin-left: -18px;
+      display: flex; align-items: center; justify-content: center; border-radius: 50%; pointer-events: none;
+      background: var(--panel); color: var(--blue); box-shadow: 0 2px 10px var(--sh-md); border: 1px solid var(--border);
+    }
+    .ptr[hidden] { display: none; }
+    .ptr svg { width: 22px; height: 22px; display: block; }
+    .ptr circle { fill: none; stroke-width: 2.5; }
+    .ptr .ptr-track { stroke: var(--border); }
+    .ptr .ptr-fill { stroke: currentColor; stroke-linecap: round; stroke-dasharray: 100; transform: rotate(-90deg); transform-origin: 12px 12px; }
+    .ptr.settle { transition: transform 0.2s ease-out, opacity 0.2s ease-out; }
+    .ptr.armed svg { animation: ptr-pulse 0.24s ease-out; } /* armed: letting go refreshes */
+    .ptr.spin svg { animation: ptr-spin 0.8s linear infinite; }
+    .ptr.spin .ptr-fill { stroke-dashoffset: 72 !important; }
+    @keyframes ptr-pulse { 50% { transform: scale(1.25); } }
+    @keyframes ptr-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .ptr.armed svg { animation: none; } .ptr.settle { transition: none; } .ptr.spin svg { animation-duration: 1.6s; } }
+    header .scr-more { margin-left: auto; font-size: var(--fs-20); }
+    header .rc-fresh + .scr-more { margin-left: 0; }
+    @media (min-width: 1100px) { .ptr, header .scr-more, #scr-menu { display: none !important; } }
     .screen header { position: static; flex: none; }
     #peers, #usage, #settings { container-type: inline-size; } /* their layouts follow the pane, not the window */
     #recall #rc-back { margin: -10px 0 -10px -10px; color: var(--text); }
@@ -3256,6 +3279,7 @@
       <button type="button" class="bell" id="pr-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Peers</h1>
       <span class="rc-fresh" id="pr-count"></span>
+      <button type="button" class="bell scr-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="scr-menu">&#8942;</button>
     </header>
     <div class="pr-tabs" id="pr-tabs" role="tablist" aria-label="Peers sections">
       <button type="button" role="tab" id="pr-tab-hosts" data-tab="hosts" aria-selected="true">Hosts</button>
@@ -3276,6 +3300,7 @@
       <button type="button" class="bell" id="us-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Usage</h1>
       <span class="rc-fresh" id="us-fresh"></span>
+      <button type="button" class="bell scr-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="scr-menu">&#8942;</button>
     </header>
     <div id="us-body" tabindex="-1"><div class="us-wrap" id="us-view" aria-live="polite"></div></div>
   </div>
@@ -3294,6 +3319,7 @@
     <header>
       <button type="button" class="bell" id="ar-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Archived</h1>
+      <button type="button" class="bell scr-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="scr-menu">&#8942;</button>
     </header>
     <div id="ar-body" tabindex="-1"><div class="ar-wrap">
       <p class="ar-sum" id="ar-sum"></p>
@@ -3312,6 +3338,7 @@
       <button type="button" class="bell" id="pgs-back" aria-label="Back"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h1>Pages</h1>
       <span class="rc-fresh" id="pgs-count"></span>
+      <button type="button" class="bell scr-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="scr-menu">&#8942;</button>
     </header>
     <div class="pgs-panes">
       <section class="pgs-list" id="pgs-list-pane" aria-label="Pages">
@@ -3350,6 +3377,13 @@
       <a role="menuitem" class="pgs-mi" id="pgs-open" href="#" target="_blank" rel="noopener">Open in tab</a>
       <button type="button" role="menuitem" class="danger" id="pgs-del">Delete…</button>
     </div>
+  </div>
+
+  <!-- The phone screens' ⋮ menu (Status, Pages, Peers, Usage, Archived): moved into the screen whose ⋮ opens it -->
+  <div id="scr-menu" class="attach-menu d-menu pop" role="menu" aria-label="Screen actions" hidden>
+    <div class="grab" aria-hidden="true"><i></i></div>
+    <div class="pop-head"><span class="pop-title">Actions</span><button type="button" class="pop-x" aria-label="Close the menu">&times;</button></div>
+    <button type="button" role="menuitem" id="scr-refresh">Refresh</button>
   </div>
 
   <!-- Agent list view -->
@@ -3433,6 +3467,7 @@
     <header>
       <button type="button" class="back" id="ss-back" aria-label="Back to the agent list">&#8249;</button>
       <h2>Status</h2>
+      <button type="button" class="bell scr-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="scr-menu">&#8942;</button>
     </header>
     <div class="ss-body" id="ss-body"></div>
   </section>
