@@ -49,16 +49,31 @@ if (process.env.COMEBYE_BIN && process.env.COMEBYE_STATE_DIR) {
 
 const cdp = await page.context().newCDPSession(page);
 const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1 }] });
-// tap: a real touch on the middle of the element (scrolled into view first, as a finger would find it).
+// tap: a real touch on the middle of the first visible element matching sel, scrolled into view first as a finger would
+// find it. Found, scrolled and measured in one evaluate: the agent list redraws its rows on its polls, and a handle taken
+// in one call can be detached by the next.
 async function tap(sel) {
-  const h = typeof sel === "string" ? await page.waitForSelector(sel, { state: "visible" }) : sel;
-  await h.scrollIntoViewIfNeeded();
-  const b = await h.boundingBox();
+  const b = await page.evaluate(async (sel) => {
+    for (let i = 0; i < 300; i++) {
+      const el = [...document.querySelectorAll(sel)].find((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");
+      if (el) {
+        // Scroll only when a finger could not reach it where it is: off screen, or clipped by a scroller (the palette).
+        const r0 = el.getBoundingClientRect(), hit = document.elementFromPoint(r0.left + Math.min(r0.width / 2, 120), r0.top + r0.height / 2);
+        if (!hit || !el.contains(hit)) el.scrollIntoView({ block: "center" });
+        const r = el.getBoundingClientRect();
+        return { x: r.left, y: r.top, width: r.width, height: r.height };
+      }
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return null;
+  }, sel);
+  if (!b) throw new Error("nothing visible to tap: " + sel);
   const x = b.x + Math.min(b.width / 2, 120), y = b.y + b.height / 2;
   await touch("touchStart", x, y);
   await page.waitForTimeout(40);
   await touch("touchEnd", x, y);
 }
+const box = (sel) => page.evaluate((sel) => { const r = document.querySelector(sel)?.getBoundingClientRect(); return r && { y: r.top, height: r.height }; }, sel);
 // The marks seen on the page: which elements carry .was-open, and the layer's alpha and animation on each.
 const marks = () => page.evaluate(() => [...document.querySelectorAll(".was-open")].map((el) => {
   const cs = getComputedStyle(el);
@@ -124,7 +139,7 @@ async function marked(id) {
 for (const [how, back] of [["the app's Back", () => tap("#back")], ["the browser's back", () => page.goBack()]]) {
   await check(`agents, ${how}: the row you opened is marked, the scroll position kept, then the mark clears`, async () => {
     await page.evaluate(() => { scrollTo(0, 0); });
-    await (await page.$(rowSel(pick))).scrollIntoViewIfNeeded();
+    await page.evaluate((sel) => { const el = document.querySelector(sel); const r = el.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: "center" }); }, rowSel(pick));
     const y0 = await scrollY();
     await openAndBack(pick, back);
     const m = await marked(pick);
@@ -166,7 +181,7 @@ await check("agents: a row scrolled away while open is scrolled into view; one o
   await openAndBack(top, async () => { await page.evaluate(() => scrollTo(0, document.scrollingElement.scrollHeight)); await tap("#back"); });
   // the list came back at the bottom; the first row is off screen, so it is brought into view
   await marked(top);
-  const b = await (await page.$(rowSel(top))).boundingBox();
+  const b = await box(rowSel(top));
   assert(b.y >= 0 && b.y + b.height <= 844, "the row is still off screen: " + JSON.stringify(b));
   await clears();
 });
@@ -187,7 +202,7 @@ await check("agents: a tap that never leaves the list marks nothing (a group hea
   await watch();
   const h = await page.$("#agents button.proj-head");
   assert(h, "no group header");
-  await tap(h); await page.waitForTimeout(300); await tap("#agents button.proj-head");
+  await tap("#agents button.proj-head"); await page.waitForTimeout(300); await tap("#agents button.proj-head");
   await page.waitForTimeout(1200);
   assert(!(await seen()).length, "marked: " + JSON.stringify(await seen()));
 });
@@ -280,7 +295,7 @@ if (haveCli) {
     await back.waitFor();
     await page.waitForTimeout(400);
     await watch();
-    await tap(await back.elementHandle());
+    await tap("#pgs-back, #pgs-vback");
     await page.waitForSelector(`.pgs-card[data-id="${id}"]`, { state: "visible" });
     await markAppears();
     const m = await marks();
