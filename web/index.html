@@ -3302,7 +3302,7 @@
       #detail > header.busy::after { content: none; }
       /* Our own band: from under the status bar to where the messages start at rest, blurred, fading out at its foot. */
       #detail > header::before {
-        content: ""; position: absolute; left: 0; right: 0; top: var(--d-st); height: calc(var(--d-top) - var(--d-st)); pointer-events: none;
+        content: ""; position: absolute; left: 0; right: 0; top: var(--d-st); height: calc(var(--d-top) - var(--d-st) - 4px); pointer-events: none;
         background: linear-gradient(color-mix(in srgb, var(--bg) 88%, transparent), color-mix(in srgb, var(--bg) 45%, transparent));
         -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5);
         /* a mask reads only alpha: any opaque token will do */ -webkit-mask-image: linear-gradient(var(--bg) calc(100% - 24px), transparent); mask-image: linear-gradient(var(--bg) calc(100% - 24px), transparent);
@@ -3371,9 +3371,12 @@
       #detail main > :is(#chat, #output) { margin-top: 0; }
       #detail main > #chat { padding-top: var(--d-top); scroll-padding-top: var(--d-top); }
       #detail main > #output { margin-top: var(--d-top); }
+      /* The raw terminal's Copy screen sits above it: then it is what starts under the capsules. */
+      #detail main > #btn-copy-screen:not([hidden]) { margin-top: var(--d-top); }
+      #detail main > #btn-copy-screen:not([hidden]) ~ #output { margin-top: 0; }
       #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) { padding-top: var(--d-top); }
       #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) > #chat { padding-top: var(--sp-12); scroll-padding-top: 0; }
-      #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) > #output { margin-top: 0; }
+      #detail main:has(> #d-markbar:not([hidden]), > #d-chatstrip:not([hidden])) > :is(#output, #btn-copy-screen) { margin-top: 0; }
       /* The old top fade sat under a header bar; the band does its work here. */
       :root:not([data-depth="flat"]) #detail #chat::before { content: none; }
       /* Where blur is missing or the device asks for plainness, the glass is near solid. */
