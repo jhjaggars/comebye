@@ -4643,7 +4643,7 @@ await check(`releases rollout with the opt-in canary at ${width}: the confirm ma
     await page.locator(fleet + " .rel-roll").click();
     await page.waitForSelector(fleet + " [aria-label='Confirm the rollout']");
     const ct = await page.locator(fleet + " .rel-confirm").innerText();
-    if (!/peerbox goes first, alone, and soaks for 2 minutes/.test(ct) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("canary confirm: " + ct);
+    if (!/peerbox goes first, alone, and soaks for 10 min;/.test(ct) || await page.locator(fleet + " select[data-ro-canary]").count()) throw new Error("canary confirm: " + ct);
     if (!/canary/.test(await page.locator(fleet + " .rl-order li").first().innerText())) throw new Error("the first host is not marked canary");
     await page.screenshot({ path: `${out}/rollout-confirm-canary-${width}.png` });
     await reload("ro-running-canary");
