@@ -119,7 +119,9 @@ func TestWatch(t *testing.T) {
 	write(t, dir, "a.json", rec("run-a", 1, now, now.Add(2*time.Hour))) // renewed: the same run
 	time.Sleep(60 * time.Millisecond)
 	wait(1, "a run renewed")
-	write(t, dir, "b.json", rec("run-b", 2, now, now.Add(time.Second)))
+	// Records carry whole seconds (RFC 3339), so an expiry of "now + 1 s" could already have passed when it is
+	// written (now late in its second, rounded down). This one expires 1-2 s after it is written, whatever the clock.
+	write(t, dir, "b.json", rec("run-b", 2, now, time.Now().Truncate(time.Second).Add(2*time.Second)))
 	wait(2, "a second run")
 	wait(3, "the second expired")
 	os.Remove(filepath.Join(dir, "a.json"))
