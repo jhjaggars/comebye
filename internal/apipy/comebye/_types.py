@@ -560,6 +560,7 @@ class Host(Record):
         "no_agents": ("no_agents", "bool"),
         "repo_damage": ("repo_damage", "[RepoDamage]"),
         "tmp": ("tmp", "Usage?"),
+        "test_runs": ("test_runs", "[TestRun]"),
     }
 
 
@@ -1092,6 +1093,23 @@ class SweepDone(Record):
     }
 
 
+class TestRun(Record):
+    "One suite running in a slot of a test VM, as tools/ci/remote.sh records it on the VM. (Go: state.TestRun)"
+    _go = "state.TestRun"
+    _fields = {
+        "id": ("id", "str"),
+        "slot": ("slot", "int"),
+        "slots": ("slots", "int"),
+        "suite": ("suite", "str"),
+        "branch": ("branch", "str"),
+        "head": ("head", "str"),
+        "started": ("started", "time"),
+        "agent": ("agent", "str"),
+        "from_": ("from", "str"),
+        "expires": ("expires", "time"),
+    }
+
+
 class Todo(Record):
     "One item. (Go: server.Todo)"
     _go = "server.Todo"
@@ -1444,6 +1462,7 @@ RECORDS = {
     "SetRisk": SetRisk,
     "SetRule": SetRule,
     "SweepDone": SweepDone,
+    "TestRun": TestRun,
     "Todo": Todo,
     "TodoAgent": TodoAgent,
     "TodoAnswer": TodoAnswer,

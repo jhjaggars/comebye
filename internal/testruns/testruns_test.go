@@ -18,7 +18,12 @@ func write(t *testing.T, dir, name, body string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+	// Whole, as remote.sh writes it (a .tmp, then a rename): the watcher never sees half a record.
+	tmp := filepath.Join(dir, name+".tmp")
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
 		t.Fatal(err)
 	}
 }
