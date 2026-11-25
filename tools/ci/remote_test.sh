@@ -151,7 +151,8 @@ cat >tools/ci/browser.sh <<EOF
 #!/bin/bash
 . "\$(dirname "\$0")/prefer-vm.sh"; prefer_vm browser "\$@"
 out="\${3:-\$RUNNER_TEMP/uitest-\$1-\${2:-dark}}"; mkdir -p "\$out/failures"
-echo "STREAMED from the vm"
+echo "STREAMED from the vm"; echo "STDERR from the suite" >&2
+[ -e big.txt ] && { head -c 400000 /dev/zero | tr '\\0' x; echo; echo "END of a big output"; }
 echo "start \$PWD" >>"$root/starts.log"; trap 'echo "end \$PWD" >>"$root/starts.log"' EXIT
 echo "where=\$([ -n "\${COMEBYE_ON_VM:-}" ] && echo vm || echo local)" >"\$out/where.txt"
 { echo "args=\$*"; echo "pwd=\$PWD"; echo "capped=\${CAPPED_BY_TEST:-no}"; echo "toolchain=\$GOTOOLCHAIN"
@@ -231,6 +232,17 @@ check "an idle hold for about 20 min while the suite ran" [ "$(( ${hold_until:-0
 check "...removed afterwards" bash -c "[ -z \"\$(ls -A '$vm/.local/state/comebye/idle-holds')\" ]"
 check "a running VM is not started" bash -c "! grep -q '^start' '$root/worker.log'"
 check "lock released" bash -c "flock -n '$caller/.git/comebye-remote.lock' true"
+# The done record (test-runs/done/ID.json) and its log, of this failing run
+done_dir="$vm/.local/state/comebye/test-runs/done"
+field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("" if v is None else v)' "$1" "$2"; }
+id1="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' <<<"$out")"; d1="$done_dir/$id1.json"
+check "done record: written for the run, valid JSON, with its exit status (3)" [ -n "$id1" ] && [ "$(field "$d1" id):$(field "$d1" rc):$(field "$d1" suite):$(field "$d1" slot)/$(field "$d1" slots)" = "$id1:3:browser:1/1" ]
+check "...the branch, HEAD and this host" [ "$(field "$d1" branch):$(field "$d1" head):$(field "$d1" from)" = "feat/x:$(git rev-parse HEAD):$(hostname -s | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-\n' - | cut -c1-16)" ]
+check "...its start, end and seconds agree" [ "$(( $(date -d "$(field "$d1" ended)" +%s) - $(date -d "$(field "$d1" started)" +%s) ))" = "$(field "$d1" secs)" ]
+check "...no temperatures without Prometheus" [ "$(field "$d1" cpu_start)$(field "$d1" nvme_end)" = "" ]
+check "...its log beside it: what the suite printed, stdout and stderr" grep -qx 'STREAMED from the vm' "$done_dir/$id1.log" && grep -qx 'STDERR from the suite' "$done_dir/$id1.log"
+check "...and nothing the suite did not print" bash -c "! grep -q 'remote' '$done_dir/$id1.log'"
+check "...nothing half-written in done/" [ "$(ls "$done_dir")" = "$(printf '%s\n' "$id1.json" "$id1.log")" ]
 
 echo 0 >rc.txt
 out="$("$r" kv1 browser smoke dark "$root/mine" 2>&1)"; rc=$?
@@ -258,9 +270,10 @@ st="$(field "$f" started)"; ex="$(field "$f" expires)"
 check "...started just now, expiring with the hold (20 min on)" [ "$(( $(date -d "$ex" +%s) - $(date -d "$st" +%s) ))" -ge 1190 -a "$(( $(date +%s) - $(date -d "$st" +%s) ))" -le 30 ]
 sleep 2.5
 check "...renewed with the hold: a later expiry, the same start" [ "$(date -d "$(field "$f" expires)" +%s)" -gt "$(date -d "$ex" +%s)" -a "$(field "$f" started)" = "$st" ]
-check "...nothing half-written beside it" [ "$(ls "$runs_dir")" = "$id.json" ]
+check "...nothing half-written beside it" [ "$(ls "$runs_dir" | grep -v '^done$')" = "$id.json" ]
 touch "$root/release"; wait "$a"; rc=$?
-check "...removed when the run ends (rc=$rc)" [ "$rc" = 0 -a -z "$(ls -A "$runs_dir" 2>/dev/null)" ]
+check "...removed when the run ends (rc=$rc)" [ "$rc" = 0 -a -z "$(ls "$runs_dir"/*.json 2>/dev/null)" ]
+check "...and its done record says it passed, with the agent" [ "$(field "$done_dir/$id.json" rc):$(field "$done_dir/$id.json" agent)" = "0:deskhost/w8J:p1" ]
 rm -f "$root/whoami.json" "$root/started" "$root/release"; git checkout -q feat/x
 "$r" kv1 browser rest >"$root/rec.log" 2>&1 & a=$!
 for _ in $(seq 150); do [ -e "$root/started" ] && break; sleep 0.1; done
@@ -395,7 +408,9 @@ pkill -KILL -f "runs/'$ida'"; kill -KILL -- "-$(cat "$root/suite.pid")" 2>/dev/n
 check "a holder killed hard: the waiting run goes ahead" wf "grep -q 'is free after' '$root/b.log'"
 wait "$b"; rc=$?; wait "$a"
 check "...and passes (rc=$rc)" [ "$rc" = 0 ]
-check "...and the killed run's record is gone with it" [ -z "$(ls -A "$vm/.local/state/comebye/test-runs" 2>/dev/null)" ]
+check "...and the killed run's record is gone with it" [ -z "$(ls "$vm/.local/state/comebye/test-runs"/*.json 2>/dev/null)" ]
+check "...its done record written by this side, from what the run left, not a pass" [ "$(field "$done_dir/$ida.json" id)" = "$ida" ] && [ "$(field "$done_dir/$ida.json" rc)" != 0 ]
+check "...with the log so far" grep -qx 'STREAMED from the vm' "$done_dir/$ida.log"
 
 # giving up while waiting
 : >"$root/starts.log"; start_a; suite_a="$(cat "$root/suite.pid")"
@@ -432,6 +447,9 @@ sleep 6 # past the watchdog's TERM-then-KILL, were it to fire on its own
 check "a running suite is left running while ssh is up" kill -0 "${suite:-0}"
 kill -TERM "$first"; wait "$first"; rc=$?
 check "stopped mid-run: exits 143 (got $rc)" [ $rc = 143 ]
+idk="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/first.log")"
+check "...its done record says the suite was stopped (143)" [ -n "$idk" ] && [ "$(field "$done_dir/$idk.json" rc)" = 143 ]
+check "...with the log of what it printed" grep -qx 'STREAMED from the vm' "$done_dir/$idk.log"
 check "...and logged, with its exit status" grep -q ' vm=kv1 .* suite=browser secs=[0-9]* rc=143 ' <<<"$(tail -1 "$root/nope/comebye-remote/temps.log")"
 check "...and the suite on the VM is gone" bash -c "! kill -0 '${suite:-0}' 2>/dev/null"
 check "...and its run folder too" bash -c "[ -z \"\$(ls -A '$vm/.cache/comebye-remote/runs')\" ]"
@@ -683,6 +701,8 @@ echo 3 >rc.txt
 rm -rf "$RUNNER_TEMP"; out="$(timeout 60 "$bw" rest 2>&1)"; rc=$?
 check "the log: one line per run, start and end temperatures, slot, suite, VM, node, time and status (rc=$rc)" \
   grep -Eq '^20[0-9-]+T[0-9:]+Z vm=kv1 node=rozalin.x slot=1/1 suite=browser secs=[0-9]+ rc=3 cpu_start=61 nvme_start=60 cpu_end=88 nvme_end=71 run=[a-z0-9-]+ branch=feat/x$' <<<"$(tail -1 "$tlog")"
+dl="$(ls -t "$done_dir"/*.json | head -1)"
+check "...and in the done record: start and end temperatures" [ "$(field "$dl" cpu_start)/$(field "$dl" nvme_start)/$(field "$dl" cpu_end)/$(field "$dl" nvme_end):$(field "$dl" rc)" = "61/60/88/71:3" ]
 rm -f "$root/prom-end.json"
 printf 'host=kv1\n' >"$TEST_VM_CONFIG"; echo 0 >rc.txt
 rm -rf "$RUNNER_TEMP"; out="$(timeout 60 "$bw" rest 2>&1)"
@@ -693,4 +713,16 @@ check "no node from the provisioner: logged, node and temperatures empty" grep -
 n0=$(wc -l <"$tlog"); "$r" --probe kv1 >/dev/null 2>&1; "$r" --check kv1 >/dev/null 2>&1; "$r" --state kv1 >/dev/null 2>&1
 check "--probe, --check and --state log nothing" [ "$(wc -l <"$tlog")" = "$n0" ]
 rm -f "$TEST_VM_CONFIG" "$root/prom.json"
+
+# ---- the done records' bounds: the newest 50 kept, with their logs; a log is the last 256 KiB
+for i in $(seq 60); do
+  printf '{"v":1,"id":"old-%s"}\n' "$i" >"$done_dir/old-$i.json"; echo x >"$done_dir/old-$i.log"
+  touch -d "@$(( $(date +%s) - 86400 + i ))" "$done_dir/old-$i.json"
+done
+touch big.txt; out="$("$r" kv1 browser rest 2>&1)"; rm -f big.txt
+idb="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' <<<"$out")"
+check "the VM keeps the newest 50 done records" [ "$(ls "$done_dir"/*.json | wc -l)" = 50 ] && [ -f "$done_dir/$idb.json" ] && [ -f "$done_dir/old-60.json" ]
+check "...the oldest go, with their logs" [ ! -e "$done_dir/old-1.json" -a ! -e "$done_dir/old-1.log" ]
+check "a big output: the log is its last 256 KiB" [ "$(wc -c <"$done_dir/$idb.log")" = 262144 ] && [ "$(tail -1 "$done_dir/$idb.log")" = "END of a big output" ]
+check "...and all of it still streamed here" [ "$(grep -o x <<<"$out" | wc -l)" -ge 400000 ]
 exit $fail

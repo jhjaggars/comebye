@@ -672,6 +672,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/hosts/{host}/parked", s.authAgent(s.onHostLaunch("parked", s.handleParked)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/repos", s.auth(s.onHostLaunch("repos", s.handleRepos)))
 	s.mux.HandleFunc("GET /api/hosts/{host}/checks", s.auth(s.onHostLaunch("checks", s.handleChecks)))
+	// A finished test run's log on a test VM (testrunlog.go): the user's, like the reads above.
+	s.mux.HandleFunc("GET /api/test-runs/{id}/log", s.auth(s.handleTestRunLog))
+	s.mux.HandleFunc("GET /api/hosts/{host}/test-runs/{id}/log", s.auth(s.onHostLaunch("test-run-log", s.handleTestRunLog)))
 	// The handoff ledger (hub side).
 	s.mux.HandleFunc("GET /api/ledger", s.authWorker(s.handleLedger))
 	// Archived sessions (archived.go): any reader lists them; archiving and

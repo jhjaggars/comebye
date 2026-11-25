@@ -35,6 +35,12 @@
 # and expiring with the hold, removed when the run ends) says what runs there: the run, slot I/N, suite, branch, HEAD,
 # start, the starting agent (`comebye whoami --json` here; empty when there is none) and this host. The VM's comebye
 # reports the unexpired ones to the hub, and the app shows them on the VM's row and the agent's.
+# When the suite ends, its done record goes to test-runs/done/ID.json: the same fields and the end, seconds and exit
+# status, with the node's CPU and NVMe temperatures at the start and the end (the log's below) added by this side's
+# cleanup. Beside it, done/ID.log keeps the last 256 KiB of what the suite printed (its stdout and stderr, nothing
+# else). The VM writes both itself, so a run whose caller was killed still has them; when the VM's script was killed
+# instead, this side's cleanup writes them from what the run left. The VM keeps the last 50 (and their logs); its
+# comebye reports the last 20, and serves a log to the hub.
 # (REMOTE_RENEW_SECS, default 300, is how often both are renewed; the self-test uses it.)
 # The provisioner is $COMEBYE_WORKER_TOOL (words, e.g. "comebye-worker -config FILE"), else comebye-worker if it is
 # on PATH, else `go run ./tools/worker`; COMEBYE_WORKER_CONFIG=FILE adds `-config FILE`. The repository is the one
@@ -98,6 +104,19 @@ holders() { local i w=""
   for ((i = 0; i < $1; i++)); do slot_busy "$i" && w="$w${w:+; }$(cat "$root/slot-$i.who" 2>/dev/null || echo "another run")"; done
   echo "${w:-another run}"; }'
 
+# The run's done record (see the top), as a shell function both the VM's script and this side's cleanup start with.
+# done_write RUN FIXED DIR ID RC [EXTRA]: from RUN/slot, RUN/started and RUN/t0 (written when the suite took its slot:
+# nothing is written for a run that never had one), the record DIR/ID.json with FIXED's members, the end, seconds and
+# RC, then EXTRA (more members, each starting with a comma); and DIR/ID.log, the last 256 KiB of RUN/out.log. Each is
+# written whole (a .tmp, then a rename). Then only the newest 50 records, and their logs, are kept.
+done_fns='done_write() { local run="$1" fixed="$2" d="$3" id="$4" rc="$5" x="${6:-}" s st t0 now f
+  read -r s <"$run/slot" 2>/dev/null && read -r st <"$run/started" 2>/dev/null && read -r t0 <"$run/t0" 2>/dev/null || return 0
+  [[ "$rc" =~ ^[0-9]+$ ]] || rc=255; mkdir -p "$d" || return 0; now="$(date +%s)"
+  if [ -f "$run/out.log" ]; then tail -c 262144 "$run/out.log" >"$d/$id.log.tmp" && mv -f "$d/$id.log.tmp" "$d/$id.log"; fi
+  printf "{\"v\":1,%s,\"slot\":%s,\"slots\":%s,\"started\":\"%s\",\"ended\":\"%s\",\"secs\":%s,\"rc\":%s%s}\n" "$fixed" "${s%/*}" "${s#*/}" "$st" \
+    "$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%SZ)" "$((now - t0))" "$rc" "$x" >"$d/$id.json.tmp" && mv -f "$d/$id.json.tmp" "$d/$id.json"
+  ls -1t "$d"/*.json 2>/dev/null | tail -n +51 | while IFS= read -r f; do rm -f "$f" "${f%.json}.log"; done; }'
+
 here_dir="$PWD"
 top="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" || die "$(dirname "${BASH_SOURCE[0]}") is not in a git worktree"
 cd "$top" || exit 2
@@ -149,6 +168,8 @@ rroot='"${REMOTE_ROOT:-$HOME/.cache/comebye-remote}"'
 rrun="$rroot/runs/$(q "$run_id")"
 rhold='"${WK_IDLE_HOLDS:-$HOME/.local/state/comebye/idle-holds}"'"/remote-test-$run_id"
 rrec='"${WK_TEST_RUNS:-$HOME/.local/state/comebye/test-runs}"'"/$run_id.json" # the run's record (internal/testruns)
+rdone='"${WK_TEST_RUNS:-$HOME/.local/state/comebye/test-runs}"'"/done" # finished runs' records and logs
+rec_fixed=""
 renew_secs="${REMOTE_RENEW_SECS:-300}"; [[ "$renew_secs" =~ ^[1-9][0-9]*$ ]] || renew_secs=300
 # hold_cmd MINUTES: the VM's shell line that holds the VM up that long (idle-check.sh reads "<until> <reason>").
 hold_cmd() { echo "h=$rhold; mkdir -p \"\${h%/*}\" && echo \"\$((\$(date +%s) + $1 * 60)) remote test run $run_id\" >\"\$h.tmp\" && mv -f \"\$h.tmp\" \"\$h\""; }
@@ -162,7 +183,17 @@ cleanup() {
   fi
   if [ -n "$sent" ]; then
     [ -n "$t1pid" ] || temps_at end
-    slot="$(ssh_vm "cat $rrun/slot 2>/dev/null; rm -rf $rrun; rm -f $rhold $rrec" </dev/null 2>/dev/null | head -1)"
+    temps_read
+    # The done record: the VM's own gets the temperatures; when there is none (its script was killed), this side
+    # writes it from what the run left. Then the run folder goes.
+    local x="" k v fin=""
+    for k in cpu_start:"$c0" nvme_start:"$n0" cpu_end:"$c1" nvme_end:"$n1"; do v="${k#*:}"; [[ "$v" =~ ^[0-9]{1,3}$ ]] && x="$x,\"${k%%:*}\":$v"; done
+    [ -n "$rec_fixed" ] && fin="$done_fns
+      f=$rdone/$run_id.json; x=$(q "$x")
+      if [ -s \"\$f\" ]; then [ -z \"\$x\" ] || { sed \"s/}\\\$/\$x}/\" \"\$f\" >\"\$f.tmp\" && mv -f \"\$f.tmp\" \"\$f\"; }
+      else done_write $rrun $(q "$rec_fixed") $rdone $run_id $st \"\$x\"; fi"
+    slot="$(ssh_vm "cat $rrun/slot 2>/dev/null; $fin
+      rm -rf $rrun; rm -f $rhold $rrec" </dev/null 2>/dev/null | head -1)"
     log_run "$st" "$slot"
   fi
   rm -rf "$tmp"; [ -n "$check" ] || rm -f "$gitdir/comebye-remote.run"
@@ -185,13 +216,18 @@ temps_at() {
   "$(dirname "${BASH_SOURCE[0]}")/temps.sh" "$p" "$vm_node" >"$tmp/temps-$1" 2>/dev/null 9>&- &
   if [ "$1" = start ]; then t0pid=$!; else t1pid=$!; fi
 }
-# log_run RC SLOT: the run's line in the log; never fails the run.
-log_run() {
-  local f="${COMEBYE_REMOTE_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/comebye-remote/temps.log}" c0="" n0="" c1="" n1=""
+# temps_read: the readings, once both are in, as c0 n0 (start) and c1 n1 (end), whole degrees or empty.
+c0=""; n0=""; c1=""; n1=""
+temps_read() {
   [ -n "$t0pid" ] && wait "$t0pid" 2>/dev/null; [ -n "$t1pid" ] && wait "$t1pid" 2>/dev/null
   read -r _ c0 n0 <"$tmp/temps-start" 2>/dev/null; read -r _ c1 n1 <"$tmp/temps-end" 2>/dev/null
+  c0="${c0#cpu=}" n0="${n0#nvme=}" c1="${c1#cpu=}" n1="${n1#nvme=}"
+}
+# log_run RC SLOT: the run's line in the log; never fails the run.
+log_run() {
+  local f="${COMEBYE_REMOTE_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/comebye-remote/temps.log}"
   { mkdir -p "$(dirname "$f")" &&
-    echo "$started vm=$host node=$vm_node slot=$2 suite=$kind secs=$((SECONDS - t_sent)) rc=$1 cpu_start=${c0#cpu=} nvme_start=${n0#nvme=} cpu_end=${c1#cpu=} nvme_end=${n1#nvme=} run=$run_id branch=$branch" >>"$f"
+    echo "$started vm=$host node=$vm_node slot=$2 suite=$kind secs=$((SECONDS - t_sent)) rc=$1 cpu_start=$c0 nvme_start=$n0 cpu_end=$c1 nvme_end=$n1 run=$run_id branch=$branch" >>"$f"
   } 2>/dev/null
   return 0
 }
@@ -339,7 +375,8 @@ fi
 echo "remote(vm): $(hostname), $(nproc) CPUs, in $src" >&2
 # The run'"'"'s record (see the top of remote.sh), once it has a slot: $run/slot and $run/started say which and since
 # when. Written whole (a .tmp, then a rename), so a reader never sees half of one.
-rec='"$rrec"'; fixed='"$(q "$rec_fixed")"'
+rec='"$rrec"'; fixed='"$(q "$rec_fixed")"'; dd='"$rdone"'
+'"$done_fns"'
 rec_write() { local s st; read -r s <"$run/slot" 2>/dev/null && read -r st <"$run/started" 2>/dev/null || return 0
   mkdir -p "${rec%/*}" && printf "{\"v\":1,%s,\"slot\":%s,\"slots\":%s,\"started\":\"%s\",\"expires\":\"%s\"}\n" "$fixed" "${s%/*}" "${s#*/}" "$st" \
     "$(date -u -d "@$(( $(date +%s) + 1200 ))" +%Y-%m-%dT%H:%M:%SZ)" >"$rec.tmp" && mv -f "$rec.tmp" "$rec"; }
@@ -377,7 +414,7 @@ fi
 who="$(printf "%s since %s" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)")"
 echo "$who" >"$root/slot-$slot.who"; echo "$who" >"$root/run.who" # run.who: what an old client says it waits for
 echo "$((slot + 1))/$n" >"$run/slot" # for the temperature log, and the record
-date -u +%Y-%m-%dT%H:%M:%SZ >"$run/started"; rec_write
+t0="$(date +%s)"; echo "$t0" >"$run/t0"; date -u -d "@$t0" +%Y-%m-%dT%H:%M:%SZ >"$run/started"; rec_write
 if [ "$n" -gt 1 ]; then # this slot'"'"'s share of the VM: a lower value sent from here is kept, a higher one is not
   lower() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -le "$2" ] && [ "$v" -ge 1 ] || export "$1=$2"; }
   mb() { [[ "$1" =~ ^([0-9]+)([KMGT]?)$ ]] || return 1
@@ -390,13 +427,23 @@ if [ "$n" -gt 1 ]; then # this slot'"'"'s share of the VM: a lower value sent fr
   export PORT=$(( ${COMEBYE_SLOT_PORT_BASE:-18741} + slot * 5000 )); export REPEAT_PORT=$PORT
   echo "remote(vm): slot $((slot + 1)) of $n: JOBS=$JOBS CAP_MEM=$CAP_MEM ports $PORT-$((PORT + 4999))" >&2
 fi
-setsid tools/ci/capped.sh'"$line"' </dev/null &
+# The suite'"'"'s output streams back to the caller and, through tee, into $run/out.log for its done record'"'"'s log (the
+# suite'"'"'s stdout and stderr only, nothing this script says). -p: tee keeps the copy going once the link is gone.
+tp=""; tee -p </dev/null >/dev/null 2>&1 && tp=-p
+mkfifo "$run/o.fifo" "$run/e.fifo" || exit 2
+tee -a $tp "$run/out.log" <"$run/o.fifo" 7>&- 8>&- & to=$!
+tee -a $tp "$run/out.log" <"$run/e.fifo" >&2 7>&- 8>&- & te=$!
+setsid tools/ci/capped.sh'"$line"' </dev/null >"$run/o.fifo" 2>"$run/e.fifo" &
 pid=$!
 ( while IFS= read -r _; do :; done; kill -TERM -- "-$pid"; sleep 5; kill -KILL -- "-$pid" ) <&0 >/dev/null 2>&1 7>&- 8>&- & # <&0: a background job reads /dev/null otherwise
 watch=$!
 wait "$pid"; rc=$?
 kill "$watch" "$renew" 2>/dev/null
+# The copies end with the suite'"'"'s output: 10 s at most, for a leftover process of the suite that keeps it open.
+( sleep 10; kill "$to" "$te" ) </dev/null >/dev/null 2>&1 7>&- 8>&- & k=$!
+wait "$to" "$te" 2>/dev/null; kill "$k" 2>/dev/null
 rm -f "$rec" "$rec.tmp"
+done_write "$run" "$fixed" "$dd" '"$(q "$run_id")"' "$rc"
 if [ -n "$lockh" ] && [ -d tools/uitest/node_modules/playwright-core ] && [ ! -d "$nm" ]; then
   cp -al tools/uitest/node_modules "$nm.$$" 2>/dev/null || cp -a tools/uitest/node_modules "$nm.$$"
   mv -T "$nm.$$" "$nm" 2>/dev/null || rm -rf "$nm.$$"

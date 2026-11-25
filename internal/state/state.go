@@ -486,6 +486,10 @@ type HostStatus struct {
 	// test VM (tools/ci/remote.sh writes them; internal/testruns reads them). A peer
 	// reports its own; the hub keeps them, and drops each one when it expires.
 	TestRuns TestRuns `json:"test_runs,omitempty"`
+	// TestHistory are the host's last finished test runs, newest first (at most
+	// 20; the VM keeps 50). A peer reports its own; the hub keeps the last report
+	// while the peer is down, so a sleeping test VM's history still shows.
+	TestHistory TestRuns `json:"test_history,omitempty"`
 }
 
 // TestRuns decodes leniently: a run this version cannot read is left out, and a
@@ -522,7 +526,19 @@ type TestRun struct {
 	Started time.Time `json:"started"`         // when it took its slot
 	Agent   string    `json:"agent,omitempty"` // the starting agent's id (host/pane), when it had one
 	From    string    `json:"from,omitempty"`  // the host it was started from
-	Expires time.Time `json:"expires"`
+	Expires time.Time `json:"expires,omitzero"`
+	// A finished run's (HostStatus.TestHistory): when it ended, how long its suite
+	// took, its exit status, the node's CPU and NVMe temperatures in whole °C as it
+	// started and as it ended (nil: no reading), and whether its host keeps the
+	// tail of its output (GET /api/test-runs/{id}/log there).
+	Ended     time.Time `json:"ended,omitzero"`
+	Secs      int       `json:"secs,omitempty"`
+	RC        *int      `json:"rc,omitempty"`
+	CPUStart  *int      `json:"cpu_start,omitempty"`
+	NVMeStart *int      `json:"nvme_start,omitempty"`
+	CPUEnd    *int      `json:"cpu_end,omitempty"`
+	NVMeEnd   *int      `json:"nvme_end,omitempty"`
+	Log       bool      `json:"log,omitempty"`
 }
 
 // RepoDamage is a repository whose object store git reports as damaged: missing

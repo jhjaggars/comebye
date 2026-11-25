@@ -107,3 +107,77 @@ func TestTestRunsMixedVersions(t *testing.T) {
 		t.Fatalf("not a list: %+v", h)
 	}
 }
+
+// A test VM's finished runs reach the hub, bounded, and the hub keeps the
+// last report while the VM is down (asleep), until the VM reports again.
+func TestTestHistoryKeptWhileDown(t *testing.T) {
+	now := time.Now()
+	opts := fastOpts(nil)
+	zero := 0
+	opts.TestHistory = func() []state.TestRun {
+		return []state.TestRun{{ID: "local-done", Slot: 1, Slots: 1, Started: now, Ended: now, RC: &zero}}
+	}
+	f, p := runsPeer(t, opts)
+	var many []state.TestRun
+	for i := range testruns.MaxHistory + 9 {
+		rc := i % 3
+		many = append(many, state.TestRun{ID: "r", Slot: 1, Slots: 2, Suite: "browser", Agent: strings.Repeat("a", testruns.MaxText+1),
+			Started: now.Add(-time.Hour), Ended: now.Add(time.Duration(i) * time.Second), RC: &rc})
+	}
+	p.setAgents(nil, []state.HostStatus{{Name: "kv-a", Local: true, TestHistory: many}, {Name: "other", TestHistory: many}})
+	hosts := f.Hosts()
+	if len(hosts[0].TestHistory) != 1 || hosts[0].TestHistory[0].ID != "local-done" {
+		t.Fatalf("local: %+v", hosts[0].TestHistory)
+	}
+	got := hosts[1].TestHistory
+	if len(got) != testruns.MaxHistory || len(got[0].Agent) != testruns.MaxText || *got[0].RC != (testruns.MaxHistory+8)%3 {
+		t.Fatalf("%d: %+v", len(got), got[0])
+	}
+	// The VM powers off: the hub marks it down and keeps its history (but not its agents).
+	p.markDown(nil)
+	h := f.Hosts()[1]
+	if h.Status != StatusDown || len(h.TestHistory) != testruns.MaxHistory {
+		t.Fatalf("down: %s, %d runs", h.Status, len(h.TestHistory))
+	}
+	// It wakes and reports again: its own report replaces the kept one.
+	p.setAgents(nil, []state.HostStatus{{Name: "kv-a", Local: true, TestHistory: many[:2]}})
+	if h := f.Hosts()[1]; len(h.TestHistory) != 2 {
+		t.Fatalf("woken: %+v", h.TestHistory)
+	}
+}
+
+// Mixed versions for the history: an old peer reports none; a newer one's
+// unknown fields are ignored; a field this hub cannot read is no history, and
+// never costs it the rest of the event; an older hub drops the field.
+func TestTestHistoryMixedVersions(t *testing.T) {
+	f, p := runsPeer(t, fastOpts(nil))
+	p.handle("agents", `{"type":"agents","agents":[],"hosts":[{"name":"kv-a","local":true,"status":"ok","agents":0}]}`)
+	if r := f.Hosts()[1].TestHistory; r != nil {
+		t.Fatalf("old peer: %+v", r)
+	}
+	p.handle("agents", `{"type":"agents","agents":[],"hosts":[{"name":"kv-a","local":true,"status":"ok","agents":0,"test_history":[`+
+		`{"id":"d1","slot":1,"slots":1,"suite":"go","started":"2026-11-24T10:00:00Z","ended":"2026-11-24T10:05:00Z","secs":300,"rc":1,"phases":{"sync":2},"log":true},`+
+		`{"id":"bad","rc":"one"},{"id":"live","started":"2026-11-24T10:00:00Z","expires":"2099-01-01T00:00:00Z"}]}]}`)
+	h := f.Hosts()[1]
+	if len(h.TestHistory) != 1 || h.TestHistory[0].ID != "d1" || *h.TestHistory[0].RC != 1 || !h.TestHistory[0].Log || h.TestHistory[0].Secs != 300 {
+		t.Fatalf("newer peer: %+v", h.TestHistory)
+	}
+	p.handle("agents", `{"type":"agents","agents":[{"pane_id":"w1:p1","status":"idle"}],"hosts":[{"name":"kv-a","local":true,"status":"ok","agents":1,"test_history":{"no":"list"}}]}`)
+	if h := f.Hosts()[1]; len(h.TestHistory) != 0 || h.Agents != 1 {
+		t.Fatalf("not a list: %+v", h)
+	}
+	// What a new hub sends still decodes in an old one (unknown fields dropped).
+	p.handle("agents", `{"type":"agents","agents":[],"hosts":[{"name":"kv-a","local":true,"status":"ok","agents":0,"test_history":[`+
+		`{"id":"d1","slot":1,"slots":1,"suite":"go","started":"2026-11-24T10:00:00Z","ended":"2026-11-24T10:05:00Z","secs":300,"rc":0}]}]}`)
+	b, _ := json.Marshal(f.Hosts())
+	var older []struct {
+		Name     string            `json:"name"`
+		TestRuns []json.RawMessage `json:"test_runs"`
+	}
+	if err := json.Unmarshal(b, &older); err != nil || len(older) != 2 || older[1].Name != "kv-a" || older[1].TestRuns != nil {
+		t.Errorf("an older hub: %v %+v", err, older)
+	}
+	if !strings.Contains(string(b), `"test_history":[{"id":"d1"`) || strings.Contains(string(b), `"expires"`) {
+		t.Errorf("sent: %s", b)
+	}
+}

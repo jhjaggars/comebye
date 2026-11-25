@@ -372,7 +372,8 @@ func main() {
 	// the hub.
 	runsDir := testruns.Dir(expandHome(*stateDir))
 	fopts := fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage,
-		TestRuns: func() []state.TestRun { return testruns.List(runsDir, time.Now()) }}
+		TestRuns:    func() []state.TestRun { return testruns.List(runsDir, time.Now()) },
+		TestHistory: func() []state.TestRun { return testruns.History(testruns.DoneDir(expandHome(*stateDir))) }}
 	if *testMode {
 		// Browser tests and the dev server: a peer that comes back (a worker started, a hub restarted) is seen
 		// within 2 s, not after a reconnect delay that has doubled up to 30 s while it was down.

@@ -384,19 +384,78 @@ function runsHtml(h) {
 // answer (the hub is out of reach) it says when the run started instead of counting on.
 const runTicker = { timer: 0 };
 function runTick() {
-  const els = document.querySelectorAll(".tr-for[data-tr-at]");
-  if (!els.length) { clearInterval(runTicker.timer); runTicker.timer = 0; return; }
+  const els = document.querySelectorAll(".tr-for[data-tr-at]"), ago = document.querySelectorAll(".tr-ago[data-tr-end]");
+  if (!els.length && !ago.length) { clearInterval(runTicker.timer); runTicker.timer = 0; return; }
   const old = srcStale(agentsSrc), now = Date.now();
   for (const el of els) {
     const at = +el.dataset.trAt, t = old ? "since " + clockAt(at) : fmtRunFor(now - at);
     if (el.textContent !== t) el.textContent = t;
   }
+  for (const el of ago) {
+    const t = fmtAgo(+el.dataset.trEnd) + " ago";
+    if (el.textContent !== t) el.textContent = t;
+  }
   if (!runTicker.timer) runTicker.timer = setInterval(runTick, 1000);
 }
-// The starting agent's row: "testing on kv-a (slot 2/4)", one line for all its runs.
+// ---- Finished runs (#138, slices 3-4): a test VM reports its last 20 (newest first), and the hub keeps them while
+// the VM sleeps. Each has its exit status, how long the suite took, the node's CPU and NVMe °C at the start and the
+// end, and whether the VM keeps the tail of its output ("Log" reads it from the VM, through the hub).
+function testHistOf(h) {
+  return h && Array.isArray(h.test_history)
+    ? h.test_history.filter((r) => r && r.id && typeof r.rc === "number" && !Number.isNaN(Date.parse(r.ended))) : [];
+}
+// runResult: pass, fail, or stopped (the run was stopped: Ctrl-C, a dropped link, a TERM or KILL), and its words.
+function runResult(r) {
+  if (r.rc === 0) return { cls: "pass", text: "passed" };
+  if (r.rc === 130 || r.rc === 143 || r.rc === 137) return { cls: "stop", text: `stopped (exit ${r.rc})` };
+  return { cls: "fail", text: `failed (exit ${r.rc})` };
+}
+function runTemps(r) {
+  const one = (name, a, b) => a == null && b == null ? "" : `${name} ${a == null ? "?" : a}→${b == null ? "?" : b} °C`;
+  return [one("CPU", r.cpu_start, r.cpu_end), one("NVMe", r.nvme_start, r.nvme_end)].filter(Boolean).join(" · ");
+}
+// Whether a host's Recent runs list is open: what the user last chose for it, else open on a wide screen and closed
+// on a phone.
+const runHistOpen = {};
+const runHistWide = () => !matchMedia("(max-width: 699px)").matches;
+function histHtml(h) {
+  const runs = testHistOf(h);
+  if (!runs.length) return "";
+  const open = h.name in runHistOpen ? runHistOpen[h.name] : runHistWide();
+  const failed = runs.filter((r) => runResult(r).cls === "fail").length;
+  const li = runs.map((r) => {
+    const res = runResult(r), a = runAgent(r);
+    const nm = a ? (a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id) : "";
+    const who = a ? `<a class="tr-agent" href="${esc(agentHash(a))}">${esc(nm)}</a>` : r.agent ? `<span class="tr-agent">${esc(r.agent)}</span>` : r.from ? "from " + esc(r.from) : "";
+    const temps = runTemps(r);
+    const title = `${r.suite} run ${r.id}${r.head ? " at " + r.head.slice(0, 12) : ""}, ${res.text}, ${runSlot(r)}${r.from ? ", started from " + r.from : ""}${r.branch ? ", " + r.branch : ""}`;
+    return `<li class="tr-done ${res.cls}" title="${escAttr(title)}"><span class="tr-what"><span class="tr-res">${esc(res.cls === "pass" ? "pass" : res.cls === "stop" ? "stopped" : "fail")}</span> ${esc(r.suite || "run")} · ${esc(fmtRunFor((r.secs | 0) * 1000))} · <span class="tr-ago" data-tr-end="${Date.parse(r.ended)}">${esc(fmtAgo(Date.parse(r.ended)))} ago</span></span>${
+      who || r.branch ? `<span class="tr-who">${[who, r.branch ? `<span class="tr-branch">${esc(r.branch)}</span>` : ""].filter(Boolean).join(" · ")}</span>` : ""}${
+      temps ? `<span class="tr-temps">${esc(temps)}</span>` : ""}${
+      r.log ? `<button type="button" class="tr-log" data-tr-host="${escAttr(h.name)}" data-tr-id="${escAttr(r.id)}" aria-label="${escAttr(`Log of ${r.suite} run, ${res.text}`)}">Log</button>` : ""}</li>`;
+  }).join("");
+  return `<details class="tr-hist" data-tr-hist="${escAttr(h.name)}"${open ? " open" : ""}><summary>Recent runs <span class="tr-sum">· ${runs.length}${failed ? ` · <span class="tr-nfail">${failed} failed</span>` : ""}</span></summary><ul aria-label="${escAttr(`Recent test runs on ${h.name}`)}">${li}</ul></details>`;
+}
+// The agent's last finished run on any host, when it has one from the last day.
+function lastRunOfAgent(a) {
+  let best = null;
+  for (const h of state.hosts || []) for (const r of testHistOf(h)) {
+    if (runIsAgent(r, a) && (!best || Date.parse(r.ended) > Date.parse(best.run.ended))) best = { host: h.name, run: r };
+  }
+  return best && Date.now() - Date.parse(best.run.ended) < 86400e3 ? best : null;
+}
+
+// The starting agent's row: "testing on kv-a (slot 2/4)", one line for all its runs; else its last finished run's
+// result ("tests failed on kv-a · 5m ago").
 function testingHtml(a) {
   const runs = runsOfAgent(a);
-  if (!runs.length) return "";
+  if (!runs.length) {
+    const l = lastRunOfAgent(a);
+    if (!l) return "";
+    const res = runResult(l.run);
+    return `<div class="why quiet tr-last ${res.cls}" title="${escAttr(`${l.run.suite} on ${l.host}, ${res.text}, ${fmtRunFor((l.run.secs | 0) * 1000)}${l.run.branch ? ", " + l.run.branch : ""}`)}">${
+      esc(`${l.run.suite || "tests"} ${res.cls === "pass" ? "passed" : res.cls === "stop" ? "stopped" : "failed"} on ${l.host} · ${fmtAgo(Date.parse(l.run.ended))} ago`)}</div>`;
+  }
   const t = "testing on " + runs.map((x) => `${x.host} (${runSlot(x.run)})`).join(", ");
   return `<div class="why quiet tr-on" title="${escAttr(runs.map((x) => `${x.run.suite} on ${x.host}, ${runSlot(x.run)}${x.run.branch ? ", " + x.run.branch : ""}`).join("; "))}">${esc(t)}</div>`;
 }
@@ -5389,6 +5448,68 @@ function syncParkSheet() {
   if (parked.sheet && !(history.state && history.state.park)) hideParkSheet();
 }
 
+// ---- A finished test run's log (#138 slice 4): the tail of its output that the VM keeps (256 KiB at most), read
+// through the hub from the VM, so only while the VM is up. Opens scrolled to the end, where a failure usually is.
+const runLog = { open: false, seq: 0 };
+function testRunOf(host, id) {
+  const h = (state.hosts || []).find((x) => x.name === host);
+  return testHistOf(h).find((r) => r.id === id) || null;
+}
+async function openRunLog(host, id) {
+  if (runLog.open) return;
+  const r = testRunOf(host, id);
+  runLog.open = true;
+  const seq = ++runLog.seq;
+  history.pushState({ runlog: true }, "", location.href);
+  const res = r ? runResult(r) : null;
+  $("tl-title").textContent = r ? `${r.suite || "Run"} on ${host}` : `Run on ${host}`;
+  $("tl-meta").textContent = r ? [res.text, fmtRunFor((r.secs | 0) * 1000), `${fmtAgo(Date.parse(r.ended))} ago`, r.branch, r.head && r.head.slice(0, 12)].filter(Boolean).join(" · ") : id;
+  $("tl-meta").className = "tl-meta" + (res ? " " + res.cls : "");
+  $("tl-pre").textContent = "";
+  $("tl-pre").hidden = true;
+  $("tl-status").textContent = "Loading the log…";
+  $("tl").classList.add("busy");
+  $("tl").hidden = false;
+  document.body.classList.add("sheet-open");
+  $("tl-close").focus();
+  let text = "", err = "";
+  try {
+    const res = await fetch(`/api/hosts/${encodeURIComponent(host)}/test-runs/${encodeURIComponent(id)}/log`, { signal: AbortSignal.timeout(25000) });
+    if (res.status === 401) { setUnauthorized(true); throw new Error(UNAUTHORIZED_MSG); }
+    if (!res.ok) {
+      let b = {};
+      try { b = await res.json(); } catch {}
+      const down = b.code === "host_unreachable" || b.code === "host_timeout" || ((state.hosts || []).find((x) => x.name === host) || {}).status === "down";
+      throw new Error(down ? `${host} is not answering (a test VM sleeps when idle): the log is kept on the VM, so it shows once the VM is up.` : b.message || res.statusText);
+    }
+    text = await res.text();
+  } catch (e) {
+    err = e && e.name === "TimeoutError" ? `${host} did not answer in time.` : e instanceof TypeError ? "Can't reach the hub — check the connection." : e.message;
+  }
+  if (!runLog.open || seq !== runLog.seq) return;
+  $("tl").classList.remove("busy");
+  if (err) { $("tl-status").textContent = err; return; }
+  $("tl-status").textContent = text ? `The last ${fmtBytes(new Blob([text]).size)} of what the suite printed.` : "The suite printed nothing.";
+  $("tl-pre").textContent = text;
+  $("tl-pre").hidden = !text;
+  const body = $("tl-body");
+  body.scrollTop = body.scrollHeight;
+}
+function hideRunLog() {
+  runLog.open = false;
+  $("tl").hidden = true;
+  $("tl").classList.remove("busy");
+  $("tl-pre").textContent = "";
+  document.body.classList.remove("sheet-open");
+}
+function closeRunLog() {
+  if (history.state && history.state.runlog) history.back();
+  else hideRunLog();
+}
+function syncRunLog() {
+  if (runLog.open && !(history.state && history.state.runlog)) hideRunLog();
+}
+
 async function submitResume() {
   if (parked.busy) return;
   const { id, host } = parked, e = parkEntry(id, host);
@@ -8884,6 +9005,7 @@ function route() {
   syncMark();
   syncRestart();
   syncParkSheet();
+  syncRunLog();
   syncParkAll();
   syncSplit();
   syncFresh();
@@ -9440,7 +9562,7 @@ function renderPeersList() {
     return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
       <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}${hostNeedsSignin(h.name) ? '<span class="pr-need" role="img" aria-label="an agent here is signed out" title="An agent on this host is signed out"></span>' : ""}</span>
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
-      ${wakeOf(h) ? `<span class="pr-meta">${esc(wakeWhat(wakeOf(h)))}</span>` : ""}${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) && !phHost(h.name).adopted ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>${wakeOf(h) ? `<div class="wk-line" data-wk-for="${esc(h.name)}">${wakeAction(h, wakeOf(h))}</div>` : ""}${runsHtml(h)}`;
+      ${wakeOf(h) ? `<span class="pr-meta">${esc(wakeWhat(wakeOf(h)))}</span>` : ""}${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) && !phHost(h.name).adopted ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>${wakeOf(h) ? `<div class="wk-line" data-wk-for="${esc(h.name)}">${wakeAction(h, wakeOf(h))}</div>` : ""}${runsHtml(h)}${histHtml(h)}`;
   }).join("");
   const nudge = rls.data && rls.data.needs_you && rls.data.todo
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
@@ -16335,6 +16457,20 @@ window.addEventListener("DOMContentLoaded", () => {
   $("pk-pin").addEventListener("click", togglePin);
   $("pk-rm").addEventListener("click", sendParkToRemoval);
   $("pk").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeParkSheet(); } });
+  // A finished test run's log, and the Recent runs lists' open state (kept across re-renders).
+  $("tl-close").addEventListener("click", closeRunLog);
+  $("tl").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.preventDefault(); closeRunLog(); } });
+  $("pr-items").addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest(".tr-log");
+    if (b) { ev.preventDefault(); openRunLog(b.dataset.trHost, b.dataset.trId); }
+  });
+  $("pr-items").addEventListener("toggle", (ev) => {
+    const d = ev.target;
+    if (!d.matches || !d.matches("details.tr-hist")) return;
+    runHistOpen[d.dataset.trHist] = d.open;
+    // The list's HTML says whether it is open: the next render writes it afresh with the new state.
+    $("pr-items")._html = null;
+  }, true);
   loadParked();
   setInterval(() => { if (!document.hidden) { loadParked(); loadArchived(); } }, 30000);
   $("row-transcript").addEventListener("click", rowMenuTranscript);

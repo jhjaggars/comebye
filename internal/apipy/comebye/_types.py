@@ -561,6 +561,7 @@ class Host(Record):
         "repo_damage": ("repo_damage", "[RepoDamage]"),
         "tmp": ("tmp", "Usage?"),
         "test_runs": ("test_runs", "[TestRun]"),
+        "test_history": ("test_history", "[TestRun]"),
     }
 
 
@@ -1107,6 +1108,14 @@ class TestRun(Record):
         "agent": ("agent", "str"),
         "from_": ("from", "str"),
         "expires": ("expires", "time"),
+        "ended": ("ended", "time"),
+        "secs": ("secs", "int"),
+        "rc": ("rc", "int?"),
+        "cpu_start": ("cpu_start", "int?"),
+        "nvme_start": ("nvme_start", "int?"),
+        "cpu_end": ("cpu_end", "int?"),
+        "nvme_end": ("nvme_end", "int?"),
+        "log": ("log", "bool"),
     }
 
 

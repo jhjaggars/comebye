@@ -79,6 +79,9 @@ type Options struct {
 	// TestRuns lists the test suites running on this host now (a test VM's
 	// busy slots), for its own entry in Hosts. Nil reports none.
 	TestRuns func() []state.TestRun
+	// TestHistory lists this host's last finished test runs, newest first, for
+	// its own entry in Hosts. Nil reports none.
+	TestHistory func() []state.TestRun
 }
 
 // Limits on what a peer may report about its repositories.
@@ -261,6 +264,9 @@ func (f *Fleet) Hosts() []state.HostStatus {
 	if f.opts.TestRuns != nil {
 		out[0].TestRuns = f.opts.TestRuns()
 	}
+	if f.opts.TestHistory != nil {
+		out[0].TestHistory = f.opts.TestHistory()
+	}
 	for _, p := range f.peerList() {
 		hs := p.hostStatus()
 		hs.VersionMismatch = f.opts.Version != "" && hs.Version != "" && hs.Version != f.opts.Version
@@ -322,6 +328,7 @@ func (f *Fleet) Run(ctx context.Context) {
 type peer struct {
 	repoDamage []state.RepoDamage // what the peer last reported about its repositories
 	testRuns   []state.TestRun    // the test runs the peer last reported (each dropped once it expires)
+	testDone   []state.TestRun    // its last finished runs, kept while it is down (a test VM sleeps)
 	tmp        *scratch.Usage     // and about its temporary directory
 	f          *Fleet
 	name       string
@@ -388,6 +395,7 @@ func (p *peer) hostStatus() state.HostStatus {
 	defer p.mu.Unlock()
 	hs := state.HostStatus{Name: p.name, Status: p.status, Agents: len(p.agents), NoAgents: p.noAgents, Class: p.class, Addr: p.addr, Version: p.version, RepoDamage: p.repoDamage, Tmp: p.tmp}
 	hs.TestRuns = testruns.Clip(p.testRuns, time.Now())
+	hs.TestHistory = p.testDone
 	if p.status != StatusOK {
 		hs.Error = p.lastErr
 	}
@@ -661,13 +669,14 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	own := ""
 	var damage []state.RepoDamage
 	var tmp *scratch.Usage
-	var runs []state.TestRun
+	var runs, done []state.TestRun
 	for _, h := range hosts {
 		if h.Local {
 			own = h.Name
 			damage = clipRepoDamage(h.RepoDamage)
 			tmp = clipTmp(h.Tmp)
 			runs = testruns.Clip(h.TestRuns, time.Now())
+			done = testruns.ClipHistory(h.TestHistory)
 		}
 	}
 	inst := p.instance()
@@ -699,6 +708,7 @@ func (p *peer) setAgents(agents []herdr.AgentInfo, hosts []state.HostStatus) {
 	p.repoDamage = damage
 	p.tmp = tmp
 	p.testRuns = runs
+	p.testDone = done
 	wasOK := p.status == StatusOK
 	transitions := p.tracker.Observe(kept, now)
 	p.agents = kept

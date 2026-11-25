@@ -111,9 +111,11 @@ var hostProxyOps = map[string]struct {
 	"signin-get":    {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "signin", "{id}"}, false},
 	"signin-code":   {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 30 * time.Second}, []string{"api", "signin", "{id}", "code"}, false},
 	"signin-cancel": {proxyOp{method: http.MethodDelete, timeout: 20 * time.Second}, []string{"api", "signin", "{id}"}, false},
-	"parked":        {proxyOp{method: http.MethodGet, query: []string{"all"}, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
-	"park-pin":      {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
-	"remove":        {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
+	// A finished test run's log on a test VM (the user's read, like repos).
+	"test-run-log": {proxyOp{method: http.MethodGet, timeout: 20 * time.Second}, []string{"api", "test-runs", "{id}", "log"}, false},
+	"parked":       {proxyOp{method: http.MethodGet, query: []string{"all"}, timeout: 20 * time.Second}, []string{"api", "parked"}, false},
+	"park-pin":     {proxyOp{method: http.MethodPost, maxBody: 1 << 10, timeout: 20 * time.Second}, []string{"api", "park", "pin"}, false},
+	"remove":       {proxyOp{method: http.MethodPost, maxBody: 64 << 10, timeout: 100 * time.Second}, []string{"api", "remove"}, true},
 	// stale-branch: whether a session's own remote branch is provably in the
 	// default branch, and (with delete) removing it from origin. Hub-only.
 	"stale-branch": {proxyOp{method: http.MethodPost, maxBody: 4 << 10, timeout: 70 * time.Second}, []string{"api", "stale-branch"}, true},
