@@ -8,10 +8,10 @@
 #        changed (what a pull request's pre-submit tier runs for this branch's changes against BASE, default origin/main:
 #        tools/ci/select.sh's smoke set plus the scripts for the touched paths, nothing for docs, full when it says all)
 #        EXTRA="peers sidepanel" adds scripts to smoke.
-# SHARD: I/N runs the I-th of N parts of the suite (rest or visual; CI runs rest as 6 jobs and each scheme's visual as 2). The parts are balanced by each script's
+# SHARD: I/N runs the I-th of N parts of the suite (rest or visual; CI runs rest as 7 jobs and each scheme's visual as 2). The parts are balanced by each script's
 #        time in tools/ci/browser-times.txt (name, seconds; a script not listed counts 30 s), biggest first into the lightest part,
 #        so every script is in exactly one part and a new script needs no list edited. Refresh the file from a run's
-#        "== script NAME: N s" lines when the parts drift apart. `tools/ci/browser.sh parts rest 6` prints the parts.
+#        "== script NAME: N s" lines when the parts drift apart. `tools/ci/browser.sh parts rest 7` prints the parts.
 # PARALLEL=N: rest only, its N parts at once on this machine (see below). SCHEME: dark (default) or light. Chrome comes from $CHROME or the first google-chrome or chromium on PATH.
 #
 # Any failed check fails the suite; there is no list of checks allowed to fail.
