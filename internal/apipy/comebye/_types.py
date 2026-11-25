@@ -1280,6 +1280,7 @@ class TodoRelease(Record):
         "dismissed_by": ("dismissed_by", "str"),
         "dismissed_at": ("dismissed_at", "time?"),
         "rollout_note": ("rollout_note", "str"),
+        "auto_rollout": ("auto_rollout", "str"),
         "dry_run": ("dry_run", "str"),
     }
 
