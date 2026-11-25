@@ -148,7 +148,13 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   `with_hub: true` (unless it is started with `-release-upgrade`). The rollout lists it after the hub as "upgraded
   with the hub", never starts it, and after the deploy waits up to 5 minutes for it to be back on the version; one
   that is not is skipped with the reason, not a stop. A hub already on the version is deployed again when such a
-  peer is behind. Without a deploy command the hub and these peers are listed as skipped, with why.
+  peer is behind. Without a deploy command the hub and these peers are listed as skipped, with why. A deploy
+  status is not decided at plan time when the release host is a peer (`-release-host`): the hub is planned as the
+  deploy, and its turn decides. A release host that cannot be asked is retried for 5 minutes, then the rollout stops
+  at the hub with the real error; one that has no command (`deploy_disabled`) stops it too. Every hub stop or skip
+  files the hub's To do, and while the job is stopped there the loop asks the release host again once a minute (for
+  a week) and retries the hub step once it answers with a command (`rollout.catchup`). A deploy that ran and failed
+  waits for **Retry**.
 - **Hosts the app may not upgrade** (no `-release-upgrade`) are listed as skipped, with why; they do not hold up
   the others.
 - **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then
@@ -172,6 +178,9 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`,
   `.finish`, `.catchup`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
   release's to-do item.
+- **Finishing:** a rollout with every host upgraded finishes `ok: all N hosts`. One that skipped a host finishes
+  `not ok: X of N hosts upgraded, K skipped (…)` (audited with ok=false); when the hub was skipped it adds "the hub
+  was not bumped", and the item's line says to bump it from its row in Peers (Roll out again never retries the hub).
 - Only the user starts one (user role and the page's CSRF token; the body repeats version, commit and the ordered
   hosts); there is no automatic option.
 

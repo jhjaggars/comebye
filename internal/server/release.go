@@ -425,6 +425,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 	}
 	out["dry_run"] = cfg.DryRun || s.remoteDry() // after the check: the release host reports its mode with it
 	var dep *deployStatus
+	var depErr error
 	if hosts == nil {
 		hosts = s.relHosts(ctx)
 		if it.Release.State == relTagged {
@@ -446,6 +447,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 			dctx, dcancel := context.WithTimeout(ctx, 8*time.Second)
 			if st, err := s.deployStatusFor(dctx); err != nil {
 				out["deploy_error"] = oneLine(err.Error(), 200)
+				depErr = err
 			} else if st.Enabled {
 				out["deploy"] = st
 				dep = &st
@@ -454,7 +456,7 @@ func (s *Server) releaseViewOf(ctx context.Context, r *http.Request, it Todo, re
 			dcancel()
 		}
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, hosts, ro, dep)
-		s.rolloutView(out, it, hosts, dep)
+		s.rolloutView(out, it, hosts, dep, depErr)
 	} else {
 		out["needs_you"], out["needs_text"] = s.relNeeds(it, ck, bd, nil, relRollout{}, nil)
 	}

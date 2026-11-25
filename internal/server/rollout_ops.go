@@ -93,6 +93,12 @@ func rolloutNoteOf(j Rollout) string {
 	switch j.State {
 	case roStopped:
 		if j.Stop != nil {
+			for _, st := range j.Plan {
+				if st.Host == j.Stop.Host && isHubStep(st) {
+					// Roll out again leaves the hub wave out: the rollout's Retry, or the hub's Bump hub, retries it.
+					return fmt.Sprintf("%s stopped at the hub (%s): %s: Retry the rollout, or bump the hub from its row in Peers", j.Version, j.Stop.Host, oneLine(j.Stop.Reason, 160))
+				}
+			}
 			return fmt.Sprintf("%s stopped at %s: %s", j.Version, j.Stop.Host, oneLine(j.Stop.Reason, 160))
 		}
 		return j.Version + " stopped"
@@ -102,6 +108,10 @@ func rolloutNoteOf(j Rollout) string {
 			if st.Phase == roSkipped {
 				skipped = append(skipped, st.Host)
 			}
+		}
+		if hubSkipped(j) {
+			// "Roll out again" never retries the hub: only its Bump hub does.
+			return fmt.Sprintf("%s not rolled out to the hub: %s skipped (%s): bump the hub from its row in Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))
 		}
 		if len(skipped) > 0 {
 			return fmt.Sprintf("%s rolled out; %s skipped (%s): roll it out again from Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))

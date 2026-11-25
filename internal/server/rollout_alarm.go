@@ -164,6 +164,25 @@ func (s *Server) alarmUpgrade(host string, rec upgrade.Record) {
 	}
 }
 
+// alarmHubStep files the hub's To do when the rollout's hub step stopped or
+// was skipped. A deploy that ran and failed is filed by alarmDeploy with its
+// output; this covers the rest (the deploy never started, the hub could not
+// be planned), which used to leave a quiet "skipped" and nothing else.
+func (s *Server) alarmHubStep(j Rollout, st RolloutStep) {
+	if s.todos == nil || j.Todo == "" {
+		return
+	}
+	rel, ok := s.todos.get(j.Todo)
+	if !ok || rel.Release == nil || rel.Release.Version != j.Version {
+		return
+	}
+	what := "The rollout's hub step (" + mdSafe(st.Host) + ")"
+	if st.Phase == roSkipped {
+		what = "Bumping the hub (" + mdSafe(st.Host) + ") in the rollout"
+	}
+	s.rolloutFailed(rel, rolloutAlarmTargetHub, fmt.Sprintf("%s:%s:%d", j.ID, st.Phase, st.Attempt), what, "", st.Detail, st.Output)
+}
+
 // lastLines is the last n non-blank lines of s.
 func lastLines(s string, n int) string {
 	var lines []string

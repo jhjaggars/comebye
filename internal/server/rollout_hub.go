@@ -243,6 +243,10 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 			st.TryingSince = &t
 		}
 		if refused || now.Sub(*st.TryingSince) >= e.startRetry {
+			// Asked again by the loop once the release host answers with a
+			// command (retryHub): it could not be reached, or had none. Any
+			// other refusal (a build that is not green, say) is the user's.
+			st.Reask = !refused || pf.code == "deploy_disabled"
 			e.fail(j, st, now, "could not start the deploy: "+oneLine(err.Error(), 300), "")
 			return false
 		}

@@ -329,8 +329,17 @@ func (s *Server) deployStatusFor(ctx context.Context) (deployStatus, error) {
 		return deployStatus{}, err
 	}
 	var st deployStatus
-	if code != http.StatusOK || json.Unmarshal(body, &st) != nil {
+	switch {
+	case code == http.StatusNotFound || code == http.StatusMethodNotAllowed:
 		return deployStatus{}, nil // too old to know the route: not enabled there
+	case code != http.StatusOK:
+		// Any other answer is a failure to ask, not "no command": the
+		// rollout's hub wave must not be skipped on it (hubDeploys).
+		var e struct{ Code, Message string }
+		_ = json.Unmarshal(body, &e)
+		return deployStatus{}, fmt.Errorf("%s answered %d to the deploy status: %s", host, code, oneLine(e.Code+" "+e.Message, 160))
+	case json.Unmarshal(body, &st) != nil:
+		return deployStatus{}, fmt.Errorf("%s sent a deploy status that is not one", host)
 	}
 	// a peer's text is shown, never trusted: bound it
 	st.Label, st.Command = oneLine(st.Label, 40), oneLine(st.Command, 80)

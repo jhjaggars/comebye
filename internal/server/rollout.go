@@ -107,6 +107,10 @@ type RolloutStep struct {
 	// stopped worker could not be started); the loop upgrades it when it is
 	// back, while the job is done (catchUp).
 	CatchUp bool `json:"catch_up,omitempty"`
+	// Reask: the hub step stopped because the release host could not be
+	// asked to start the deploy, or said it has no command; the loop asks it
+	// again and retries the step once it answers with one (retryHub).
+	Reask bool `json:"reask,omitempty"`
 	// Detail is the one line the card shows beside the phase (why it waits,
 	// why it was skipped, what failed).
 	Detail string `json:"detail,omitempty"`
@@ -206,6 +210,11 @@ type rolloutEngine struct {
 	// changed (started, paused, resumed, stopped, done, cancelled): the
 	// release item's note follows it.
 	onState func(Rollout)
+	// onHubTrouble is told when the hub's step stops or is skipped (also a
+	// step planned skipped): the hub files its To do (rollout_alarm.go).
+	onHubTrouble func(Rollout, RolloutStep)
+	// lastReask is when retryHub last asked the release host.
+	lastReask time.Time
 }
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
@@ -374,6 +383,11 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 			names[i] = "|" + st.Host
 		}
 	}
+	for _, st := range plan {
+		if isHubStep(st) && st.Phase == roSkipped && e.onHubTrouble != nil {
+			e.onHubTrouble(j, st)
+		}
+	}
 	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%q id=%s", version, strings.Join(names, " "), j.Canary, j.ID), by)
 	if e.onState != nil {
 		e.onState(j)
@@ -519,6 +533,10 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 		e.catchUp(ctx, j)
 		return
 	}
+	if ok && j.State == roStopped {
+		e.retryHub(ctx, j)
+		return
+	}
 	if !ok || j.State != roRunning {
 		return
 	}
@@ -615,6 +633,50 @@ func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout) {
 	}
 }
 
+// retryHub: a job stopped at the hub because the release host could not be
+// asked, or had no deploy command, retries the hub step once the release
+// host answers with a command (rollout.catchup). A deploy that ran and
+// failed is not retried by itself: that is the user's Retry.
+func (e *rolloutEngine) retryHub(ctx context.Context, j Rollout) {
+	now := e.now()
+	i := -1
+	for k, st := range j.Plan {
+		if st.Phase == roFailed && st.Mode == stepModeDeploy && st.Reask {
+			i = k
+		}
+	}
+	if i < 0 || j.Stop == nil || now.Sub(j.Stop.At) > rolloutCatchUpFor || now.Sub(e.lastReask) < e.catchUpEvery {
+		return
+	}
+	e.lastReask = now
+	cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)
+	ds, err := e.ops.DeployStatus(cctx)
+	cancel()
+	if err != nil || !ds.Enabled || (ds.Record != nil && ds.Record.State == depRunning) {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cur, ok := e.load()
+	if !ok || cur.ID != j.ID || cur.Rev != j.Rev || cur.State != roStopped {
+		return
+	}
+	st := &cur.Plan[i]
+	*st = RolloutStep{Host: st.Host, Wave: st.Wave, Mode: st.Mode, Phase: roPending, Attempt: st.Attempt + 1, Detail: "the release host answers: retrying the deploy"}
+	cur.State, cur.Stop, cur.Note = roRunning, nil, "retrying the hub: the release host answers"
+	if err := e.save(&cur); err != nil {
+		log.Printf("rollout: %v", err)
+		return
+	}
+	e.emit(cur, st.Host, "rollout.catchup", true, "the release host answers with a deploy command: retrying the hub", "comebye")
+	if e.onState != nil {
+		e.onState(cur)
+	}
+}
+
+// isHubStep: the hub's own step (not a peer upgraded with it).
+func isHubStep(st RolloutStep) bool { return st.Wave == waveHub && st.Mode != stepModeWithHub }
+
 func sameJob(a, b Rollout) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
@@ -657,11 +719,16 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 				ok = append(ok, st.Host)
 			}
 		}
-		detail := fmt.Sprintf("ok %d of %d hosts", len(ok), len(j.Plan))
+		// A skipped host is not an upgraded one: a rollout that skipped any
+		// (above all the hub) is finished, but not ok, and says so.
+		detail := fmt.Sprintf("ok: all %d hosts", len(j.Plan))
 		if len(skipped) > 0 {
-			detail += fmt.Sprintf(", %d skipped (%s)", len(skipped), strings.Join(skipped, ", "))
+			detail = fmt.Sprintf("not ok: %d of %d hosts upgraded, %d skipped (%s)", len(ok), len(j.Plan), len(skipped), strings.Join(skipped, ", "))
+			if hubSkipped(*j) {
+				detail += "; the hub was not bumped"
+			}
 		}
-		e.emit(*j, "", "rollout.finish", true, detail+" elapsed="+now.Sub(j.Started).Round(time.Second).String(), "comebye")
+		e.emit(*j, "", "rollout.finish", len(skipped) == 0, detail+" elapsed="+now.Sub(j.Started).Round(time.Second).String(), "comebye")
 		return false
 	}
 	st := &j.Plan[i]
@@ -973,10 +1040,23 @@ func (e *rolloutEngine) finishStep(j *Rollout, st *RolloutStep, h relHost, now t
 	}
 }
 
+// hubSkipped: the job's hub step was skipped (the hub was not upgraded).
+func hubSkipped(j Rollout) bool {
+	for _, st := range j.Plan {
+		if isHubStep(st) && st.Phase == roSkipped {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *rolloutEngine) skip(j *Rollout, st *RolloutStep, now time.Time, why string) {
 	t := now
 	st.Phase, st.Done, st.Detail = roSkipped, &t, why
 	e.emit(*j, st.Host, "rollout.skip", true, why, "comebye")
+	if isHubStep(*st) && e.onHubTrouble != nil {
+		e.onHubTrouble(*j, *st)
+	}
 }
 
 func (e *rolloutEngine) fail(j *Rollout, st *RolloutStep, now time.Time, why, output string) {
@@ -984,6 +1064,9 @@ func (e *rolloutEngine) fail(j *Rollout, st *RolloutStep, now time.Time, why, ou
 	j.State, j.Note = roStopped, "stopped at "+st.Host
 	j.Stop = &RolloutStop{Host: st.Host, Reason: oneLine(why, 400), At: now}
 	e.emit(*j, st.Host, "rollout.stop", false, why, "comebye")
+	if isHubStep(*st) && e.onHubTrouble != nil {
+		e.onHubTrouble(*j, *st)
+	}
 }
 
 // emit writes one audit entry carrying the rollout id and the release item.

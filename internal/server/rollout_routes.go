@@ -101,7 +101,7 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "deploy_running", "a deploy is running: wait for it to finish")
 		return
 	}
-	plan, err := rolloutPlan(hosts, b.Hosts, s.cfg.Release.Canary, b.Hub, derr == nil && dst.Enabled)
+	plan, err := rolloutPlan(hosts, b.Hosts, s.cfg.Release.Canary, b.Hub, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
 	if err != nil {
 		relErr(w, http.StatusConflict, "bad_plan", err.Error())
 		return
@@ -183,10 +183,42 @@ func (s *Server) rolloutControl(op string, w http.ResponseWriter, r *http.Reques
 	writeJSON(w, map[string]any{"rollout": job})
 }
 
+// hubDeploys: the hub wave is the release host's deploy command (Bump hub).
+// remote: the release host is a peer (-release-host).
+//
+// What a peer says about its command at plan time is not the last word.
+// Taking a failed or odd answer for "no command" is how v0.5.57's Roll out
+// to all skipped the hub: one status call to the release host failed while
+// the plan was made, the hub and the peers it carries went into the plan
+// already skipped ("no deploy command"), and the rollout finished on the
+// peers alone. So with -release-host set the hub is planned as a deploy
+// (unless it upgrades itself as an ordinary host), and its turn decides: a
+// release host that cannot be asked is retried, then stops the rollout with
+// the real error; one that has no command (deploy_disabled) stops it too.
+// Either way at the hub, where it shows, and never as a skip.
+func hubDeploys(hosts []relHost, st deployStatus, err error, remote bool) bool {
+	if err == nil && st.Enabled {
+		return true
+	}
+	if !remote {
+		return st.Enabled // this host's own command: known for sure
+	}
+	for _, h := range hosts {
+		if h.Hub && hostUp(h) && h.Enabled {
+			return false
+		}
+	}
+	return true
+}
+
 // rolloutView adds the rollout to a tagged release's view: the job when it
 // is this release's, and otherwise the plan the confirm would show.
-func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost, dep *deployStatus) {
-	deployOn, label := dep != nil && dep.Enabled, "Bump hub"
+func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost, dep *deployStatus, derr error) {
+	var st deployStatus
+	if dep != nil {
+		st = *dep
+	}
+	deployOn, label := hubDeploys(hosts, st, derr, s.cfg.Release.Host != ""), "Bump hub"
 	if dep != nil && dep.Label != "" {
 		label = dep.Label
 	}
