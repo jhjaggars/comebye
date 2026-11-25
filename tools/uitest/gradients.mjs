@@ -180,12 +180,25 @@ const band = async (page, y, h = 24) => {
   const vp = page.viewportSize();
   return page.screenshot({ clip: { x: 0, y, width: vp.width, height: h }, animations: "disabled" });
 };
+// How many pixels differ by more than 2 levels in a channel: anti-aliasing can shift an edge by a level when a layer
+// changes, a fade over a different colour differs by far more (10+ levels in its top rows). Decoded in the page.
+const differing = (page, a, b) => page.evaluate(async ([a, b]) => {
+  const px = async (s) => {
+    const bmp = await createImageBitmap(new Blob([Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0))], { type: "image/png" }));
+    const c = new OffscreenCanvas(bmp.width, bmp.height), x = c.getContext("2d"); x.drawImage(bmp, 0, 0);
+    return x.getImageData(0, 0, bmp.width, bmp.height).data;
+  };
+  const [p, q] = [await px(a), await px(b)];
+  let n = 0;
+  for (let i = 0; i < p.length; i += 4) if (Math.max(Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2])) > 2) n++;
+  return n;
+}, [a.toString("base64"), b.toString("base64")]);
 const sameWithout = async (page, y, h) => {
   const a = await band(page, y, h);
   const tag = await page.addStyleTag({ content: NOPSEUDO });
   const b = await band(page, y, h);
   await tag.evaluate((e) => e.remove());
-  return a.equals(b);
+  return (await differing(page, a, b)) === 0;
 };
 const barBottom = (page) => page.evaluate(() => {
   const scr = [...document.querySelectorAll(".screen:not([hidden]), #st-screen:not([inert]), #list")].find((e) => e.checkVisibility()) || document.body;
