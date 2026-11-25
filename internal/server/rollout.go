@@ -101,13 +101,13 @@ type RolloutStep struct {
 	// TryingSince the retry window of a start that could not be sent.
 	OfflineSince *time.Time `json:"offline_since,omitempty"`
 	TryingSince  *time.Time `json:"trying_since,omitempty"`
+	Attempt      int        `json:"attempt,omitempty"`
 	// BusySince is when the step first found its host busy (relHost.Busy);
 	// saved, so a hub restart does not start the wait again.
 	BusySince *time.Time `json:"busy_since,omitempty"`
 	// BusyNote is how long the step waited for its busy host, or that it
 	// went ahead at the limit; the finished step keeps it in its detail.
 	BusyNote string `json:"busy_note,omitempty"`
-	Attempt   int        `json:"attempt,omitempty"`
 	// Woke: the host was stopped and this rollout started it (issue #66).
 	Woke bool `json:"woke,omitempty"`
 	// Mode "deploy": the step is the hub wave's deploy command, not an
