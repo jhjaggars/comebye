@@ -76,3 +76,4 @@ quietmark 2
 releaseauto 2
 reportage 2
 versionbanner 1
+vibrate 12

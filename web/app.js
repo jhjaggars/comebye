@@ -11639,6 +11639,31 @@ function sxCard(p) {
     <div class="sx-acts"><button type="button" class="btn sm" data-sx="rename"${sx.busy ? " disabled" : ""}>Rename</button><button type="button" class="btn sm danger" data-sx="remove"${sx.busy ? " disabled" : ""}>Remove</button></div></div>`;
 }
 
+// Vibrate (#135 slice 6): a short buzz on a few key actions, Android only. Safari has no navigator.vibrate, so
+// the setting is shown only where it exists. Off by default: native apps do not buzz on a plain tap either.
+// haptic(ms) is the one entry point (Send, Answer, tab switches, long press, pull to refresh); it must run inside a
+// user gesture, and does nothing with the setting off or without the API.
+const VIBRATE_KEY = "comebye-vibrate";
+const VIBRATES = [
+  { id: "", name: "Off", sub: "the default" },
+  { id: "on", name: "On", sub: "a short buzz on Send, Answer and tab switches" },
+];
+// A touch screen with the API: desktop Chrome and Firefox have navigator.vibrate too, and it does nothing there.
+const vibrateOK = () => typeof navigator !== "undefined" && typeof navigator.vibrate === "function" && !!window.matchMedia?.("(pointer: coarse)").matches;
+const vibrateOn = () => lsGet(VIBRATE_KEY) === "on";
+function vibrateSet(v) { if (v === "on") lsSet(VIBRATE_KEY, "on"); else { try { localStorage.removeItem(VIBRATE_KEY); } catch {} } }
+function haptic(ms = 8) {
+  if (!vibrateOK() || !vibrateOn()) return;
+  try { navigator.vibrate(ms); } catch {}
+}
+function sxTouch() {
+  if (!vibrateOK()) return "";
+  return `<h3 class="sx-grp">Touch</h3>
+    <div class="sx-field"><div class="sx-lbl" id="sx-vibrate-lbl">Vibrate</div>
+      ${sxRadios("vibrate", "sx-vibrate-lbl", VIBRATES, vibrateOn() ? "on" : "")}
+      <p class="sx-note">A short buzz when you send, answer, switch a tab, long press or pull to refresh.</p></div>`;
+}
+
 // A phone on its side: index.html's "phone landscape" rules use the same query.
 const PHONE_LANDSCAPE = "(pointer: coarse) and (max-height: 500px) and (min-width: 601px)";
 
@@ -11684,6 +11709,7 @@ function sxAppearance() {
     <div class="sx-field"><div class="sx-lbl" id="sx-opentools-lbl">Open tool run lists by default</div>
       ${sxRadios("opentools", "sx-opentools-lbl", CT.ONOFF, CT.openTools() ? "on" : "")}
       <p class="sx-note">Sets only how a line first appears. One you open or close yourself stays as you left it. The preview above follows.</p></div>
+    ${sxTouch()}
     <h3 class="sx-grp">Theme and font</h3>
     <div class="sx-field sx-rows">
       <button type="button" class="sx-row" id="sx-row-theme" data-sx="theme" aria-haspopup="menu"><span class="sx-rl">Theme</span><span class="sx-rv" id="sx-theme-val">${esc(themeLabel())}</span><span class="sx-chev" aria-hidden="true">›</span></button></div>
@@ -11730,7 +11756,7 @@ function sxFitPreview() {
 }
 
 // The choice for a radio group by its kind ("col", "rs", "sp"): the list, and how to save it.
-const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], depth: [CT.DEPTHS, CT.depthSet], font: [CT.FONTS, CT.fontSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)] });
+const SX_PREFS = () => ({ col: [CT.COLS, CT.colSet], rs: [CT.RSS, CT.rsSet], sp: [CT.SPS, CT.spSet], wrap: [CT.WRAPS, CT.wrapSet], depth: [CT.DEPTHS, CT.depthSet], font: [CT.FONTS, CT.fontSet], openthink: [CT.ONOFF, (v) => CT.openPart("think", !!v)], opentools: [CT.ONOFF, (v) => CT.openPart("tools", !!v)], vibrate: [VIBRATES, vibrateSet] });
 function sxPick(kind, val) {
   const p = SX_PREFS()[kind];
   if (!p) return;
@@ -11777,7 +11803,7 @@ function renderSettings() {
   const focus = document.activeElement && document.activeElement.id;
   el.innerHTML = h;
   const f = (sx.rename && $("sx-rename")) || (focus && $(focus));
-  if (focus && /^sx-(col|rs|sp|wrap|openthink|opentools)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
+  if (focus && /^sx-(col|rs|sp|wrap|openthink|opentools|vibrate)-/.test(focus)) { const g = $(focus) && $(focus).closest(".sx-radios"), c = g && g.querySelector('.sx-radio[aria-checked="true"]'); if (c) c.focus({ preventScroll: true }); }
   sxFitPreview();
   if (f && f !== document.activeElement && (sx.rename || focus === "sx-name")) { f.focus({ preventScroll: true }); if (sx.rename) f.select(); }
 }
@@ -11890,7 +11916,7 @@ function settingsClick(ev) {
   if (!b) return;
   const id = b.closest("[data-id]") ? b.closest("[data-id]").dataset.id : "";
   switch (b.dataset.sx) {
-    case "col": case "rs": case "sp": case "wrap": case "depth": case "font": case "openthink": case "opentools": sxPick(b.dataset.sx, b.dataset.val); break;
+    case "col": case "rs": case "sp": case "wrap": case "depth": case "font": case "openthink": case "opentools": case "vibrate": sxPick(b.dataset.sx, b.dataset.val); if (b.dataset.sx === "vibrate") haptic(); break;
     case "theme": sxOpenPanel(b.dataset.sx); break;
     case "reset": sxReset(); break;
     case "rename": sx.rename = id; sx.confirm = ""; sx.msg = ""; renderSettings(); break;
