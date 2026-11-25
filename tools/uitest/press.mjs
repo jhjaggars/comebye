@@ -6,7 +6,7 @@
 // highlight stays on a card after a tap on a device without hover (every :hover rule sits in @media (hover: hover)).
 //
 //   node press.mjs BASE OUT_DIR      (env: SCHEME; COMEBYE_BIN + COMEBYE_STATE_DIR to publish a page for the Pages card)
-import { launch } from "./lib.mjs";
+import { launch, makeCheck } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,11 +20,7 @@ const { browser, page } = await launch({ dark });
 page.setDefaultTimeout(8000);
 const errors = [];
 page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
-let failed = 0;
-async function check(name, fn) {
-  try { await fn(); console.log("ok   " + name); }
-  catch (e) { failed++; console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
-}
+const check = makeCheck();
 const post = (p, body) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
 // Seed: a to-do (for the To do rows) and, when the CLI is at hand, a page (for the Pages card).
@@ -307,21 +303,50 @@ await check("scroll: a swipe over the rows never draws the layer, and the list s
   if (y1 === y0) throw new Error("the page did not scroll (scrollY stayed " + y0 + ")");
 });
 
-await check("scroll: inside a scroller a held row waits ~60 ms before the layer shows", () => gesture(async () => {
-  const cur = await follow(await page.locator(".agent").nth(1).elementHandle());
-  await cur.center();
-  await page.waitForTimeout(150);
-  const b = await cur.box();
-  await scrolled();
-  await touch("touchStart", b.x + 60, b.y + b.height / 2);
-  const early = await cur.read(); // right after the touch: not yet
-  await page.waitForTimeout(120);
-  const late = await cur.read();
-  await touch("touchEnd");
+// Not timed from here: on a loaded runner a read "right after the touch" can land after the 60 ms. The page itself notes,
+// in the same pointerdown dispatch as the press helper (a capture listener added after the app's), whether the helper
+// held the layer back, and then when the layer showed (press.at). Later is fine; sooner than PRESS_DELAY is not.
+await check("scroll: inside a scroller a held row waits ~60 ms before the layer shows", async () => {
+  // One gesture: touch the second row, hold until the layer shows (however slow the runner), release. Returns what the
+  // page noted, or { scrolled } when a scroll ended the press on purpose (a poll's redraw can make one: scroll anchoring).
+  const hold = async () => {
+    const box = await page.evaluate(async () => {
+      const el = document.querySelectorAll(".agent")[1];
+      el.scrollIntoView({ block: "center" });
+      // Wait for every scroll to stand still (a smooth scroll runs on for a while): 5 frames with no scroll event.
+      let quiet = 0;
+      const onScroll = () => { quiet = 0; };
+      addEventListener("scroll", onScroll, { capture: true, passive: true });
+      for (let i = 0; i < 120 && quiet < 5; i++) { await new Promise((r) => requestAnimationFrame(r)); quiet++; }
+      removeEventListener("scroll", onScroll, { capture: true });
+      const r = el.getBoundingClientRect();
+      window.__down = null; window.__scrolledSince = false;
+      addEventListener("scroll", () => { window.__scrolledSince = true; }, { capture: true, passive: true, once: true });
+      addEventListener("pointerdown", (ev) => {
+        if (ev.pointerType !== "touch") return;
+        const p = press.el;
+        window.__down = { t: performance.now(), held: !!press.timer, pressed: !!p && p.classList.contains("is-pressed"), row: !!p && p.classList.contains("agent") };
+      }, { capture: true, once: true });
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    });
+    await touch("touchStart", box.x + 60, box.y + box.height / 2);
+    try {
+      return await page.waitForFunction(() => {
+        if (window.__down && press.el && press.el.classList.contains("is-pressed") && !press.timer) return { ...window.__down, shownAfter: press.at - window.__down.t, delay: PRESS_DELAY };
+        if (window.__down && !press.el && window.__scrolledSince) return { scrolled: true, down: window.__down };
+        return null;
+      }, null, { timeout: 4000 }).then((h) => h.jsonValue())
+        .catch(async () => ({ timedOut: true, seen: await page.evaluate(() => ({ down: window.__down, scrolled: window.__scrolledSince, el: !!press.el, timer: !!press.timer })) }));
+    } finally { await touch("touchEnd"); }
+  };
+  let got = await hold();
+  if (got.scrolled) { console.log("     (a scroll during the hold cancelled it, as it should: once more)"); await page.waitForTimeout(300); got = await hold(); }
   await page.waitForTimeout(400);
-  if (early.pressed) throw new Error("shown at once inside a scroller");
-  if (!shown(late)) throw new Error("not shown after 120 ms: " + JSON.stringify(late));
-}));
+  if (got.timedOut || got.scrolled) throw new Error("the layer never showed while held: " + JSON.stringify(got));
+  if (!got.row) throw new Error("the touch did not land on the row: " + JSON.stringify(got));
+  if (!got.held || got.pressed) throw new Error("shown at once inside a scroller: " + JSON.stringify(got));
+  if (got.shownAfter < got.delay - 5) throw new Error(`shown ${got.shownAfter.toFixed(0)} ms after the touch, before the ${got.delay} ms delay`);
+});
 
 await check("scroll: a quick tap inside a scroller still shows the layer for its minimum", () => gesture(async () => {
   const cur = await follow(await page.locator(".agent").nth(1).elementHandle());
@@ -413,7 +438,7 @@ await check("hover: with a mouse (1280 px, hover: hover) a card still lights up 
   } finally { await d.browser.close(); }
 });
 
-if (errors.length) { failed++; console.log("FAIL page errors:\n     " + errors.join("\n     ")); }
+if (errors.length) { check.failed++; console.log("FAIL page errors:\n     " + errors.join("\n     ")); }
 await browser.close();
-console.log(failed ? `press: ${failed} failed` : "press: all passed");
-process.exit(failed ? 1 : 0);
+console.log(check.failed ? `press: ${check.failed} failed` : "press: all passed");
+process.exit(check.failed ? 1 : 0);
