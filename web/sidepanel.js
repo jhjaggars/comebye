@@ -599,23 +599,10 @@
       renderBar();
       return;
     }
-    // Not rebuilt on every poll (#139 slice 5): the diff is patched (app.js patchHTML), so a poll that changed nothing
-    // leaves every node, and a file's fold, a press on a hunk's button and the focus ride through it. The document is
-    // drawn again only when what it shows changed (afterDoc adds the headings' anchors, which a patch would take off).
-    // A Page or the Status tab that was here goes first.
-    if (body._pgl || body.querySelector(":scope > #sp-st, :scope > .sp-pgv")) { body.replaceChildren(); body._doc = ""; }
     body._pgl = "";
-    if (st.tab === "doc") {
-      const html = docHtml(), key = html + "\u0000" + (st.pin ? st.pin.at + "|" + st.pin.path + "|" + st.pin.section : "");
-      if (body._doc !== key || !body.firstElementChild) {
-        body._doc = key;
-        body.innerHTML = html;
-        afterDoc(opts);
-      }
-    } else {
-      body._doc = "";
-      window.patchHTML(body, diffHtml());
-    }
+    body.innerHTML = st.tab === "doc" ? docHtml() : diffHtml();
+    if (st.tab === "doc") afterDoc(opts);
+    else if (opts.keepScroll) body.scrollTop = top;
     if (opts.keepScroll) body.scrollTop = top;
     renderBar();
   }

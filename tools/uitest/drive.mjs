@@ -421,7 +421,13 @@ await check("remove page: a gone row is safe, says it only clears the record, an
   await noOverflow();
   await page.locator('#rv-list [data-act="remove"]').first().click();
   await page.locator('#rv-list [data-act="confirm-yes"]').first().click();
-  await page.waitForFunction(() => /removed|Removed/.test(document.querySelector("#rv-list")?.innerText || "") || !document.querySelector("#rv-list")?.innerText.includes("smoke/x"), null, { timeout: 5000 });
+  // The row shows how it went (done, with its result), or a later reload of the list has dropped it. It used to wait for
+  // "removed" or for the row to go: this result says "only the record was cleared", so it passed only when some other
+  // reload of the list came within 5 s (1 in 10 on the VM it did not).
+  await page.waitForFunction((id) => /removed|Removed/.test(document.querySelector("#rv-list")?.innerText || "") || !document.querySelector("#rv-list")?.innerText.includes("smoke/x")
+    || !!document.querySelector(`#rv-list .rv-item.done[data-id="${id}"] .rv-result.ok`), gone.id, { timeout: 5000 });
+  const res = await page.evaluate((id) => { const r = document.querySelector(`#rv-list .rv-item[data-id="${id}"] .rv-result`); return r ? r.innerText : ""; }, gone.id);
+  if (res && !/only the record was cleared/.test(res)) throw new Error("the result does not say only the record was cleared: " + res);
   if (confirms.length !== 1 || confirms[0].ids?.[0] !== gone.id) throw new Error("confirm " + JSON.stringify(confirms));
   await page.unroute(/\/api\/removals(\/confirm)?$/);
 });
