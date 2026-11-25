@@ -181,7 +181,8 @@ await check("press: a held blocked row shows the layer over its edge glow", asyn
   await page.screenshot({ path: `${out}/press-${tag}-blocked-glow.png`, clip: { x: 0, y: Math.max(0, b.y - 8), width: page.viewportSize().width, height: b.height + 16 } }).catch(() => {});
   await touch("touchEnd");
   await page.waitForTimeout(450);
-  const end = await layer(h);
+  // The list may have re-rendered the row meanwhile (a poll), so read the row as it is now, not the old node.
+  const end = await layer(await page.locator(".agent.blocked").first().elementHandle());
   if (!shown(l)) throw new Error("no layer: " + JSON.stringify(l));
   if (!l.img.includes("linear-gradient(90deg")) throw new Error("the glow went under the layer: " + l.img);
   if (end.img !== rest.img) throw new Error(`the row did not come back as it was: ${rest.img} -> ${end.img}`);
