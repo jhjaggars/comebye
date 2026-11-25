@@ -206,6 +206,11 @@ if want taptargets; then
 fi
 # Vibrate (#135): a Settings choice, off by default, shown only on a touch screen with navigator.vibrate (Android).
 if want vibrate; then node vibrate.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Keyed redraws (#139 slice 4): a poll patches the agent list, so a row stays the same element; focus, scroll and a press across a redraw hold.
+if want keyed; then
+  fixture_hub keyed 283
+  node keyed.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
+fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

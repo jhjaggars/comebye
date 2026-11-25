@@ -744,3 +744,147 @@ console.log(JSON.stringify(bad));
 		t.Fatalf("sinGone gave the wrong answer for: %s", out)
 	}
 }
+
+// patchHTML (#139 slice 4) redraws a panel by patching it: a child keeps its node when its key (or, with no key, its tag
+// and place) matches, and only what came, went or moved is added, removed or moved. The helper is cut out of app.js and
+// run in Node on a small stand-in DOM (no browser), so the app's own code is what is checked: reorder, insert, remove,
+// identity kept (also for a row that moved to another group), the press layer's classes kept, and a typed value kept.
+func TestPatchHTMLKeepsNodes(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var js strings.Builder
+	for _, name := range []string{"PATCH_KEEP", "PATCH_KEYS", "patchKey", "patchPool", "patchKids", "patchRun", "patchNode"} {
+		b := regexp.MustCompile(`\n(const ` + name + ` = .*;)\n`).Find(src)
+		if b == nil {
+			b = regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)
+		}
+		if b == nil {
+			t.Fatalf("app.js has no %s", name)
+		}
+		js.Write(b)
+	}
+	js.WriteString(`
+// The stand-in DOM: just what patchKids and patchNode use. moves counts insertBefore calls on nodes already in a parent.
+let moves = 0;
+const doc = { activeElement: null };
+class N {
+  constructor(type, tag) { this.nodeType = type; this.localName = tag; this.childNodes = []; this.parentNode = null; this.ownerDocument = doc; this.attrs = new Map(); this.nodeValue = null; }
+  get attributes() { return [...this.attrs].map(([name, value]) => ({ name, value })); }
+  getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
+  setAttribute(k, v) { this.attrs.set(k, String(v)); }
+  removeAttribute(k) { this.attrs.delete(k); }
+  hasAttribute(k) { return this.attrs.has(k); }
+  get classList() { const c = (this.getAttribute("class") || "").split(/\s+/); return { contains: (x) => c.includes(x) }; }
+  get textContent() { return this.nodeType === 3 ? this.nodeValue : this.childNodes.map((c) => c.textContent).join(""); }
+  get isConnected() { return true; }
+  contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
+  removeChild(n) { this.childNodes.splice(this.childNodes.indexOf(n), 1); n.parentNode = null; return n; }
+  insertBefore(n, ref) {
+    if (n.parentNode) { if (n.parentNode === this) moves++; n.parentNode.removeChild(n); }
+    const i = ref ? this.childNodes.indexOf(ref) : this.childNodes.length;
+    this.childNodes.splice(i, 0, n); n.parentNode = this; return n;
+  }
+}
+const h = (tag, attrs, ...kids) => { const n = new N(1, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); for (const c of kids) n.insertBefore(typeof c === "string" ? Object.assign(new N(3, "#text"), { nodeValue: c }) : c, null); moves = 0; return n; };
+const row = (id, text, cls = "agent idle") => h("div", { class: cls, "data-id": id }, h("span", { class: "name" }, text));
+const list = (...rows) => h("div", {}, ...rows);
+const ids = (el) => el.childNodes.map((c) => c.getAttribute("data-id") || c.localName).join(",");
+const got = {};
+
+// Identity kept: a poll that changes one row's text and class keeps every row the same node.
+{
+  const el = list(row("a", "A"), row("b", "B"), row("c", "C"));
+  const [a, b, c] = el.childNodes, bText = b.childNodes[0].childNodes[0];
+  patchKids(el, list(row("a", "A"), row("b", "B2", "agent blocked"), row("c", "C")));
+  got.identity = el.childNodes[0] === a && el.childNodes[1] === b && el.childNodes[2] === c && b.childNodes[0].childNodes[0] === bText;
+  got.updated = b.textContent + "|" + b.getAttribute("class");
+  got.identityMoves = moves;
+}
+// Reorder: the last row moves to the top; the others stay put, and only one node moves.
+{
+  const el = list(row("a", "A"), row("b", "B"), row("c", "C"), row("d", "D"));
+  const before = [...el.childNodes];
+  patchKids(el, list(row("d", "D"), row("a", "A"), row("b", "B"), row("c", "C")));
+  got.reorder = ids(el);
+  got.reorderSame = el.childNodes.every((n) => before.includes(n));
+  got.reorderMoves = moves;
+}
+// Insert: a new row between two kept ones.
+{
+  const el = list(row("a", "A"), row("c", "C"));
+  const [a, c] = el.childNodes;
+  patchKids(el, list(row("a", "A"), row("b", "B"), row("c", "C")));
+  got.insert = ids(el);
+  got.insertKept = el.childNodes[0] === a && el.childNodes[2] === c && el.childNodes[1].textContent === "B";
+}
+// Remove: the gone row goes, the rest stay the same nodes.
+{
+  const el = list(row("a", "A"), row("b", "B"), row("c", "C"));
+  const [a, , c] = el.childNodes;
+  patchKids(el, list(row("a", "A"), row("c", "C")));
+  got.remove = ids(el);
+  got.removeKept = el.childNodes[0] === a && el.childNodes[1] === c;
+}
+// Rows with no key match by tag and place.
+{
+  const el = list(h("p", {}, "one"), h("p", {}, "two"));
+  const [p1, p2] = el.childNodes;
+  patchKids(el, list(h("p", {}, "uno"), h("p", {}, "dos"), h("ul", {})));
+  got.loose = el.childNodes[0] === p1 && el.childNodes[1] === p2 && el.textContent === "unodos" && el.childNodes[2].localName === "ul";
+}
+// The same key with another tag is another node.
+{
+  const el = list(h("div", { "data-id": "x" }, "div"));
+  const d = el.childNodes[0];
+  patchKids(el, list(h("a", { "data-id": "x" }, "link")));
+  got.tag = el.childNodes[0] !== d && el.childNodes[0].localName === "a";
+}
+// The press layer and the return mark are the app's: they stay on a kept row, and stale attributes go.
+{
+  const el = list(row("a", "A", "agent idle is-pressed was-open"));
+  const a = el.childNodes[0];
+  a.setAttribute("style", "animation-delay: -200ms"); a.setAttribute("aria-busy", "true");
+  patchKids(el, list(row("a", "A", "agent working")));
+  got.keep = a.getAttribute("class") + "|" + a.getAttribute("style") + "|" + a.hasAttribute("aria-busy");
+}
+// A typed value stays while the markup's value is the same, and follows it when the markup changes it.
+{
+  const el = list(h("input", { id: "q", value: "x" }));
+  const q = el.childNodes[0];
+  q.value = "typed";
+  patchKids(el, list(h("input", { id: "q", value: "x" })));
+  got.typed = q.value;
+  patchKids(el, list(h("input", { id: "q", value: "y" })));
+  got.changed = q.value + "|" + (el.childNodes[0] === q);
+}
+// A row that moves to another group (its status changed) is the same node in its new place.
+{
+  const sec = (key, ...rows) => h("section", { "data-key": key }, ...rows);
+  const el = list(sec("idle", row("a", "A"), row("b", "B")), sec("blocked", row("c", "C")));
+  const [a, b] = el.childNodes[0].childNodes, c = el.childNodes[1].childNodes[0];
+  patchKids(el, list(sec("idle", row("a", "A")), sec("blocked", row("b", "B", "agent blocked"), row("c", "C"))), patchPool(el));
+  const [s1, s2] = el.childNodes;
+  got.across = ids(s1) + "/" + ids(s2) + "|" + (s1.childNodes[0] === a && s2.childNodes[0] === b && s2.childNodes[1] === c) + "|" + b.getAttribute("class");
+  // and the other way round: the group it lands in comes first
+  patchKids(el, list(sec("blocked", row("a", "A", "agent blocked"), row("b", "B", "agent blocked"), row("c", "C")), sec("idle")), patchPool(el));
+  got.across2 = ids(el.childNodes[0]) + "|" + (el.childNodes[0].childNodes[0] === a && el.childNodes[0].childNodes[1] === b && el.childNodes[0].childNodes[2] === c);
+}
+// The longest run already in order stays.
+got.run = patchRun([3, 0, 1, 4, 2, 5]).join(",");
+console.log(JSON.stringify(got));
+`)
+	out, err := exec.Command(node, "-e", js.String()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	want := `{"identity":true,"updated":"B2|agent blocked","identityMoves":0,"reorder":"d,a,b,c","reorderSame":true,"reorderMoves":1,"insert":"a,b,c","insertKept":true,"remove":"a,c","removeKept":true,"loose":true,"tag":true,"keep":"agent working is-pressed was-open|animation-delay: -200ms|false","typed":"typed","changed":"y|true","across":"a/b,c|true|agent blocked","across2":"a,b,c|true","run":"0,1,2,5"}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("patchHTML:\n got %s\nwant %s", out, want)
+	}
+}

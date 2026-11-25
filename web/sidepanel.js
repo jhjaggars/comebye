@@ -510,22 +510,10 @@
     if ($("sp-path")) $("sp-path").value = pathVal;
     if (focus && $(focus)) $(focus).focus();
   }
-  // The bar is redrawn by its parts: a control whose markup is unchanged stays the same element. Rebuilding the whole bar
+  // The bar is patched, not rebuilt (app.js's patchHTML): every control stays the same element. Rebuilding the whole bar
   // (the push stream coming up flips "live", the panel widening adds Side by side) while someone was choosing from a menu
   // in it dropped the choice: the change landed on a select no longer in the page, so a pick from Files went nowhere.
-  function patchChildren(parent, html) {
-    const tpl = document.createElement("template");
-    tpl.innerHTML = html;
-    const want = [...tpl.content.children];
-    for (const n of [...parent.childNodes]) if (n.nodeType !== 1) n.remove(); // the bar is a flex row: spaces do nothing
-    want.forEach((n, i) => {
-      const cur = parent.children[i];
-      if (cur && cur.outerHTML === n.outerHTML) return;
-      if (cur && cur.tagName === n.tagName && cur.id === n.id) cur.replaceWith(n);
-      else parent.insertBefore(n, cur || null);
-    });
-    while (parent.children.length > want.length) parent.lastElementChild.remove();
-  }
+  function patchChildren(parent, html) { window.patchHTML(parent, html); }
 
   function docOptions() {
     const rows = [];

@@ -2,9 +2,11 @@
 // the helpers every check should use against a page that redraws (clickStable, readInPage, makeCheck).
 //
 // THE RULE: never hold an element handle (or a value read from one) across a redraw.
-// The app redraws whole panels with innerHTML on every poll (300 ms in test mode) and on every event: a handle taken
-// before a redraw points at a detached node (empty computed style, no box), and a click whose press and release land on
-// two different nodes fires nothing. So:
+// The app redraws its panels on every poll (300 ms in test mode) and on every event. The hot ones (the agent list, To do,
+// Status, Peers, Releases, the side panel's bar) are patched (app.js patchHTML: a row that did not change stays the same
+// node), but many others are still rebuilt with innerHTML: there a handle taken before a redraw points at a detached
+// node (empty computed style, no box), and a click whose press and release land on two different nodes fires nothing.
+// A patched row can still be replaced (its key or tag changed). So:
 //   - find an element by selector each time you use it (a locator, or a selector string passed to the helpers below),
 //     never by a handle kept from an earlier step;
 //   - read what you assert (text, attributes, box, computed style) in one evaluate inside the page (readInPage), not

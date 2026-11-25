@@ -257,6 +257,129 @@ addEventListener("popstate", retSoon);
 addEventListener("hashchange", retSoon);
 addEventListener("keydown", retSoon, true);
 
+/* ---------- keyed patching (#139 slice 4) ---------- */
+//
+// patchHTML(el, html) makes el's children match html without replacing what stayed the same. Each new child takes the
+// old node with its key (its tag and the first of data-key, data-id, data-name or id) or, with no key, the next old
+// node of its tag that has none; its attributes and text are updated in place and it is patched down the tree. Only the
+// children that came or went are added or removed, and the fewest are moved (the longest run already in order stays).
+// A keyed node that moved to another parent (a row whose status moved it to another group) is moved, not rebuilt.
+// So a poll that changes one row leaves every other row the same node: focus, a scroller's place, an open menu, the
+// press layer and the return mark ride through it, and a click whose press and release straddle a redraw still lands.
+// - Classes in PATCH_KEEP are the app's, not the markup's, and stay on a kept node (and so does the return mark's style).
+// - A form control keeps what was typed or picked in it: its value, checked or selected follows the markup only when the
+//   markup's own value, checked or selected changed.
+// - Bind handlers with on* properties (el.onclick = …) after a patch, or once on the container: a kept node is bound
+//   again on every redraw, and addEventListener would stack them.
+const PATCH_KEEP = ["is-pressed", "is-released", "was-open"];
+const PATCH_KEYS = ["data-key", "data-id", "data-name", "id"];
+function patchHTML(el, html) {
+  const t = el.ownerDocument.createElement("template");
+  t.innerHTML = html;
+  patchKids(el, t.content, patchPool(el));
+  return el;
+}
+// patchPool: the keyed nodes under el whose key is there once, for a move to another parent. key -> node; a node taken
+// is deleted from it.
+function patchPool(el) {
+  const pool = new Map(), dup = new Set();
+  const walk = (n) => {
+    for (const c of n.childNodes) {
+      if (c.nodeType !== 1) continue;
+      const k = patchKey(c);
+      if (k) { if (pool.has(k)) dup.add(k); else pool.set(k, c); }
+      walk(c);
+    }
+  };
+  walk(el);
+  for (const k of dup) pool.delete(k);
+  return pool;
+}
+function patchKey(n) {
+  if (n.nodeType !== 1) return "";
+  for (const a of PATCH_KEYS) { const v = n.getAttribute(a); if (v) return n.localName + " " + a + "=" + v; }
+  return "";
+}
+// patchKids makes el's children the children of from (a node or fragment, emptied as its children are taken).
+function patchKids(el, from, pool = new Map()) {
+  const doc = el.ownerDocument, focus = doc.activeElement;
+  const old = [...el.childNodes], want = [...from.childNodes];
+  const keyed = new Map(), loose = new Map(); // key -> old index; tag -> old indexes with no key, in order
+  old.forEach((n, i) => {
+    const k = patchKey(n);
+    if (k && !keyed.has(k)) { keyed.set(k, i); return; }
+    const s = n.nodeType === 1 ? n.localName : "#" + n.nodeType;
+    if (!loose.has(s)) loose.set(s, []);
+    loose.get(s).push(i);
+  });
+  const took = new Array(want.length).fill(-1), used = new Set(), moved = new Map(); // j -> a node from elsewhere
+  want.forEach((n, j) => {
+    const k = patchKey(n);
+    let i = k ? keyed.get(k) : undefined;
+    if (i === undefined || used.has(i)) {
+      const q = k ? null : loose.get(n.nodeType === 1 ? n.localName : "#" + n.nodeType);
+      i = q && q.length ? q.shift() : -1;
+    }
+    if (i >= 0) { took[j] = i; used.add(i); pool.delete(patchKey(old[i])); return; }
+    const m = k && pool.get(k);
+    if (m && !m.contains(el)) { moved.set(j, m); pool.delete(k); }
+  });
+  old.forEach((n, i) => { if (!used.has(i) && n.parentNode === el) el.removeChild(n); });
+  // The kept nodes already in order: the longest increasing run of their old places.
+  const stay = new Set(patchRun(took.filter((i) => i >= 0)));
+  let next = null;
+  for (let j = want.length - 1; j >= 0; j--) {
+    const i = took[j];
+    let n;
+    if (i >= 0) { n = old[i]; patchNode(n, want[j], pool); } else if (moved.has(j)) { n = moved.get(j); patchNode(n, want[j], pool); } else n = want[j];
+    if (i < 0 || !stay.has(i)) el.insertBefore(n, next);
+    next = n;
+  }
+  // A move takes the focus away in some browsers: give it back.
+  if (focus && focus !== doc.activeElement && focus.isConnected && el.contains(focus) && focus.focus) focus.focus({ preventScroll: true });
+}
+// patchRun is the longest increasing subsequence of xs (distinct numbers), as values.
+function patchRun(xs) {
+  const tails = [], prev = new Array(xs.length);
+  xs.forEach((x, k) => {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (xs[tails[m]] < x) lo = m + 1; else hi = m; }
+    prev[k] = lo ? tails[lo - 1] : -1;
+    tails[lo] = k;
+  });
+  const out = [];
+  for (let k = tails.length ? tails[tails.length - 1] : -1; k >= 0; k = prev[k]) out.push(xs[k]);
+  return out.reverse();
+}
+function patchNode(a, b, pool) {
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  const keep = PATCH_KEEP.filter((c) => a.classList.contains(c));
+  const tag = a.localName;
+  // What the markup said before, for the form controls (read before the attributes change).
+  const was = tag === "input" || tag === "option" || tag === "textarea"
+    ? { v: a.getAttribute("value"), c: a.hasAttribute("checked"), s: a.hasAttribute("selected"), t: a.textContent } : null;
+  for (const { name, value } of [...b.attributes]) {
+    let v = value;
+    if (name === "class" && keep.length) v = [...new Set([...value.split(/\s+/).filter(Boolean), ...keep])].join(" ");
+    if (a.getAttribute(name) !== v) a.setAttribute(name, v);
+  }
+  for (const { name } of [...a.attributes]) {
+    if (b.hasAttribute(name)) continue;
+    if (name === "class" && keep.length) { const v = keep.join(" "); if (a.getAttribute("class") !== v) a.setAttribute("class", v); continue; }
+    if (name === "style" && keep.includes("was-open")) continue;
+    a.removeAttribute(name);
+  }
+  if (tag === "template") { if (a.innerHTML !== b.innerHTML) a.innerHTML = b.innerHTML; return; }
+  patchKids(a, b, pool);
+  if (!was) return;
+  if (tag === "input") {
+    if (was.v !== b.getAttribute("value")) a.value = b.getAttribute("value") ?? "";
+    if (was.c !== b.hasAttribute("checked")) a.checked = b.hasAttribute("checked");
+  } else if (tag === "option") {
+    if (was.s !== b.hasAttribute("selected")) a.selected = b.hasAttribute("selected");
+  } else if (was.t !== a.textContent) a.value = a.textContent; // textarea
+}
+
 /* ---------- helpers ---------- */
 
 const UNAUTHORIZED_MSG = "Not authorized: open this from a device logged into an allowed Tailscale account";
@@ -1442,11 +1565,11 @@ function renderListFilter(base) {
   if (gm.key !== "project") $("gb-btn").setAttribute("data-set", ""); else $("gb-btn").removeAttribute("data-set");
   if (!$("gb-pop").hidden) renderGroupMenu();
   const had = document.activeElement && document.activeElement.closest ? document.activeElement.closest("#lf-tabs .lf-tab") : null;
-  $("lf-tabs").innerHTML = LIST_TABS.map((t) => {
+  patchHTML($("lf-tabs"), LIST_TABS.map((t) => {
     const n = base.filter(t.has).length;
     return `<button type="button" class="lf-tab${t.key === "needs" && n ? " nd" : ""}" data-tab="${t.key}" aria-pressed="${t.key === tab}"` +
       ` aria-label="${esc(t.label)}, ${n}"><span class="l">${esc(t.label)}</span><span class="n">${n}</span></button>`;
-  }).join("");
+  }).join(""));
   if (had) { const b = $("lf-tabs").querySelector(`[data-tab="${had.dataset.tab}"]`); if (b) b.focus({ preventScroll: true }); }
 }
 function focusListFilter() {
@@ -1523,15 +1646,15 @@ function renderHostFilter() {
   const sel = hostSel(), narrow = sel.length > 0;
   const need = state.agents.some((a) => a.agent_status === "blocked");
   const outside = narrow ? state.agents.filter((a) => a.agent_status === "blocked" && !hostIn(a.host)).length : 0;
-  // innerHTML replaced on every poll: keep the keyboard focus on the button.
+  // Patched on every poll (the button stays the same node); the focus is kept in case it moved.
   const had = document.activeElement === $("hp-btn");
-  nav.innerHTML = `<button type="button" id="hp-btn" class="hp-btn" aria-haspopup="dialog" aria-expanded="${hp.open}" aria-controls="hp-pop"` +
+  patchHTML(nav, `<button type="button" id="hp-btn" class="hp-btn" aria-haspopup="dialog" aria-expanded="${hp.open}" aria-controls="hp-pop"` +
     `${narrow ? " data-narrow" : ""} title="Filter by host (h)">` +
     `${need ? '<span class="hp-need" aria-label="needs input"></span>' : ""}<span class="hp-label">${esc(hostLabel())}</span><span class="chev" aria-hidden="true">&#9662;</span></button>` +
-    `<div class="hp-out" role="status"${outside ? "" : " hidden"}>${outside ? `<button type="button" class="hp-out-btn" id="hp-out-btn" title="Show every host"><span class="hp-need" aria-hidden="true"></span>+${outside} outside this filter</button>` : ""}</div>`;
+    `<div class="hp-out" role="status"${outside ? "" : " hidden"}>${outside ? `<button type="button" class="hp-out-btn" id="hp-out-btn" title="Show every host"><span class="hp-need" aria-hidden="true"></span>+${outside} outside this filter</button>` : ""}</div>`);
   nav.hidden = false;
-  $("hp-btn").addEventListener("click", () => toggleHostPicker());
-  if ($("hp-out-btn")) $("hp-out-btn").addEventListener("click", () => { setHostFilter([]); $("hp-btn")?.focus({ preventScroll: true }); });
+  $("hp-btn").onclick = () => toggleHostPicker();
+  if ($("hp-out-btn")) $("hp-out-btn").onclick = () => { setHostFilter([]); $("hp-btn")?.focus({ preventScroll: true }); };
   if (had) $("hp-btn").focus({ preventScroll: true });
   if (hp.open) renderHostPicker();
 }
@@ -2479,12 +2602,12 @@ function renderListRows() {
   document.title = nBlocked ? `(${nBlocked}) Comebye` : "Comebye";
   // The long form on wide screens; a short one (no "agents" word, "need")
   // on a phone, where the header also holds +, the bell and the ⋯.
-  $("count").innerHTML = agents.length
+  patchHTML($("count"), agents.length
     ? `<span class="long">${nBlocked ? `<span class="need">${nBlocked} need${nBlocked === 1 ? "s" : ""} input</span> · ` : ""}` +
       `${nWorking ? `<span class="run">${nWorking} working</span> · ` : ""}${agents.length} agent${agents.length === 1 ? "" : "s"}</span>` +
       `<span class="short">${nBlocked ? `<span class="need">${nBlocked} need</span><span class="sep"> · </span>` : ""}` +
       `${nWorking ? `<span class="run">${nWorking} working</span><span class="sep"> · </span>` : ""}<span class="tot">${agents.length}</span></span>`
-    : "";
+    : "");
   // Peers the hub cannot reach right now: one collapsed row each, saying
   // what broke (dns, tcp, tls, http) and since when - the hub's health
   // probe keeps the diagnosis fresh - instead of a bare error.
@@ -2529,7 +2652,7 @@ function renderListRows() {
   if (!agents.length && !state.unauthorized && !agentsSrc.at) {
     // Nothing from the hub yet: never "No agents running" before it has said so. A link to an agent says which.
     const r = state.pendingRoute;
-    wrap.innerHTML = srcWaitHtml(agentsSrc, r ? `Opening ${r.pane}…` : "");
+    patchHTML(wrap, srcWaitHtml(agentsSrc, r ? `Opening ${r.pane}…` : ""));
     return;
   }
   if (!agents.length) {
@@ -2539,11 +2662,11 @@ function renderListRows() {
     const here = !f.length || state.hosts.some((h) => h.local && f.includes(h.name));
     const tabLabel = LIST_TABS.find((t) => t.key === listTab()).label, qq = listQ().trim();
     const why = [listTab() !== "all" ? `status ${esc(tabLabel)}` : "", qq ? `“${esc(qq)}”` : "", f.length ? `on ${esc(f.join(" or "))}` : ""].filter(Boolean).join(", ");
-    wrap.innerHTML = (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
+    patchHTML(wrap, (state.unauthorized ? `<div class="empty"><b>${esc(UNAUTHORIZED_MSG)}</b></div>`
       : hubOnly && here && !qq && listTab() === "all" ? emptyHtml("No agents here", "This hub hosts none. Agents on its peers appear as they connect.")
       : state.agents.length && filtersOn() ? emptyHtml("No agents match", `Nothing for ${why}.`, ["Clear filters", "clear-filters"])
-      : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + parkedSectionHTML() + downRows;
-    wrap.querySelectorAll(".proj-head").forEach((el) => el.addEventListener("click", () => toggleProject(el.dataset.proj)));
+      : emptyHtml("No agents running", "Start one with the + button, and it shows up here.")) + parkedSectionHTML() + downRows);
+    wrap.querySelectorAll(".proj-head").forEach((el) => { el.onclick = () => toggleProject(el.dataset.proj); });
     bindParkedRows(wrap);
     const act = wrap.querySelector(".empty-act");
     if (act) act.onclick = () => { clearFilters(); $("lf-q")?.focus({ preventScroll: true }); };
@@ -2553,29 +2676,30 @@ function renderListRows() {
   // Desktop: the agents waiting on you sit in a group of their own at the top.
   const gm = groupMode();
   const needs = isDesktop() && gm.pins ? agents.filter((a) => a.agent_status === "blocked") : [];
-  const needsSec = needs.length ? `<section class="proj needs-sec" aria-label="Needs you">
+  const needsSec = needs.length ? `<section class="proj needs-sec" data-key="needs" aria-label="Needs you">
     <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${needs.length}</span></span></div>
     <div class="proj-body">${needs.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
   const coords = gm.pins && gm.pinCoords !== false ? agents.filter((a) => isCoordinator(a) && !needs.includes(a)) : [];
-  const pinned = coords.length ? `<section class="proj coord-sec" aria-label="Coordinators">
+  const pinned = coords.length ? `<section class="proj coord-sec" data-key="coords" aria-label="Coordinators">
     <div class="proj-head static"><span class="proj-name">Coordinators</span></div>
     <div class="proj-body">${coords.map((a) => agentRow(a, false)).join("")}</div></section>` : "";
   const rest = agents.filter((a) => !(gm.pins && gm.pinCoords !== false && isCoordinator(a)) && !needs.includes(a));
-  wrap.innerHTML = parkBannerHTML() + needsSec + pinned + gm.groups(rest).map(([name, list]) => projectHTML(name, list, gm.key)).join("") + parkedSectionHTML() + downRows;
-  wrap.querySelectorAll(".proj-head").forEach((el) =>
-    el.addEventListener("click", () => toggleProject(el.dataset.proj)));
+  // Patched, not replaced: a poll leaves every row it did not change the same node (patchHTML), so the handlers are
+  // properties, set again on the kept rows.
+  patchHTML(wrap, parkBannerHTML() + needsSec + pinned + gm.groups(rest).map(([name, list]) => projectHTML(name, list, gm.key)).join("") + parkedSectionHTML() + downRows);
+  wrap.querySelectorAll(".proj-head").forEach((el) => { el.onclick = () => toggleProject(el.dataset.proj); });
   bindParkedRows(wrap);
-  $("park-banner") && $("park-banner").addEventListener("click", openParkAll);
+  if ($("park-banner")) $("park-banner").onclick = openParkAll;
   wrap.querySelectorAll(".agent[data-id]").forEach((el) => {
-    el.addEventListener("click", (e) => {
+    el.onclick = (e) => {
       const more = e.target.closest(".row-more");
       if (more) { e.stopPropagation(); openRowMenu(more); return; }
       openDetail(el.dataset.id);
-    });
-    el.addEventListener("keydown", (e) => {
+    };
+    el.onkeydown = (e) => {
       if (e.target.closest(".row-more")) return;
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(el.dataset.id); }
-    });
+    };
   });
 }
 
@@ -2962,10 +3086,10 @@ function projectHTML(name, list, mode = "project") {
   const home = mode === "project" ? list.filter((a) => !isWorker(a)) : list;
   const workers = mode === "project" ? list.filter(isWorker) : [];
   // Needs you (Status mode) is never folded away, as the desktop's Needs you section is not: a waiting agent stays in sight.
-  if (mode === "status" && name === "Needs you") return `<section class="proj needs-sec" data-group="status" aria-label="Needs you">
+  if (mode === "status" && name === "Needs you") return `<section class="proj needs-sec" data-group="status" data-key="needs" aria-label="Needs you">
     <div class="proj-head static"><span class="proj-name">Needs you</span><span class="proj-counts"><span class="need">${list.length}</span></span></div>
     <div class="proj-body">${list.map((a) => agentRow(a, false)).join("")}</div></section>`;
-  return `<section class="proj" data-group="${esc(mode)}">
+  return `<section class="proj" data-group="${esc(mode)}" data-key="${escAttr("g:" + key)}">
     <button type="button" class="proj-head" data-proj="${esc(key)}" aria-expanded="${open}">
       <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">${esc(name || "Other")}</span>
       <span class="proj-counts">${counts}</span>
@@ -2980,7 +3104,7 @@ function renderRemovalBanner() {
   // On the phone the banner is the way into the page, so at zero it offers the sweep (the desktop has the sidebar entry and hides it).
   b.hidden = !ledger.on;
   b.classList.toggle("quiet", !n);
-  if (ledger.on) b.innerHTML = `${n ? `Ready to remove (${n})` : "Look for finished agents"}<span class="ln-chev" aria-hidden="true">›</span>`;
+  if (ledger.on) patchHTML(b, `${n ? `Ready to remove (${n})` : "Look for finished agents"}<span class="ln-chev" aria-hidden="true">›</span>`);
   renderFleetMenu();
 }
 
@@ -4022,7 +4146,7 @@ function todoPaint(el, html) {
   const top = el.scrollTop;
   const inner = el.querySelector(".td-item.open .td-scroll");
   const innerId = inner && inner.closest(".td-item").dataset.id, innerTop = inner ? inner.scrollTop : 0;
-  el.innerHTML = html;
+  patchHTML(el, html);
   if (typeof sttSync === "function") sttSync(); // the mic buttons just drawn show the current state
   el.scrollTop = top;
   const ni = el.querySelector(".td-item.open .td-scroll");
@@ -4895,7 +5019,7 @@ function renderReleases() {
   // Keep the scroll and the focused button across a redraw.
   const ae = document.activeElement, keep = ae && el.contains(ae) && ae.dataset.rel ? { rel: ae.dataset.rel, host: ae.dataset.host || "" } : null;
   el._html = html;
-  el.innerHTML = html;
+  patchHTML(el, html);
   if (keep) {
     const b = [...el.querySelectorAll("[data-rel]")].find((x) => x.dataset.rel === keep.rel && (x.dataset.host || "") === keep.host);
     if (b && !b.disabled) b.focus({ preventScroll: true });
@@ -5761,7 +5885,7 @@ function parkedSectionHTML() {
   if (!list.length && !nArch) return "";
   const toArch = nArch ? `<a class="pk-arch" href="${ARCHIVED_HASH}">${nArch} archived: finished work put away<span class="ln-chev" aria-hidden="true">›</span></a>` : "";
   const open = !collapsed().has("Recently closed");
-  return `<section class="proj parked-sec" aria-label="Recently closed">
+  return `<section class="proj parked-sec" data-key="parked" aria-label="Recently closed">
     <button type="button" class="proj-head" data-proj="Recently closed" aria-expanded="${open}">
       <span class="proj-chev" aria-hidden="true"></span><span class="proj-name">Recently closed</span>
       <span class="proj-counts"><span>${list.length}</span></span>
@@ -5787,8 +5911,8 @@ function parkCostHTML(list) {
 function bindParkedRows(wrap) {
   wrap.querySelectorAll(".agent[data-pk]").forEach((el) => {
     const open = () => openParkSheet(el.dataset.pk, el.dataset.host);
-    el.addEventListener("click", open);
-    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    el.onclick = open; // on* properties: the list is patched, and a kept row is bound again
+    el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
 }
 
@@ -6288,14 +6412,14 @@ function applyTheme() {
   CT.apply();
   const id = CT.resolve();
   const sw = $("f-theme-sw");
-  if (sw) sw.innerHTML = swatch(id);
+  if (sw) patchHTML(sw, swatch(id));
   const v = $("f-theme-val");
   if (v) v.textContent = themeLabel();
   sxRowVals();
   const q = $("btn-theme-q");
   if (q) {
     const t = CT.byId[id], cp = CT.counterpart(id), other = t.mode === "dark" ? "light" : "dark";
-    q.innerHTML = t.mode === "dark" ? SUN_SVG : MOON_SVG;
+    patchHTML(q, t.mode === "dark" ? SUN_SVG : MOON_SVG);
     const label = cp ? "Switch to " + CT.byId[cp].name : t.name + " has no " + other + " version";
     q.setAttribute("aria-label", label);
     q.title = label;
@@ -9775,7 +9899,7 @@ function renderStatus() {
     const sc = el.closest(".page-body, .ss-body, .sp-body");
     const y = sc ? sc.scrollTop : 0;
     const key = el.contains(document.activeElement) ? document.activeElement.dataset.bk : "";
-    el.innerHTML = html;
+    patchHTML(el, html);
     fillHubChecks(el);
     if (sc) sc.scrollTop = y;
     if (key) el.querySelector(`[data-bk="${key}"]`)?.focus({ preventScroll: true });
@@ -9976,7 +10100,7 @@ function renderPeersList() {
   const cloud = ph.data && (ph.data.nodes || []).filter((n) => n.stale).map((n) => `${n.name}: ${n.stale}`);
   const cloudNote = cloud && cloud.length ? `<p class="pz-note warn pr-cloud" role="status">Not refreshed from the cloud: ${esc(cloud.join("; "))}</p>` : "";
   const all = browse + html + cloudNote + nudge;
-  if ($("pr-items")._html !== all) { $("pr-items")._html = all; $("pr-items").innerHTML = all; }
+  if ($("pr-items")._html !== all) { $("pr-items")._html = all; patchHTML($("pr-items"), all); }
   runTick();
 }
 
@@ -10220,9 +10344,9 @@ function hostNeedsSignin(name) {
 function renderPeerView() {
   const r = prs.route, view = $("pr-view");
   $("peers").classList.toggle("in-peer", !!r.name);
-  if (!r.name) { view.dataset.name = ""; view.innerHTML = '<div class="pr-empty" style="margin:auto;text-align:center">Pick a host from the list.</div>'; return; }
+  if (!r.name) { view.dataset.name = ""; view._html = ""; patchHTML(view, '<div class="pr-empty" style="margin:auto;text-align:center">Pick a host from the list.</div>'); return; }
   const h = (state.hosts || []).find((x) => x.name === r.name);
-  if (!h) { view.dataset.name = ""; view.innerHTML = `<div class="pr-empty" style="margin:auto;text-align:center">${agentsSrc.at ? "That host is gone." : srcWaitHtml(agentsSrc)}</div>`; return; }
+  if (!h) { view.dataset.name = ""; view._html = ""; patchHTML(view, `<div class="pr-empty" style="margin:auto;text-align:center">${agentsSrc.at ? "That host is gone." : srcWaitHtml(agentsSrc)}</div>`); return; }
   const c = prs.cfg[h.name] || { state: "loading" };
   if (view.dataset.name !== h.name) { // a different host: a fresh form, and its models
     view.dataset.name = h.name;
@@ -10274,7 +10398,7 @@ function renderPeerView() {
   if (view._html === html) return;
   view._html = html;
   const typed = document.getElementById("si-code"), typedV = typed && view.contains(typed) ? typed.value : "";
-  view.innerHTML = html;
+  patchHTML(view, html);
   const again = typedV && document.getElementById("si-code");
   if (again) again.value = typedV; // the code being pasted survives a redraw (it is never kept anywhere else)
   if (keep) {
@@ -12519,7 +12643,7 @@ function renderNav() {
     return `<button type="button" class="nv${on ? " on" : ""}" data-page="${r.key}" title="${escAttr(r.label)}" aria-label="${escAttr(tip)}"${on ? ' aria-current="page"' : ""}>${NAV_ICON[r.key]}${
       n ? `<span class="badge" aria-hidden="true">${n}</span>` : r.odot && r.odot() ? `<span class="bdot bdot-o" role="img" aria-label="a release needs you: ${escAttr((rls.data && rls.data.needs_text) || "")}"></span>` : r.dot && r.dot() ? '<span class="bdot" aria-label="new"></span>' : ""}</button>`;
   }).join("");
-  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
+  if (el.dataset.sig !== html) { el.dataset.sig = html; patchHTML(el, html); }
 }
 
 function onNavClick(ev) {
