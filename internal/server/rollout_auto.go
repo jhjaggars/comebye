@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/ledger"
@@ -28,6 +29,9 @@ import (
 
 const (
 	autoRolloutEvery = time.Minute
+	// autoCatchUpEvery: how often the automatic rollout asks the fleet
+	// whether a host is behind its newest release (autoCatchUpTick).
+	autoCatchUpEvery = 5 * time.Minute
 	// autoRolloutWindow: a release tagged longer ago than this is left to
 	// Roll out to all (an old item the hub sees after an upgrade, say).
 	autoRolloutWindow = 24 * time.Hour
@@ -68,6 +72,7 @@ func (s *Server) RunAutoRollout(ctx context.Context) {
 					}
 				}()
 				s.autoRolloutTick(ctx)
+				s.autoCatchUpTick(ctx)
 			}()
 		}
 	}
@@ -185,4 +190,97 @@ func skipStopped(plan []RolloutStep, hosts []relHost) []RolloutStep {
 		}
 	}
 	return plan
+}
+
+// The catch-up (issue #141, slice 4). A host that was stopped or offline
+// while its release rolled out is upgraded when it is back, with no time
+// limit, while the automatic rollout is on; and so is a reachable host that
+// came up on an older version (a worker made at the old version). It does
+// not depend on the rollout having had a job: a release where every running
+// host was already current ("none: nothing to upgrade") still catches its
+// stopped hosts up, through a job started then.
+
+// autoTarget is the newest tagged release item the automatic rollout has
+// settled (marked), open or closed: the version hosts catch up to.
+func (s *Server) autoTarget() (Todo, bool) {
+	var best Todo
+	found := false
+	for _, it := range s.todos.list("all") {
+		r := it.Release
+		if r == nil || r.State != relTagged || r.Dismissed || r.AutoRollout == "" {
+			continue
+		}
+		if !found || newerVersion(r.Version, best.Release.Version) {
+			best, found = it, true
+		}
+	}
+	return best, found
+}
+
+// autoCatchUpTick does the one next thing for the hosts behind the newest
+// auto-rolled release: nothing, reopen its done job (CatchUpNow), or start
+// one when that release has none. It reports what it did, for the tests.
+func (s *Server) autoCatchUpTick(ctx context.Context) string {
+	if s.rollout == nil || s.cfg.Release.Tool == nil || !s.autoRolloutOn() {
+		return "off"
+	}
+	it, ok := s.autoTarget()
+	if !ok {
+		return "none"
+	}
+	cur, has := s.rollout.Get()
+	switch {
+	case has && cur.live():
+		return "busy"
+	case has && cur.Todo != it.ID && !newerVersion(it.Release.Version, cur.Version):
+		return "none" // the job on file is for this version or a newer one
+	case has && cur.Todo == it.ID && cur.State != roDone:
+		return "none" // cancelled: the user's call stands
+	}
+	now := time.Now()
+	if !s.cfg.TestMode && now.Sub(s.lastAutoCatchUp) < autoCatchUpEvery {
+		return "wait"
+	}
+	s.lastAutoCatchUp = now
+	if has && cur.Todo == it.ID {
+		if hs := s.rollout.CatchUpNow(ctx); len(hs) > 0 {
+			return "caught up " + strings.Join(hs, ",")
+		}
+		return "current"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	v := it.Release.Version
+	hosts := s.rollout.ops.Hosts(cctx, v)
+	behind := false
+	for _, h := range hosts {
+		behind = behind || (!h.Hub && !h.WithHub && !h.Current && hostUp(h) && h.Enabled)
+	}
+	if !behind {
+		return "current"
+	}
+	bd, err := s.relBuild(cctx, it, relBuildTTL)
+	if err != nil || bd.State != "success" {
+		return "build not green"
+	}
+	s.markWakeable(cctx, hosts)
+	dst, derr := s.rollout.ops.DeployStatus(cctx)
+	if derr == nil && dst.Record != nil && dst.Record.State == depRunning {
+		return "deploy running"
+	}
+	plan, err := rolloutPlan(hosts, nil, s.canaryName(), true, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
+	if err != nil {
+		return "bad plan"
+	}
+	plan = skipStopped(plan, hosts)
+	if !actionable(plan) {
+		return "current"
+	}
+	j, err := s.rollout.StartAuto(it.ID, v, it.Release.Commit, autoRolloutBy, plan)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	s.auditBy(ledger.AuditEvent{By: "comebye", Action: "rollout.auto", Todo: it.ID, OK: true,
+		Detail: v + ": a host is behind it: started " + j.ID + " to catch it up"})
+	return "started " + j.ID
 }

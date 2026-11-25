@@ -185,6 +185,9 @@ func TestReleasesTaggedHubBehind(t *testing.T) {
 
 func TestReleasesAnOfflineHostBlocksAllUpgraded(t *testing.T) {
 	s, _ := relHubWithPeer(t, "v0.5.9", "v0.5.8", true)
+	// With the automatic rollout off: on, its catch-up has the host, and the
+	// sweep closes the item naming it (rollout_close_test.go).
+	do(s, "PUT", "/api/settings", userHdr, `{"auto_rollout":false}`)
 	it := tagOnServer(t, s, "v0.5.9", relSHA)
 	// The hub runs it; the peer is down on an older version.
 	v := getReleases(t, s)

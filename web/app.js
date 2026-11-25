@@ -4895,6 +4895,8 @@ function roAgain(d, job) {
 // upgrades them when they are back.
 function roSkipOfflineHtml(d, job) {
   const t = d.todo, behind = (d.hosts || []).filter((x) => !x.current);
+  // An automatic rollout closes the item by itself, naming them (issue #141).
+  if (t && t.release && t.release.auto_rollout) return "";
   if (!t || !(t.state === "open" || t.state === "answered") || roLive(job) || !behind.length || !behind.every((x) => x.offline && !x.hub)) return "";
   return `<div class="rl-roll" data-skip-offline><button type="button" data-rel="done-skip-offline"${rls.busy ? " disabled" : ""}>Done, skip offline hosts</button>
     <span class="rl-note">${esc(behind.map((x) => x.name).join(", "))} ${behind.length === 1 ? "is" : "are"} offline; ${behind.length === 1 ? "it is" : "they are"} named on the item.</span></div>`;

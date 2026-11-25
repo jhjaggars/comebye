@@ -365,7 +365,9 @@ func TestRolloutSkipsOfflineHostAndFinishesDoneWithSkip(t *testing.T) {
 	if !strings.Contains(j.Plan[1].Detail, "offline for") {
 		t.Fatalf("detail %q", j.Plan[1].Detail)
 	}
-	if a := r.actions(); !strings.Contains(a, "rollout.skip:b") || !strings.Contains(r.audit[len(r.audit)-1].Detail, "1 skipped (b)") {
+	// An offline skip is expected (it is caught up when it is back): the
+	// rollout finishes ok, naming it.
+	if a, last := r.actions(), r.audit[len(r.audit)-1]; !strings.Contains(a, "rollout.skip:b") || !last.OK || !strings.Contains(last.Detail, "ok: 2 of 3 hosts upgraded, 1 behind until they are back (b)") {
 		t.Fatalf("audit %s / %+v", a, r.audit[len(r.audit)-1])
 	}
 }

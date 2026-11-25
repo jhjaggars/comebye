@@ -260,12 +260,22 @@ var (
 	errTodoClosed   = errors.New("already_closed")
 )
 
-// pruneLocked drops settled items past their retention.
+// pruneLocked drops settled items past their retention. The newest tagged
+// release item is kept whatever its age: the automatic rollout's catch-up
+// upgrades a host that is back to it, with no time limit, and the upgrade
+// checks that release's item (issue #141, slice 4).
 func (t *todoStore) pruneLocked() {
 	now := t.now()
+	newest := ""
+	var newestV string
+	for _, it := range t.data.Items {
+		if r := it.Release; r != nil && r.State == relTagged && !r.Dismissed && (newest == "" || newerVersion(r.Version, newestV)) {
+			newest, newestV = it.ID, r.Version
+		}
+	}
 	keep := t.data.Items[:0]
 	for _, it := range t.data.Items {
-		if !it.active() && now.Sub(it.UpdatedAt) > todoRetention {
+		if !it.active() && now.Sub(it.UpdatedAt) > todoRetention && it.ID != newest {
 			continue
 		}
 		keep = append(keep, it)

@@ -43,9 +43,14 @@ failed deploy or upgrade shows its error and **Retry**) and the last five
 releases (version, date, link to the notes). A tagged release stays in the tab
 until every host runs it, even if its item was closed or dropped. Closing the
 item is not your job: the hub closes it itself once the hub and every host run
-the version (it checks every 30 s and whenever the tab loads). An **offline host
-blocks that**: the tab says "3 of 4, 1 offline", the release is not done and the
-item stays open until the host is back and upgraded. Closing the item by hand
+the version (it checks every 30 s and whenever the tab loads). While the
+automatic rollout is on, a host that is stopped or offline does not hold it:
+once the hub and every reachable host run the version and no rollout is live,
+the item closes with a note naming the hosts behind ("done; behind: wk-test
+(stopped), laptop (offline)"), and the catch-up below upgrades them when they are
+back. With the automatic rollout off, an **offline host blocks that**: the tab
+says "3 of 4, 1 offline", the release is not done and the item stays open until
+the host is back and upgraded. Closing the item by hand
 while a host is behind or offline is refused (`release_pending`); drop it only to
 abandon the release, and the tab still shows a tagged one until it is rolled out.
 The same orange dot shows on the Peers entry of the navigation, the phone's fleet menu and the palette's "Releases" entry whenever a release needs you (the app looks every minute, not only inside Peers).
@@ -172,12 +177,18 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   the hub sees it back online on the version (5 minutes). Any failure stops the whole rollout at once: the rest are
   not touched, hosts already done stay done. **Retry** runs the failed step again; **Cancel** ends it and reverts
   nothing.
-- **Offline hosts** are skipped after 2 minutes and listed; the rollout finishes "done, 1 skipped" and the release
-  stays open. The loop keeps looking (once a minute, for a week after the rollout finished): when a skipped host is
-  back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. **Roll out
-  again** does the same at once for just those hosts.
-- **Done with hosts away:** while every host still behind is offline (a laptop away for a while), **Done, skip
-  offline hosts** on the Fleet card (or `comebye todo done ID --skip-offline`) closes the release item. The item
+- **Offline hosts** are skipped after 2 minutes and listed. The loop keeps looking (once a minute): when a skipped
+  host is back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. While
+  the automatic rollout is on there is no time limit; with it off, it looks for a week after the rollout finished.
+  **Roll out again** does the same at once for just those hosts.
+- **Catch-up without a job:** while the automatic rollout is on, every 5 minutes the hub also looks for a reachable
+  host behind the newest release it rolled out (one that was stopped when it ran, or a worker made at an older
+  version). A host in the job is caught up by it; a host it never had gets a step added to it; and when that release
+  had no job at all (every running host was already current: "none: nothing to upgrade") the hub starts one then,
+  for the hosts behind (`rollout.auto`, "a host is behind it"). The newest tagged release's item is kept past the
+  to-do retention for this.
+- **Done with hosts away:** with the automatic rollout off, while every host still behind is offline (a laptop away
+  for a while), **Done, skip offline hosts** on the Fleet card (or `comebye todo done ID --skip-offline`) closes the release item. The item
   names the hosts left behind (audited `release.done-skip-offline`), and the catch-up above still upgrades the ones
   the rollout skipped when they are back. A plain done is refused while any host is behind, and the hub or a
   reachable host behind is never skipped.
@@ -189,7 +200,9 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`,
   `.finish`, `.catchup`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
   release's to-do item.
-- **Finishing:** a rollout with every host upgraded finishes `ok: all N hosts`. One that skipped a host finishes
+- **Finishing:** a rollout with every host upgraded finishes `ok: all N hosts`. One that skipped only hosts that were
+  stopped or offline (to be caught up) finishes `ok: X of N hosts upgraded, K behind until they are back (…)`. One
+  that skipped a host for any other reason (the hub, a host the app may not upgrade, an error) finishes
   `not ok: X of N hosts upgraded, K skipped (…)` (audited with ok=false); when the hub was skipped it adds "the hub
   was not bumped", and the item's line says to bump it from its row in Peers (Roll out again never retries the hub).
 - The user starts one from the page (user role and the page's CSRF token; the body repeats version, commit and the

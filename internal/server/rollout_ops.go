@@ -113,6 +113,10 @@ func rolloutNoteOf(j Rollout) string {
 			// "Roll out again" never retries the hub: only its Bump hub does.
 			return fmt.Sprintf("%s not rolled out to the hub: %s skipped (%s): bump the hub from its row in Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))
 		}
+		if behind := behindOnly(j); behind != nil {
+			// Stopped or offline: the catch-up upgrades them when they are back.
+			return fmt.Sprintf("%s rolled out; behind until they are back: %s (upgraded then)", j.Version, strings.Join(behind, ", "))
+		}
 		if len(skipped) > 0 {
 			return fmt.Sprintf("%s rolled out; %s skipped (%s): roll it out again from Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))
 		}

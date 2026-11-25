@@ -385,6 +385,10 @@ type Server struct {
 	typing *typingTracker
 	// usage counts tokens (usage.go); nil when off.
 	usage *usageState
+
+	// lastAutoCatchUp is when the automatic rollout last looked for hosts
+	// behind its newest release (autoCatchUpTick); only its loop uses it.
+	lastAutoCatchUp time.Time
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -468,6 +472,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.rollout.onState = s.noteRollout
 			s.rollout.onHubTrouble = s.alarmHubStep
 			s.rollout.onSoakFail = s.alarmSoak
+			s.rollout.catchUpAlways = s.autoRolloutOn
 			s.rollout.soakFor = s.rolloutSoakSetting // the setting; unset: the engine's own (10 min, shorter below)
 			if cfg.Release.Simulated {
 				s.rollout.soak = 8 * time.Second // a demo does not wait ten minutes (unless the setting asks)

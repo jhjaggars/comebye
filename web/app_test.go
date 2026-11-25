@@ -689,7 +689,9 @@ const got = {
   noAgain: roAgain(d, { ...job, plan: [{ host: "b", wave: "peers", phase: "skipped" }] }).length,
   // "Done, skip offline hosts" only when every host behind is offline.
   skipOff: /data-rel="done-skip-offline"[^]*mac is offline/.test(roSkipOfflineHtml({ todo: { id: "t1", state: "open" }, hosts: [{ name: "a", current: true }, { name: "mac", offline: true }] }, null)),
-  noSkipOff: roSkipOfflineHtml(d, null) + roSkipOfflineHtml({ todo: { id: "t1", state: "done" }, hosts: [{ name: "mac", offline: true }] }, null),
+  noSkipOff: roSkipOfflineHtml(d, null) + roSkipOfflineHtml({ todo: { id: "t1", state: "done" }, hosts: [{ name: "mac", offline: true }] }, null)
+    // An automatic rollout's item closes by itself: no button.
+    + roSkipOfflineHtml({ todo: { id: "t1", state: "open", release: { auto_rollout: "r1" } }, hosts: [{ name: "a", current: true }, { name: "mac", offline: true }] }, null),
 };
 console.log(JSON.stringify(got));
 `)

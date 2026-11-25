@@ -278,8 +278,13 @@ func (s *Server) sweepReleasesWith(hosts []relHost) {
 		}
 		cp := append([]relHost(nil), hosts...)
 		markRollout(cp, it.Release.Version)
-		if !rolloutOf(cp).Complete {
+		behind, ok := s.closableBehind(cp)
+		if !ok {
 			continue
+		}
+		note := ""
+		if len(behind) > 0 {
+			note = "done; behind: " + strings.Join(behind, ", ") + ": upgraded when they are back"
 		}
 		closed, err := s.todos.mutate(it.ID, func(t *Todo) error {
 			if !t.active() {
@@ -287,14 +292,55 @@ func (s *Server) sweepReleasesWith(hosts []relHost) {
 			}
 			now := time.Now().UTC()
 			t.State, t.ClosedBy, t.ClosedAt, t.Notice = TodoDone, "comebye", &now, nil
+			if note != "" && t.Release != nil {
+				rel := *t.Release
+				rel.RolloutNote = note
+				t.Release = &rel
+			}
 			return nil
 		})
 		if err != nil {
 			continue
 		}
-		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: closed.ID, Action: "release.complete", OK: true,
-			Detail: fmt.Sprintf("%s runs on all %d hosts: the item was closed", it.Release.Version, len(hosts))})
+		detail := fmt.Sprintf("%s runs on all %d hosts: the item was closed", it.Release.Version, len(hosts))
+		if len(behind) > 0 {
+			detail = fmt.Sprintf("%s runs on the hub and every reachable host: the item was closed; behind: %s", it.Release.Version, strings.Join(behind, ", "))
+		}
+		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: closed.ID, Action: "release.complete", OK: true, Detail: detail})
 	}
+}
+
+// closableBehind says whether a tagged release item marked against hosts
+// can close: when every host runs it, or, while the automatic rollout is
+// on (its catch-up upgrades them when they are back, with no time limit),
+// when the hub and every reachable host do and no rollout is live. It names
+// the hosts left behind, "name (stopped)" or "name (offline)".
+func (s *Server) closableBehind(hosts []relHost) ([]string, bool) {
+	ro := rolloutOf(hosts)
+	if ro.Complete {
+		return nil, true
+	}
+	if ro.Current == 0 || ro.Behind > 0 || s.rollout == nil || s.cfg.Release.Tool == nil || !s.autoRolloutOn() {
+		return nil, false
+	}
+	if j, ok := s.rollout.Get(); ok && j.live() {
+		return nil, false // the rollout may still reach them
+	}
+	var out []string
+	for _, h := range hosts {
+		if h.Current {
+			continue
+		}
+		if h.Hub || h.WithHub {
+			return nil, false // the hub's deploy is not caught up by itself
+		}
+		why := "offline"
+		if h.Stopped || h.WakeNote != "" {
+			why = "stopped"
+		}
+		out = append(out, h.Name+" ("+why+")")
+	}
+	return out, true
 }
 
 // sweepReleases is sweepReleasesWith for a caller with no hosts at hand. It
@@ -315,7 +361,9 @@ func (s *Server) sweepReleases(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	s.sweepReleasesWith(s.relHosts(ctx))
+	hosts := s.relHosts(ctx)
+	s.markWakeable(ctx, hosts) // the note says which hosts behind are stopped
+	s.sweepReleasesWith(hosts)
 }
 
 // RunReleaseSweep closes finished release items on a clock, so a rollout that

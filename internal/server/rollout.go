@@ -234,6 +234,10 @@ type rolloutEngine struct {
 	onSoakFail func(Rollout, RolloutStep)
 	// lastReask is when retryHub last asked the release host.
 	lastReask time.Time
+	// catchUpAlways, when it says true (the automatic rollout is on), lifts
+	// the week's limit on catchUp: a stopped host is upgraded whenever it
+	// next starts (issue #141, slice 4).
+	catchUpAlways func() bool
 }
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
@@ -628,23 +632,51 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 // after the job finished, and a newer rollout replaces the job anyway.
 func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout) {
 	now := e.now()
-	if j.Finished == nil || now.Sub(*j.Finished) > rolloutCatchUpFor || now.Sub(e.lastCatchUp) < e.catchUpEvery {
+	limited := e.catchUpAlways == nil || !e.catchUpAlways()
+	if j.Finished == nil || (limited && now.Sub(*j.Finished) > rolloutCatchUpFor) || now.Sub(e.lastCatchUp) < e.catchUpEvery {
 		return
 	}
-	want := false
-	for _, st := range j.Plan {
-		want = want || (st.Phase == roSkipped && st.CatchUp)
-	}
-	if !want {
+	if !wantsCatchUp(j) {
 		return
 	}
 	e.lastCatchUp = now
-	hosts := e.ops.Hosts(ctx, j.Version)
+	e.reopen(j, e.ops.Hosts(ctx, j.Version), false)
+}
+
+// wantsCatchUp: the job has a host it skipped while it was away.
+func wantsCatchUp(j Rollout) bool {
+	for _, st := range j.Plan {
+		if st.Phase == roSkipped && st.CatchUp {
+			return true
+		}
+	}
+	return false
+}
+
+// CatchUpNow is catchUp asked by the automatic rollout's own loop, which saw
+// a host behind this job's version: no time limit, and a reachable host that
+// is not in the plan at all (a worker made at the old version after the job
+// was planned) gets a step too. It reports the hosts it reopened or added.
+func (e *rolloutEngine) CatchUpNow(ctx context.Context) []string {
+	e.mu.Lock()
+	j, ok := e.load()
+	e.mu.Unlock()
+	if !ok || j.State != roDone {
+		return nil
+	}
+	return e.reopen(j, e.ops.Hosts(ctx, j.Version), true)
+}
+
+// reopen puts each skipped host that is back, and with addNew each reachable
+// host behind that the plan does not have, back in the done job, which runs
+// again through the same gates. It reports the hosts it reopened.
+func (e *rolloutEngine) reopen(j Rollout, hosts []relHost, addNew bool) []string {
+	now := e.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	cur, ok := e.load()
 	if !ok || cur.ID != j.ID || cur.Rev != j.Rev || cur.State != roDone {
-		return
+		return nil
 	}
 	var back, already []string
 	for i := range cur.Plan {
@@ -664,25 +696,44 @@ func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout) {
 			back = append(back, st.Host)
 		}
 	}
-	if len(back) == 0 && len(already) == 0 {
-		return
+	var added []string
+	if addNew {
+		in := map[string]bool{}
+		for _, st := range cur.Plan {
+			in[st.Host] = true
+		}
+		for _, h := range hosts {
+			if in[h.Name] || h.Hub || h.WithHub || h.Current || !hostUp(h) || !h.Enabled {
+				continue
+			}
+			cur.Plan = append(cur.Plan, RolloutStep{Host: h.Name, Wave: wavePeers, Phase: roPending, Detail: "behind: catching up"})
+			added = append(added, h.Name)
+		}
 	}
-	if len(back) > 0 {
-		cur.State, cur.Finished, cur.Note = roRunning, nil, "catching up "+strings.Join(back, ", ")+": back online"
+	if len(back) == 0 && len(already) == 0 && len(added) == 0 {
+		return nil
+	}
+	upgrading := append(append([]string{}, back...), added...)
+	if len(upgrading) > 0 {
+		cur.State, cur.Finished, cur.Note = roRunning, nil, "catching up "+strings.Join(upgrading, ", ")
 	}
 	if err := e.save(&cur); err != nil {
 		log.Printf("rollout: %v", err)
-		return
+		return nil
 	}
 	for _, n := range back {
 		e.emit(cur, n, "rollout.catchup", true, "back online: upgrading it now", "comebye")
 	}
+	for _, n := range added {
+		e.emit(cur, n, "rollout.catchup", true, "on an older version: upgrading it now", "comebye")
+	}
 	for _, n := range already {
 		e.emit(cur, n, "rollout.catchup", true, "back online, already on the version", "comebye")
 	}
-	if len(back) > 0 && e.onState != nil {
+	if len(upgrading) > 0 && e.onState != nil {
 		e.onState(cur)
 	}
+	return upgrading
 }
 
 // retryHub: a job stopped at the hub because the release host could not be
@@ -772,15 +823,23 @@ func (e *rolloutEngine) advance(ctx context.Context, j *Rollout, hosts []relHost
 			}
 		}
 		// A skipped host is not an upgraded one: a rollout that skipped any
-		// (above all the hub) is finished, but not ok, and says so.
+		// (above all the hub) is finished, but not ok, and says so. A host
+		// skipped because it was stopped or offline is expected: it is
+		// caught up when it is back, so it alone does not make it not ok.
 		detail := fmt.Sprintf("ok: all %d hosts", len(j.Plan))
-		if len(skipped) > 0 {
+		good := len(skipped) == 0
+		switch behind := behindOnly(*j); {
+		case good:
+		case behind != nil:
+			good = true
+			detail = fmt.Sprintf("ok: %d of %d hosts upgraded, %d behind until they are back (%s)", len(ok), len(j.Plan), len(behind), strings.Join(behind, ", "))
+		default:
 			detail = fmt.Sprintf("not ok: %d of %d hosts upgraded, %d skipped (%s)", len(ok), len(j.Plan), len(skipped), strings.Join(skipped, ", "))
 			if hubSkipped(*j) {
 				detail += "; the hub was not bumped"
 			}
 		}
-		e.emit(*j, "", "rollout.finish", len(skipped) == 0, detail+" elapsed="+now.Sub(j.Started).Round(time.Second).String(), "comebye")
+		e.emit(*j, "", "rollout.finish", good, detail+" elapsed="+now.Sub(j.Started).Round(time.Second).String(), "comebye")
 		return false
 	}
 	st := &j.Plan[i]
@@ -1125,6 +1184,24 @@ func (e *rolloutEngine) finishStep(j *Rollout, st *RolloutStep, h relHost, now t
 			e.emit(*j, "", "rollout.pause", true, "now, after "+st.Host, "comebye")
 		}
 	}
+}
+
+// behindOnly names the job's skipped hosts when every one of them was
+// skipped only for being stopped or offline (to be caught up when it is
+// back); nil when there is none, or when any skip had another reason (the
+// hub, a host the app may not upgrade, an error).
+func behindOnly(j Rollout) []string {
+	var out []string
+	for _, st := range j.Plan {
+		if st.Phase != roSkipped {
+			continue
+		}
+		if !st.CatchUp || st.Wave == waveHub {
+			return nil
+		}
+		out = append(out, st.Host)
+	}
+	return out
 }
 
 // hubSkipped: the job's hub step was skipped (the hub was not upgraded).
