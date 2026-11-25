@@ -88,12 +88,19 @@ async function peers(page) {
 }
 // An agent's conversation: the first row whose pane shows the chat (one without a transcript shows the raw terminal).
 // A row's data-id is "host/pane"; the route takes each part encoded on its own (app.js agentHash).
+// Each agent's link is opened as a page of its own (about:blank first), as a link does. Going there by changing only
+// the hash of the page just loaded at "/" raced the desktop's own start (openToSomething: replaceState #/status on the
+// first agents list): when that came a moment after the hash goto, the browser kept #/status and no chat showed (CI
+// runs 45651310851, 45653077893, 45653904066; drive's releases tab had the same race, e7fdd5e). The rows are read once
+// the list has them, not straight after the load.
 let chatId = null; // the row found the first time, tried first after that
 async function chat(page) {
   await page.goto(base + "/", { waitUntil: "load" });
+  await page.waitForSelector("#agents .agent[data-id]");
   const ids = await page.locator("#agents .agent[data-id]").evaluateAll((es) => es.slice(0, 8).map((e) => e.dataset.id));
   if (chatId) ids.unshift(chatId);
   for (const id of ids) {
+    await page.goto("about:blank");
     await page.goto(base + "/#/agent/" + id.split("/").map(encodeURIComponent).join("/"), { waitUntil: "load" });
     // The pane can show the chat first and switch to the terminal once it learns there is no transcript: wait it out.
     try { await page.waitForSelector("#detail #chat .msg", { state: "visible", timeout: 2000 }); } catch { continue; }
