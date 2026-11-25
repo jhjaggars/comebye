@@ -190,7 +190,24 @@ for (const width of [390, 1280]) {
       for (const el of document.querySelectorAll("input, textarea")) if (has(el.value)) found.push("input value");
       if ([...document.querySelectorAll("input[type=password]")].some((e) => e.value)) found.push("a password box holds text");
       for (const st of [localStorage, sessionStorage]) for (let i = 0; i < st.length; i++) { const k = st.key(i); if (has(k) || has(st.getItem(k))) found.push("web storage " + k); if (/prf|passphrase|unlock-k|\bK\b/i.test(k)) found.push("suspect key " + k); }
-      if (indexedDB.databases) for (const d of await indexedDB.databases()) found.push("indexedDB " + d.name); // the app keeps none
+      // The app keeps one database, the saved lists (comebye-cache, #136 slice 4): every record in it is read for the
+      // passphrase. Any other database is a leak.
+      if (indexedDB.databases) for (const d of await indexedDB.databases()) {
+        if (d.name !== "comebye-cache") { found.push("indexedDB " + d.name); continue; }
+        const recs = await new Promise((res) => {
+          const rq = indexedDB.open(d.name);
+          rq.onerror = () => res(null);
+          rq.onsuccess = () => {
+            const db = rq.result;
+            if (!db.objectStoreNames.contains("src")) { db.close(); res([]); return; }
+            const g = db.transaction("src").objectStore("src").getAll();
+            g.onsuccess = () => { db.close(); res(g.result); };
+            g.onerror = () => { db.close(); res(null); };
+          };
+        });
+        if (!recs) found.push("indexedDB comebye-cache (unreadable)");
+        else for (const r of recs) if (has(JSON.stringify(r))) found.push("indexedDB comebye-cache " + r.name);
+      }
       for (const k of await caches.keys()) found.push("cache " + k);
       if (has(document.cookie)) found.push("cookie");
       return found;

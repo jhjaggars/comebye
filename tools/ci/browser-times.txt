@@ -62,4 +62,4 @@ origins 1
 autoblock 1
 reportage 2
 offline 200
-saved 150
+saved 100

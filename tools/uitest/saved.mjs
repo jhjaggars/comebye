@@ -99,7 +99,10 @@ async function phase(width) {
       await page.waitForFunction(() => typeof agentsSrc !== "undefined" && agentsSrc.at > 0);
       await visitAll(page);
       await page.unroute(/\/api\/pages$/);
-      const names = ["agents", "todos", "ledger", "board", "pages", "peers", "releases", "usage"];
+      // Every list this hub has something in (an empty one is never saved): the ledger and peers depend on the hub.
+      const has = await page.evaluate(() => Promise.all([fetch("/api/ledger").then((r) => r.json()), fetch("/api/peers").then((r) => (r.ok ? r.json() : {}))])
+        .then(([l, p]) => ({ ledger: !!((l.entries || []).length || (l.marks || []).length), peers: !!(p.peers || []).length })));
+      const names = ["agents", "todos", "board", "pages", "releases", "usage"].concat(has.ledger ? ["ledger"] : [], has.peers ? ["peers"] : []);
       const got = await waitStored(page, names);
       const viewer = await page.evaluate(() => fetch("/api/version").then((r) => r.json()).then((d) => d.viewer));
       if (!/^[0-9a-f]{16}$/.test(viewer || "")) throw new Error("/api/version names no viewer: " + viewer);
@@ -195,7 +198,7 @@ async function phase(width) {
   await check(`${tag}: caps: 3 MB of agents is not kept, the store stays under 2 MB, a week-old record is not shown`, async () => {
     const { browser, page } = await open();
     try {
-      const got = await load(page, ["agents", "ledger"]);
+      const got = await load(page, ["agents", "todos"]);
       const viewer = got.agents.viewer;
       // Fill the store to 2.1 MB with records of lists this screen does not read again (data their screens refuse to
       // show), the board the newest of them.
@@ -218,13 +221,13 @@ async function phase(width) {
       await page.reload();
       await page.waitForFunction(() => state.agents.length >= 1500 && !agentsSrc.saved, null, { timeout: 10000 });
       if ((await rows(page)) < 100) throw new Error("the big list is not drawn");
-      await page.evaluate(() => { cacheMark("ledger"); cacheFlush(true); }); // a write: the eviction runs
+      await page.evaluate(() => { cacheMark("todos"); cacheFlush(true); }); // a write: the eviction runs
       let after = {};
       for (let i = 0; i < 40; i++) { after = (await stored(page)) || {}; if (total(after) <= 2 << 20 && !after.board) break; await sleep(250); }
       if (total(after) > 2 << 20) throw new Error("store over 2 MB: " + total(after) + " " + JSON.stringify(Object.keys(after)));
       if (after.board) throw new Error("the board was not the first to go: " + JSON.stringify(after) + " app: " + await page.evaluate(() => JSON.stringify({ sizes: [...cache.sizes], viewer: cache.viewer, dirty: [...cache.dirty], off: cache.off, flushing: cache.flushing })));
       if (after.agents && after.agents.size > 512 * 1024) throw new Error("a 3 MB agents list was kept: " + after.agents.size);
-      if (!after.ledger) throw new Error("the ledger went, not only the board: " + Object.keys(after));
+      if (!after.todos) throw new Error("the to-dos went, not only the board: " + Object.keys(after));
       if (!after.peers) throw new Error("more went than needed: " + Object.keys(after));
       await page.unroute(/\/api\/agents$/);
       await page.unroute(/\/api\/events/);
