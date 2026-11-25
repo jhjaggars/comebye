@@ -640,6 +640,24 @@ startup and reuses after; the CLI reads it from the same state directory
 to the calling agent: the ledger's "from", marks' "by" and a to-do's
 "created by" say `coordinator (laharl/w1Q:p1)`.
 
+### The CLI through a restart
+
+An upgrade restarts the local Comebye, which is down for a few seconds.
+A CLI call made then is sent again, for up to 20 seconds in all (waits
+of 0.25 s, doubling to 2 s), only when sending it again cannot do it
+twice:
+
+- **A refused connection, for every call** (`report`, `todo add`,
+  `handoff`, `prompt` and the reads alike): the request never reached
+  the server.
+- **A connection reset or closed before an answer, for reads only**
+  (GET and HEAD: `agents`, `ledger`, `read`, `board` and the like). A
+  POST, PUT or DELETE cut off that way may already have been done, so
+  it is not sent again and the call fails as before.
+
+An answer from the server, an error status included, and a timeout are
+final. After the 20 seconds the call fails with "cannot reach Comebye".
+
 **What an agent may do.** A request with the agent token gets the
 restricted *agent role*. It may read (agents, hosts, transcripts and
 output [on its own host, or any host for a recorded coordinator](security.md#reading-other-agents), the ledger, inspections of an agent's git state,

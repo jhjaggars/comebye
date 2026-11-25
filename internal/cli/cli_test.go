@@ -497,9 +497,10 @@ func TestTransportErrors(t *testing.T) {
 	if code := run(e, "agents"); code != 1 || !strings.Contains(errb.String(), "no agent token at") {
 		t.Fatalf("no token: %d %s", code, errb)
 	}
-	// Token, but nothing listening.
+	// Token, but nothing listening (the retry's waits are not slept).
 	agenttoken.LoadOrCreate(env["COMEBYE_STATE_DIR"])
 	errb.Reset()
+	e.Sleep = func(time.Duration) {}
 	if code := run(e, "agents"); code != 1 || !strings.Contains(errb.String(), "cannot reach Comebye at http://127.0.0.1:1") {
 		t.Fatalf("unreachable: %d %s", code, errb)
 	}

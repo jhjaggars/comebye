@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/agenttoken"
@@ -84,6 +85,8 @@ type client struct {
 	// user, when set, makes requests as the user (the Tailscale login
 	// header, no agent token): for the registry's user-only routes.
 	user string
+	// sleep is the wait between tries through a restart (tests replace it).
+	sleep func(time.Duration)
 
 	// Cached per run.
 	agents  *agentsResp
@@ -101,7 +104,10 @@ func newClient(e *Env) (*client, error) {
 		return nil, fmt.Errorf("COMEBYE_URL %q: want http://127.0.0.1:<port>", base)
 	}
 	dir := StateDir(e.Getenv)
-	c := &client{base: base, tokenPath: agenttoken.Path(dir), pane: e.Getenv("HERDR_PANE_ID"), http: e.HTTP}
+	c := &client{base: base, tokenPath: agenttoken.Path(dir), pane: e.Getenv("HERDR_PANE_ID"), http: e.HTTP, sleep: e.Sleep}
+	if c.sleep == nil {
+		c.sleep = time.Sleep
+	}
 	c.token, c.tokenErr = agenttoken.Read(dir)
 	if h, err := e.Hostname(); err == nil {
 		c.host = h
@@ -146,35 +152,15 @@ func (c *client) raw(method, path string, query url.Values, body any) ([]byte, e
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	var rd io.Reader
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		rd = bytes.NewReader(b)
+		payload = b
 	}
-	req, err := http.NewRequest(method, u, rd)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "comebye-cli/1")
-	if c.user != "" {
-		req.Header.Set("Tailscale-User-Login", c.user)
-	} else {
-		req.Header.Set(headerToken, c.token)
-		if c.pane != "" {
-			req.Header.Set(headerAgent, c.pane)
-		}
-		if c.host != "" {
-			req.Header.Set(headerAgentHost, c.host)
-		}
-	}
-	if rd != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
+	resp, err := c.do(method, u, payload)
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
@@ -206,6 +192,86 @@ func (c *client) raw(method, path string, query url.Values, body any) ([]byte, e
 		e.message = "the local Comebye did not accept the agent token (" + c.tokenPath + "); was it created by the server that listens at " + c.base + "?"
 	}
 	return nil, e
+}
+
+// How long the CLI keeps trying while the local server restarts (an upgrade
+// takes a few seconds), and the pause between tries.
+const (
+	retryFor      = 20 * time.Second
+	retryFirstGap = 250 * time.Millisecond
+	retryMaxGap   = 2 * time.Second
+)
+
+// do sends one request, and sends it again while the local server is down
+// for a restart, for up to retryFor:
+//
+//   - a refused connection, for every call: the request never reached the
+//     server, so sending it again cannot do anything twice;
+//   - a connection reset or closed before an answer, only for GET and HEAD:
+//     the server may have read the request, and only a read may be repeated.
+//
+// Any answer from the server, an error status included, is final; so is a
+// timeout, since a slow server is not a restarting one.
+func (c *client) do(method, u string, payload []byte) (*http.Response, error) {
+	waited, gap := time.Duration(0), retryFirstGap
+	for {
+		req, err := c.newRequest(method, u, payload)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.http.Do(req)
+		if err == nil || !retryable(method, err) || waited+gap > retryFor {
+			return resp, err
+		}
+		c.sleep(gap)
+		waited += gap
+		if gap *= 2; gap > retryMaxGap {
+			gap = retryMaxGap
+		}
+	}
+}
+
+// retryable: err says the local server is not there right now (see do).
+func retryable(method string, err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func (c *client) newRequest(method, u string, payload []byte) (*http.Request, error) {
+	var rd io.Reader
+	if payload != nil {
+		rd = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequest(method, u, rd)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "comebye-cli/1")
+	if c.user != "" {
+		req.Header.Set("Tailscale-User-Login", c.user)
+	} else {
+		req.Header.Set(headerToken, c.token)
+		if c.pane != "" {
+			req.Header.Set(headerAgent, c.pane)
+		}
+		if c.host != "" {
+			req.Header.Set(headerAgentHost, c.host)
+		}
+	}
+	if rd != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
 }
 
 // API shapes (the fields the CLI uses).
