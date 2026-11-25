@@ -171,6 +171,14 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   files the hub's To do, and while the job is stopped there the loop asks the release host again once a minute (for
   a week) and retries the hub step once it answers with a command (`rollout.catchup`). A deploy that ran and failed
   waits for **Retry**.
+- **Busy hosts:** restarting comebye leaves agents and herdr alone, but cuts short what the comebye process itself
+  holds: an agent sign-in in progress (kept in memory only), a tagging it is pushing, or a deploy command it runs.
+  Each host names these in its `GET /api/release/upgrade` (`busy`: `claude sign-in`, `tagging`, `deploy`), and a
+  step whose host is busy waits: the Releases tab shows "waiting: busy (…)" on its row, audited `rollout.busy`. When
+  the host is free the upgrade starts at once and the step says how long it waited. After 15 minutes it goes ahead
+  anyway, and the step keeps "went ahead after waiting 15m: still busy (…)". The wait's start is saved in the job,
+  so a hub restart does not start it again. The hub's own step waits for the hub in the same way. While a host
+  restarts, the `comebye` CLI there retries for up to 20 seconds (see [agents.md](agents.md#the-cli-through-a-restart)).
 - **Hosts the app may not upgrade** (no `-release-upgrade`) are listed as skipped, with why; they do not hold up
   the others.
 - **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then

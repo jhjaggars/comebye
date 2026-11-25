@@ -78,6 +78,10 @@ const (
 	rolloutWakeWait     = 10 * time.Minute // a stopped worker: started and joined the hub (the start job 7 min, the join 3)
 	rolloutCatchUpEvery = time.Minute      // a done job looks for its offline hosts this often
 	rolloutCatchUpFor   = 7 * 24 * time.Hour
+	// rolloutBusyWait: a host busy with what a restart would cut short (a
+	// sign-in, a tagging, a deploy: upgradeStatus.Busy) is waited for this
+	// long, then upgraded anyway, with a line in the step's detail.
+	rolloutBusyWait = 15 * time.Minute
 )
 
 // RolloutStep is one host of the plan.
@@ -97,7 +101,10 @@ type RolloutStep struct {
 	// TryingSince the retry window of a start that could not be sent.
 	OfflineSince *time.Time `json:"offline_since,omitempty"`
 	TryingSince  *time.Time `json:"trying_since,omitempty"`
-	Attempt      int        `json:"attempt,omitempty"`
+	// BusySince is when the step first found its host busy (relHost.Busy);
+	// saved, so a hub restart does not start the wait again.
+	BusySince *time.Time `json:"busy_since,omitempty"`
+	Attempt   int        `json:"attempt,omitempty"`
 	// Woke: the host was stopped and this rollout started it (issue #66).
 	Woke bool `json:"woke,omitempty"`
 	// Mode "deploy": the step is the hub wave's deploy command, not an
@@ -216,6 +223,7 @@ type rolloutEngine struct {
 	// soak a canary gets when it starts soaking (the hub's setting); else soak.
 	soakFor                                                     func() time.Duration
 	soak, backWait, offlineGrace, runWait, startRetry, wakeWait time.Duration
+	busyWait                                                    time.Duration
 	// catchUpEvery is how often a done job with hosts skipped while offline
 	// asks the fleet whether they are back; lastCatchUp is when it last did.
 	catchUpEvery time.Duration
@@ -243,7 +251,8 @@ type rolloutEngine struct {
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
 	return &rolloutEngine{path: path, ops: ops, now: func() time.Time { return time.Now().UTC() }, audit: audit,
 		catchUpEvery: rolloutCatchUpEvery,
-		soak:         rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait}
+		soak:         rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait,
+		busyWait: rolloutBusyWait}
 }
 
 var (
@@ -937,6 +946,10 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		e.started(j, st, h, *r, now, "adopted the run already going")
 		return false
 	}
+	wait, how := e.waitBusy(j, st, h, now)
+	if wait {
+		return false
+	}
 	cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)
 	rec, err := e.ops.StartUpgrade(cctx, *j, st.Host)
 	cancel()
@@ -955,8 +968,45 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		j.Note = st.Host + ": " + st.Detail
 		return false
 	}
-	e.started(j, st, h, rec, now, "")
+	e.started(j, st, h, rec, now, how)
 	return false
+}
+
+// waitBusy holds a step whose host is busy with what a restart would cut
+// short (h.Busy: an agent sign-in, a tagging, a deploy), for up to busyWait
+// from when the step first saw it so. It says whether to wait this tick
+// and, once the wait is over, the line the step's detail keeps: why it went
+// ahead (the limit), or that it waited.
+func (e *rolloutEngine) waitBusy(j *Rollout, st *RolloutStep, h relHost, now time.Time) (bool, string) {
+	// BusySince stays until the step starts (started, hubStarted clear it):
+	// a start that fails after the wait does not begin another.
+	if len(h.Busy) == 0 {
+		if st.BusySince == nil {
+			return false, ""
+		}
+		return false, "waited " + now.Sub(*st.BusySince).Round(time.Second).String() + " while it was busy"
+	}
+	why := strings.Join(h.Busy, ", ")
+	if st.BusySince == nil {
+		t := now
+		st.BusySince = &t
+		e.emit(*j, st.Host, "rollout.busy", true, "waiting: busy ("+why+")", "comebye")
+	}
+	waited := now.Sub(*st.BusySince)
+	if waited < e.busyWait {
+		st.Detail = "waiting: busy (" + why + ")"
+		j.Note = st.Host + " is busy (" + why + "): waiting up to " + fmtWait(e.busyWait-waited) + " more"
+		return true, ""
+	}
+	return false, "went ahead after waiting " + fmtWait(e.busyWait) + ": still busy (" + why + ")"
+}
+
+// fmtWait is a short "14m", "40s" for the time left of a wait.
+func fmtWait(d time.Duration) string {
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm", int((d+time.Minute-1)/time.Minute))
+	}
+	return d.Round(time.Second).String()
 }
 
 func wakeText(host string, v wakeVerdict) string {
@@ -1011,7 +1061,7 @@ func hostDown(h relHost) bool { return h.Status != "ok" }
 func (e *rolloutEngine) started(j *Rollout, st *RolloutStep, h relHost, rec upgrade.Record, now time.Time, how string) {
 	t := now
 	st.Phase, st.Run, st.From, st.At, st.Started = roUpgrading, rec.ID, h.Version, now, &t
-	st.TryingSince, st.Detail = nil, how
+	st.TryingSince, st.BusySince, st.Detail = nil, nil, how
 	j.Note = "upgrading " + st.Host
 	detail := fmt.Sprintf("start from=%s run=%s", h.Version, rec.ID)
 	if how != "" {

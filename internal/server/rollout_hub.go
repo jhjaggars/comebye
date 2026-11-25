@@ -234,6 +234,12 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		e.hubStarted(j, st, ds.Record.Started, now, "adopted the deploy already running")
 		return false
 	}
+	// The hub's own restart would cut short what it is busy with (a sign-in
+	// on the hub), the same as a peer's.
+	wait, how := e.waitBusy(j, st, h, now)
+	if wait {
+		return false
+	}
 	started, err := e.ops.StartDeploy(cctx, *j)
 	if err != nil {
 		var pf *peerFault
@@ -254,7 +260,7 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		j.Note = st.Detail
 		return false
 	}
-	e.hubStarted(j, st, parseDeployStart(started), now, "")
+	e.hubStarted(j, st, parseDeployStart(started), now, how)
 	return false
 }
 
@@ -267,7 +273,7 @@ func (e *rolloutEngine) hubStarted(j *Rollout, st *RolloutStep, started, now tim
 	h, _ := findHost(e.hosts, st.Host)
 	t := now
 	st.Phase, st.Run, st.From, st.At, st.Started = roUpgrading, started.UTC().Format(time.RFC3339Nano), h.Version, now, &t
-	st.TryingSince, st.Detail = nil, how
+	st.TryingSince, st.BusySince, st.Detail = nil, nil, how
 	j.Note = "deploying the hub"
 	d := "deploy start from=" + h.Version + " run=" + st.Run
 	if how != "" {

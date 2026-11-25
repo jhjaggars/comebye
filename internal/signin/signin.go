@@ -359,6 +359,21 @@ func (m *Manager) stop(s *session) {
 	}
 }
 
+// Running names the agents with a sign-in in progress (not yet ended), in
+// no set order. A sign-in lives in this process only: a restart loses it,
+// so a rollout waits for it (the host's busy reasons).
+func (m *Manager) Running() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, s := range m.sessions {
+		if !s.ended {
+			out = append(out, s.d.Name)
+		}
+	}
+	return out
+}
+
 // Get returns the sign-in's state.
 func (m *Manager) Get(id string) (Snapshot, error) {
 	m.mu.Lock()

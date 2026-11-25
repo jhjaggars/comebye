@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -291,6 +292,8 @@ type relHost struct {
 	// ProcStart is when the host's comebye process started, as it says
 	// itself (nil: too old to say). The canary's soak watches it.
 	ProcStart *time.Time `json:"proc_start,omitempty"`
+	// Busy is what the host says a restart would cut short (upgradeStatus.Busy).
+	Busy []string `json:"busy,omitempty"`
 }
 
 // How old an answer from git or GitHub the page may be shown. The refresh
@@ -498,7 +501,7 @@ func (s *Server) relHosts(ctx context.Context) []relHost {
 				}
 			}
 			out[i].Enabled, out[i].DryRun, out[i].Record, out[i].WithHub = st.Enabled, st.DryRun, st.Record, st.WithHub && !local
-			out[i].ProcStart = st.Started
+			out[i].ProcStart, out[i].Busy = st.Started, st.Busy
 			if st.Version != "" {
 				out[i].Version = st.Version
 			}
@@ -660,6 +663,36 @@ type upgradeStatus struct {
 	// systemd's Restart=on-failure brings back within seconds shows as one
 	// even when the hub never sees the host offline.
 	Started *time.Time `json:"started,omitempty"`
+	// Busy names what this host is doing that a restart of comebye would
+	// cut short (busyReasons); a rollout waits a while before it upgrades a
+	// busy host.
+	Busy []string `json:"busy,omitempty"`
+}
+
+// busyReasons is what this process is doing that its restart would lose:
+// an agent sign-in in progress (in memory only), a tagging it is pushing,
+// or a deploy command it is running. Sorted, so a view does not flicker.
+func (s *Server) busyReasons() []string {
+	var out []string
+	if s.signin != nil {
+		names := s.signin.Running()
+		sort.Strings(names)
+		for _, n := range names {
+			out = append(out, n+" sign-in")
+		}
+	}
+	if s.rel != nil {
+		s.rel.cmu.Lock()
+		tagging := len(s.rel.tagging) > 0
+		s.rel.cmu.Unlock()
+		if tagging || s.rel.peerTagging.Load() {
+			out = append(out, "tagging")
+		}
+		if s.rel.deploying.Load() {
+			out = append(out, "deploy")
+		}
+	}
+	return out
 }
 
 // processStarted is when this process started (upgradeStatus.Started).
@@ -675,7 +708,7 @@ func (s *Server) upgradeRecordPath() string {
 func (s *Server) upgradeStatus() upgradeStatus {
 	started := processStarted
 	st := upgradeStatus{Enabled: s.cfg.Release.Upgrade, DryRun: s.cfg.Release.DryRun, Version: s.cfg.Version,
-		WithHub: s.cfg.HubOnly && s.cfg.NoLedger && !s.cfg.Release.Upgrade, Started: &started}
+		WithHub: s.cfg.HubOnly && s.cfg.NoLedger && !s.cfg.Release.Upgrade, Started: &started, Busy: s.busyReasons()}
 	if p := s.upgradeRecordPath(); p != "" {
 		if rec, err := upgrade.ReadRecord(p); err == nil && rec.ID != "" {
 			if rec.State == upgrade.RecRunning && !rec.Live(time.Now()) {
