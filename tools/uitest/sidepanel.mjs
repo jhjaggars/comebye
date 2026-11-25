@@ -8,7 +8,7 @@
 //   node sidepanel.mjs BASE OUT_DIR      (env: PANEL_HOME, COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
 //
 // Each check runs at 1440 (a split beside the chat) and at 390 (a bottom sheet).
-import { launch } from "./lib.mjs";
+import { clickStable, launch } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -142,14 +142,15 @@ for (const width of [1440, 390]) {
   });
 
   await check(`${tag}: the user can pick another file or type a path, under the same rules; refused ones say why`, async () => {
-    await page.locator("#sp-path").fill("README.md");
-    await page.locator("#sp-path-form button").click();
-    await page.waitForFunction(() => /Run a drill with/.test(document.querySelector("#sp-body")?.textContent || ""), null, { timeout: 8000 });
-    for (const [p, re] of [["../../../../etc/passwd", /not one this panel may read|neither in/], [".github/notes.md", /hidden/], ["a.go", /only \.md/]]) {
+    // Open a path, and say which one never showed what it should, with what the panel had then.
+    const open = async (p, re) => {
       await page.locator("#sp-path").fill(p);
-      await page.locator("#sp-path-form button").click();
-      await page.waitForFunction((src) => new RegExp(src).test(document.querySelector("#sp-body")?.textContent || ""), re.source, { timeout: 8000 });
-    }
+      await clickStable(page, "#sp-path-form button");
+      await page.waitForFunction((src) => new RegExp(src).test(document.querySelector("#sp-body")?.textContent || ""), re.source, { timeout: 8000 })
+        .catch(async () => { throw new Error(`${p}: no ${re} in the panel: ` + JSON.stringify(await page.evaluate(() => ({ path: document.querySelector("#sp-path")?.value, body: (document.querySelector("#sp-body")?.textContent || "").trim().slice(0, 200) })))); });
+    };
+    await open("README.md", /Run a drill with/);
+    for (const [p, re] of [["../../../../etc/passwd", /not one this panel may read|neither in/], [".github/notes.md", /hidden/], ["a.go", /only \.md/]]) await open(p, re);
     // back to the agent's document
     await page.locator("#sp-file").selectOption({ index: 0 });
     await page.waitForFunction(() => document.querySelectorAll("#sp-doc h2").length > 10, null, { timeout: 8000 });

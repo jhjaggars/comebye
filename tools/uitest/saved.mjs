@@ -11,16 +11,11 @@
 //   node saved.mjs BASE OUT_DIR       (env: SCHEME)
 // The slow and dead links are Playwright routes on /api/ (they catch the event stream too); the hub is never changed
 // except for one to-do filed through its API.
-import { launch } from "./lib.mjs";
+import { launch, makeCheck } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const dark = process.env.SCHEME !== "light";
-const results = [];
-async function check(name, fn) {
-  if (process.env.ONLY && !new RegExp(process.env.ONLY).test(name)) return; // ONLY=regex: just those checks, for a quick look
-  try { await fn(); results.push({ name, ok: true }); console.log("ok   " + name); }
-  catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
-}
+const check = makeCheck();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const API = /\/api\//;
 // gate: every /api/ request waits until open() is called (a stalled link that comes back).
@@ -45,14 +40,19 @@ const stored = (page) => page.evaluate(() => new Promise((res) => {
   } catch { res(null); }
 }));
 const total = (o) => Object.values(o || {}).reduce((a, r) => a + r.size, 0);
+// waitStored waits until each of names is in the store. A list is written at most once per CACHE_GAP_MS (10 s): the
+// page's clock (page.clock, installed by open()) is moved on a second at a time while it waits, so the next write is
+// due in a moment of real time, not up to 10 s of it.
 async function waitStored(page, names, ms = 15000) {
   const end = Date.now() + ms;
-  let got = {};
+  let got = {}, moved = 0;
   for (;;) {
     got = (await stored(page)) || {};
     if (names.every((n) => got[n])) return got;
     if (Date.now() > end) throw new Error(`not saved: ${names.filter((n) => !got[n]).join(", ")} (store has ${Object.keys(got).join(", ") || "nothing"})`);
-    await sleep(250);
+    // At most one gap and a bit: the saved lists must still read "just now" (under a minute) after it.
+    if (moved < 12000) { await page.clock.fastForward(1000); moved += 1000; }
+    await sleep(100);
   }
 }
 const stripText = (page) => page.evaluate(() => { const e = document.querySelector("#hub-strip"); return e && !e.hidden ? e.innerText.replace(/\s+/g, " ").trim() : ""; });
@@ -79,6 +79,9 @@ async function phase(width) {
     const errs = [];
     page.on("pageerror", (e) => errs.push(e.message));
     if (init) await page.addInitScript(init);
+    // Playwright's clock: it runs on its own as a real one does, and the checks move it on where the app waits on a
+    // timer of its own (the store's 10 s write gap, its 3 s give-up on an IndexedDB that never answers).
+    await page.clock.install();
     return { browser, page, errs };
   };
   // load: open the app and wait until the agents (and whatever else is named) are saved.
@@ -270,7 +273,10 @@ async function phase(width) {
       try {
         await page.goto(base + "/");
         await page.waitForFunction(() => document.querySelectorAll("#agents .agent").length > 0 && agentsSrc.at > 0, null, { timeout: 10000 });
-        await sleep(kind === "hangs" ? 3500 : 800);
+        if (kind === "hangs") { // the store gives up on an open that never answers after CACHE_OPEN_MS (3 s)
+          await page.clock.fastForward(3500);
+          await page.waitForFunction(() => cache.off, null, { timeout: 3000 }).catch(() => { throw new Error("the store did not give up on a hung IndexedDB"); });
+        } else await sleep(800);
         await page.evaluate(() => cacheFlush(true));
         // The live strip and the screens behave as before; Settings says nothing is saved (or what is).
         await page.evaluate(() => { location.hash = "#/status"; });
@@ -299,6 +305,6 @@ async function phase(width) {
 
 await fileTodo();
 for (const w of (process.env.WIDTHS || "390 1280").split(/\s+/).map(Number)) await phase(w);
-const bad = results.filter((r) => !r.ok).length;
-console.log(`saved: ${results.length - bad} passed, ${bad} failed`);
+const bad = check.failed;
+console.log(`saved: ${check.results.length - bad} passed, ${bad} failed`);
 process.exit(bad ? 1 : 0);

@@ -37,8 +37,12 @@ const NO_AGENTS = { agents: [], hosts: [{ name: "uitest", local: true, status: "
 
 async function phase(width) {
   const desk = width > 500, tag = desk ? "desktop" : "phone";
+  // Phase 1 runs on Playwright's clock (page.clock): the app's 10 s give-up (SRC_GIVEUP_MS, timed with Date.now and a
+  // timer) is reached by moving the page's clock on, not by waiting 10 s of real time on a runner that may be slow.
+  // The clock still runs on its own between the moves, so the app's polls and paints go on as usual.
   const open = async () => {
     const { browser, page } = await launch({ width, height: desk ? 800 : 844, dark });
+    await page.clock.install();
     return { browser, page };
   };
 
@@ -48,7 +52,8 @@ async function phase(width) {
     try {
       await hold(page);
       await page.goto(base + "/");
-      await sleep(2500);
+      await page.waitForSelector("#agents .src-wait .skel-row", { state: "attached", timeout: 5000 }).catch(() => {});
+      await page.clock.fastForward(2500); // well into the wait, short of the give-up
       const list = await textOf(page, "#agents");
       if (/No agents running/.test(list)) throw new Error("the list says none before the hub answered");
       if (!(await page.locator("#agents .src-wait .skel-row").count())) throw new Error("no skeleton rows: " + JSON.stringify(list));
@@ -60,7 +65,8 @@ async function phase(width) {
         if (n !== 1) throw new Error(`"Reaching the hub…" shows ${n} times`);
       }
       await page.screenshot({ path: `${out}/offline-held-${tag}.png` });
-      await page.waitForFunction(() => /Can.t reach the hub/.test(document.querySelector("#agents")?.innerText || ""), null, { timeout: 9000 });
+      await page.clock.fastForward(8000); // past the 10 s give-up
+      await page.waitForFunction(() => /Can.t reach the hub/.test(document.querySelector("#agents")?.innerText || ""), null, { timeout: 3000 });
       const t = await textOf(page, "#agents");
       if (!/did not answer|No answer in 10 seconds/.test(t)) throw new Error("no reason under Can't reach: " + JSON.stringify(t));
       if (!(await page.locator("#agents button.src-retry").isVisible())) throw new Error("no Try again");
@@ -74,7 +80,8 @@ async function phase(width) {
     try {
       await hold(page);
       await page.goto(base + "/#/agent/uitest/w9:p1");
-      await sleep(1500);
+      await page.waitForFunction(() => /Opening w9:p1/.test(document.querySelector("#agents")?.innerText || ""), null, { timeout: 5000 }).catch(() => {});
+      await page.clock.fastForward(1500);
       const t = await textOf(page, "#agents");
       if (/No agents running/.test(t)) throw new Error("empty list shown");
       if (!/Opening w9:p1/.test(t)) throw new Error("no 'Opening w9:p1…': " + JSON.stringify(t));
@@ -87,7 +94,8 @@ async function phase(width) {
       try {
         await hold(page);
         await page.goto(base + "/#/todo");
-        await sleep(2000);
+        await page.waitForSelector("#pt-body .src-wait", { state: "attached", timeout: 5000 }).catch(() => {});
+        await page.clock.fastForward(2000);
         const t = await textOf(page, "#pt-body");
         if (/Nothing is waiting on you/.test(t)) throw new Error("To do says nothing before the hub answered");
         if (!(await page.locator("#pt-body .src-wait").count())) throw new Error("no skeleton: " + JSON.stringify(t));
@@ -107,7 +115,7 @@ async function phase(width) {
       await page.waitForFunction(() => /Can.t reach the hub/.test(document.querySelector("#agents")?.innerText || ""), null, { timeout: 5000 });
       await noRaw(page);
       // Status, To do and Archived wait on the ledger, which is read after the agents: their wait runs out at 10 s.
-      await page.waitForTimeout(Math.max(0, 10500 - (await page.evaluate(() => Date.now() - ledgerSrc.since))));
+      await page.clock.fastForward(Math.max(0, 10500 - (await page.evaluate(() => Date.now() - ledgerSrc.since))));
       const screens = [["#/status", desk ? "#ps-body" : "#ss-body"], ["#/peers", "#pr-items"], [desk ? "#/peers/~releases" : "#/peers/~releases", "#pr-releases"],
         ["#/pages", "#pgs-items"], ["#/archived", "#ar-list"]];
       for (const [hash, sel] of screens) {
@@ -228,7 +236,8 @@ async function phase(width) {
       if (/No changes yet/.test(t)) throw new Error("Diff says 'No changes yet' before the hub answered");
       if (!(await page.locator("#sp-body .src-wait").count())) throw new Error("no skeleton in Diff: " + JSON.stringify(t));
       await page.click("#sp-tab-doc");
-      await page.waitForFunction(() => /Can.t reach the hub/.test(document.querySelector("#sp-body")?.innerText || ""), null, { timeout: 11000 });
+      await page.clock.fastForward(10500); // past the 10 s give-up, on the page's clock
+      await page.waitForFunction(() => /Can.t reach the hub/.test(document.querySelector("#sp-body")?.innerText || ""), null, { timeout: 3000 });
       await page.screenshot({ path: `${out}/offline-sidepanel-${tag}.png` });
     } finally { await browser.close(); }
   });
