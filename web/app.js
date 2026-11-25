@@ -1456,7 +1456,7 @@ function stripView() {
 // in it) still stops counting when it goes old.
 function todoAgesSync() {
   const old = srcStale(todosSrc);
-  for (const e of document.querySelectorAll(".td-age[data-at], .td-asked[data-at]")) {
+  for (const e of document.querySelectorAll(".td-age[data-at], .td-mage[data-at], .td-asked[data-at]")) {
     const at = Number(e.dataset.at), a = old ? frozenAt(at) : fmtAgo(at);
     const t = e.classList.contains("td-asked") && !old ? a + " ago" : a;
     if (e.textContent !== t) e.textContent = t;
@@ -2900,7 +2900,7 @@ function todoItemHtml(t, pfx, asPanel) {
     (t.kind === "review" && !ans && t.review && t.review.stale ? `<span class="td-chip st-warn" title="Open for 3 days or more">stale</span>` : "");
   let panel = "";
   if (open && !inSplit) {
-    const meta = [who && `waiting: ${who}`, age].filter(Boolean).map(esc).join(" · ");
+    const meta = [who && esc(`waiting: ${who}`), age && `<span class="td-mage" data-at="${at}">${esc(age)}</span>`].filter(Boolean).join(" · ");
     const repEntry = (l) => (ledger.entries || []).find((x) => x.id === l.handoff);
     // "Full report" is the hub's stored final report, shown in place; the transcript is a link of its own.
     const isRep = (l) => l.handoff && !l.url && (l.kind === "report" || (!l.kind && /^Full report/.test(l.label || "")));

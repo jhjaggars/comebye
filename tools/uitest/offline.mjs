@@ -546,7 +546,7 @@ async function phase3(width) {
       await page.keyboard.press("End");
       await page.keyboard.type(" more");
       // The list is not redrawn while the box has focus, but its ages still stop counting.
-      const counting = await page.evaluate((s) => [...document.querySelectorAll(s + " .td-age[data-at]")].filter((e) => !/^at /.test(e.textContent)).length, listSel);
+      const counting = await page.evaluate((s) => [...document.querySelectorAll(s + " .td-age[data-at], " + s + " .td-mage[data-at], " + s + " .td-asked[data-at]")].filter((e) => !/^at /.test(e.textContent)).length, listSel);
       if (counting) throw new Error(counting + " To do ages still count while an answer is typed");
       await page.click(`${it} .td-opt[data-n="1"]`, { force: true });
       await page.click(`${it} .td-answer-btn`, { force: true });
