@@ -119,6 +119,7 @@ async function phase(width) {
       const s = await stripText(page);
       if (!/^Offline · /.test(s)) throw new Error("strip: " + JSON.stringify(s));
       if (!(await page.evaluate(() => document.querySelector("#agents").classList.contains("stale")))) throw new Error("the saved rows are not marked old");
+      await sleep(1000); // let the saved To do card draw
       await page.screenshot({ path: `${out}/shell-offline-${tag}.png` });
       // /api/* is a network error offline: the worker never answers it from a cache.
       const api = await page.evaluate(() => fetch("/api/version").then((r) => "answered " + r.status, () => "failed"));
