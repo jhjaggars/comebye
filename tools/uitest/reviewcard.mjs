@@ -5,7 +5,7 @@
 // verdict; keys 1 and 2 and Escape on desktop. Pages are published with the real CLI.
 //
 //   node reviewcard.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
-import { launch } from "./lib.mjs";
+import { launch, makeCheck } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +19,6 @@ const dark = process.env.SCHEME !== "light";
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "reviewcard-ui-"));
 // The pages written here are published copies by the end: remove the work directory however the script ends.
 process.on("exit", () => { try { fs.rmSync(work, { recursive: true, force: true }); } catch {} });
-const results = [];
 const env = { PATH: "/usr/bin:/bin", HOME: work, COMEBYE_URL: base, COMEBYE_STATE_DIR: stateDir, HERDR_PANE_ID: "w4:p1" };
 const publish = (key, title, noThumb) => {
   const f = path.join(work, key + ".html");
@@ -38,10 +37,7 @@ const get = async (id) => (await fetch(base + "/api/todos/" + id).then((r) => r.
 const all = async () => (await fetch(base + "/api/todos?state=all").then((r) => r.json())).todos;
 const drop = (id) => fetch(base + `/api/todos/${id}/drop`, { method: "POST", headers: J, body: "{}" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function check(name, fn) {
-  try { await fn(); results.push({ name, ok: true }); console.log("ok   " + name); }
-  catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
-}
+const check = makeCheck();
 async function until(fn, what, ms = 8000) {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) { const v = await fn(); if (v) return v; }
   throw new Error("timed out waiting for " + what);
@@ -232,18 +228,47 @@ for (const width of [1280, 390]) {
         // move at that spot has reached the button itself. :hover is no proof: the app's document sets it on its own after
         // a layout, from where the pointer last was (the check above pressed Comment at this very spot). A 1px nudge makes
         // each poll a real move.
+        //
+        // Even then the press itself can go to the frame: Chrome routes each event by its own hit test against the frames
+        // it has drawn, and on a loaded runner a press right after the move was still sent to the Page (traced in CI: focus
+        // on the IFRAME, no pointerdown on Comment, composing false). That is the browser's routing, not the app's redraw,
+        // so the press is checked: the app's document must have had the trusted pointerdown, on Comment. When it did not, the
+        // button goes up over the frame (nothing happens there: the Page has no selection), and the move and the press are
+        // tried again. What
+        // is under test comes after a press that reached Comment: the redraw before the release must not lose the tap.
+        //
+        // What reached the app's document: each trusted pointerdown, pointerup and click, with its target and whether that
+        // target is still in the page. Events the browser sent to the Page's frame never get here.
+        await page.evaluate(() => {
+          const rec = (ev) => { if (!ev.isTrusted) return; const t = ev.target; window.__rc.push({ type: ev.type, id: t.id || t.tagName, node: t }); };
+          window.__rc = [];
+          for (const type of ["pointerdown", "pointerup", "click"]) document.addEventListener(type, rec, true);
+        });
         await page.locator("#pgs-addc").evaluate((b) => b.addEventListener("pointermove", (e) => { if (e.isTrusted) b.dataset.reached = "1"; }));
-        let nudge = 0;
-        await until(async () => {
-          await page.mouse.move(cx + (nudge ^= 1), cy);
-          return page.locator("#pgs-addc").evaluate((b) => b.dataset.reached === "1");
-        }, "a pointer move over Comment to reach it, not the Page's frame under it");
-        await page.mouse.down();
+        const seen = () => page.evaluate(() => window.__rc.map((e) => ({ type: e.type, id: e.id, connected: e.node.isConnected })));
+        let pressed = false;
+        for (let attempt = 1; attempt <= 3 && !pressed; attempt++) {
+          let nudge = 0;
+          await page.evaluate(() => { window.__rc.length = 0; delete document.querySelector("#pgs-addc").dataset.reached; });
+          await until(async () => {
+            await page.mouse.move(cx + (nudge ^= 1), cy);
+            return page.locator("#pgs-addc").evaluate((b) => b.dataset.reached === "1");
+          }, "a pointer move over Comment to reach it, not the Page's frame under it");
+          await page.mouse.down();
+          const down = (await seen()).find((e) => e.type === "pointerdown");
+          pressed = !!down && down.id === "pgs-addc";
+          if (!pressed) {
+            await page.mouse.up();
+            console.log(`     (press ${attempt} reached ${down ? down.id : "the Page's frame, not the app"}: once more)`);
+            await sleep(100);
+          }
+        }
+        if (!pressed) throw new Error("three presses over Comment never reached it: " + JSON.stringify(await seen()));
         await page.evaluate(() => pgcRender());
         await page.mouse.up();
         await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async (e) => {
           await page.screenshot({ path: `${out}/split-set-FAIL-${width}-${dark ? "dark" : "light"}.png` }).catch(() => {});
-          throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length, focus: document.activeElement && (document.activeElement.id || document.activeElement.tagName) }))));
+          throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length, focus: document.activeElement && (document.activeElement.id || document.activeElement.tagName), events: (window.__rc || []).map((e) => e.type + ":" + e.id + (e.node.isConnected ? "" : "(gone)")) }))));
         });
         await page.locator("#pgs-note").fill("Is one bucket enough?");
         await page.locator("#pgs-noteadd").click();
@@ -278,12 +303,12 @@ for (const width of [1280, 390]) {
     }
     if (errs.length) throw new Error("page errors: " + errs.join("; "));
   } catch (e) {
-    results.push({ name: `review card at ${tag}: ${e.message.split("\n")[0]}`, ok: false }); console.log("FAIL " + tag + " " + e.message);
+    check.results.push([`review card at ${tag}: ${e.message.split("\n")[0]}`, false, e.message]); check.failed++; console.log("FAIL " + tag + " " + e.message);
   } finally {
     for (const id of ids) await drop(id).catch(() => {});
     await browser.close();
   }
 }
-const bad = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - bad}/${results.length} review card checks passed`);
+const bad = check.failed;
+console.log(`\n${check.results.length - bad}/${check.results.length} review card checks passed`);
 process.exit(bad ? 1 : 0);
