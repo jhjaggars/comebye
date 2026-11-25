@@ -29,9 +29,11 @@ const reqs = [];
 page.on("request", (r) => { const u = new URL(r.url()); if (u.pathname.startsWith("/api/")) reqs.push({ path: u.pathname, at: Date.now() }); });
 const asked = (p, since) => reqs.filter((r) => r.path === p && r.at >= since).length;
 
-// The spinner's life, seen from the page: a MutationObserver notes the moment #ptr starts and stops spinning (its class
-// and hidden attribute), in the task that changed them, so the time is the app's own and not across round trips. It
-// used to sample once a frame, and a first frame that came late cut the spin short (483 ms, 1 run in 3).
+// The spinner's life, seen from the page: the moment #ptr starts and stops spinning, stamped in the very call that
+// changed its class (classList.add/remove/toggle, patched here) or its hidden flag, so the time is the app's own and
+// not across round trips. A MutationObserver catches any other change, but only at the end of the task: on a loaded
+// machine the rest of that task (the refresh's own synchronous work) ran first, the start was stamped late and a
+// 500 ms spin measured 483 ms. Sampling once a frame, before that, cut it short the same way.
 await page.addInitScript(() => {
   window.__spin = [];
   let last = false;
@@ -39,6 +41,12 @@ await page.addInitScript(() => {
     const on = !!document.querySelector("#ptr.spin:not([hidden])");
     if (on !== last) { last = on; window.__spin.push({ on, t: performance.now() }); }
   };
+  for (const m of ["add", "remove", "toggle", "replace"]) {
+    const orig = DOMTokenList.prototype[m];
+    DOMTokenList.prototype[m] = function (...a) { const r = orig.apply(this, a); note(); return r; };
+  }
+  const hid = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "hidden");
+  Object.defineProperty(HTMLElement.prototype, "hidden", { ...hid, set(v) { hid.set.call(this, v); note(); } });
   new MutationObserver(note).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
 });
 // navigator.vibrate stubbed (headless Chrome has none): each call is recorded, for the Settings › Vibrate check.
