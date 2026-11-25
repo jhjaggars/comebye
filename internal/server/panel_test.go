@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -119,6 +120,34 @@ func TestPanelDiffSections(t *testing.T) {
 	}
 	if d.Files != 4 || d.Add < 5 {
 		t.Errorf("totals: files %d add %d", d.Files, d.Add)
+	}
+}
+
+// A read cut short (the request cancelled after the fingerprint) answers with what it got, but is not cached: the
+// next read is whole. A cached partial diff was served to every poll until the worktree changed.
+func TestPanelDiffCutShortIsNotCached(t *testing.T) {
+	_, wt := panelHome(t)
+	// Files changed a moment ago are never fingerprinted (panelfp.go): an hour ago, so the cache is used.
+	old := time.Now().Add(-time.Hour)
+	filepath.WalkDir(wt, func(p string, e fs.DirEntry, err error) error {
+		if err == nil && e.Type().IsRegular() {
+			os.Chtimes(p, old, old)
+		}
+		return nil
+	})
+	if _, ok := panelFingerprint(context.Background(), wt, "main", ""); !ok {
+		t.Fatal("no fingerprint: the cache would not be used")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	panelAfterFingerprint = cancel
+	part := panelDiffOf(ctx, wt, "")
+	panelAfterFingerprint = nil
+	if len(part.Sections) == 4 && len(part.Commits) == 1 {
+		t.Fatalf("the read was not cut short: %+v", part.Sections)
+	}
+	d := runDiff(t, panelServer(t), wt, "")
+	if len(d.Sections) != 4 || len(d.Commits) != 1 || sectionFile(d, "staged", "b.go") == nil || sectionFile(d, "commits", "c.go") == nil {
+		t.Fatalf("the next read is not whole: %d sections, %d commits", len(d.Sections), len(d.Commits))
 	}
 }
 

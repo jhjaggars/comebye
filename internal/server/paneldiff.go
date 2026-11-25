@@ -416,6 +416,9 @@ func untrackedFileCap(top, rel string, fileCap int) panelFile {
 }
 
 // panelDiffOf reads dir's changes.
+// panelAfterFingerprint, when set (tests only), runs between the fingerprint and the read.
+var panelAfterFingerprint func()
+
 func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	d := panelDiff{Dir: dir}
 	top, _, _, err := gitDirs(ctx, dir)
@@ -428,6 +431,9 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	base, mb := panelBase(ctx, top)
 	// Nothing changed since the last answer: say so without running the diffs.
 	fp, fpOK := panelFingerprint(ctx, top, base, mb)
+	if panelAfterFingerprint != nil {
+		panelAfterFingerprint()
+	}
 	if fpOK {
 		if c, hit := panelCacheGet(top, fp); hit {
 			if since != "" && since == c.Sig {
@@ -440,9 +446,14 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	}
 	d.Branch, _ = runGit(ctx, top, "rev-parse", "--abbrev-ref", "HEAD")
 	var note string
+	// failed: a read that went wrong partway (a git command failed, or the request was cancelled and the base or a
+	// section came back empty). Its answer is still sent, but never cached: a cached partial diff was served to every
+	// later poll until the worktree changed (the Staged or Commits section missing for good, sidepanel.mjs on the VM).
+	failed := false
 	section := func(key, title string, args ...string) {
 		out, trunc, err := panelGit(ctx, top, panelGitRead, append([]string{"diff", "--no-color", "--no-ext-diff", "-M", "--src-prefix=a/", "--dst-prefix=b/"}, args...)...)
 		if err != nil {
+			failed = true
 			return
 		}
 		files := splitDiff(out)
@@ -478,11 +489,17 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 			note = strconv.Itoa(skipped) + " more untracked files are not shown"
 		}
 		d.Sections = append(d.Sections, panelSection{Key: "untracked", Title: "Untracked", Files: files})
+	} else {
+		failed = true
 	}
 	// Commits since the base.
 	if base != "" {
 		d.Base = base
-		if lg, err := runGit(ctx, top, "log", "--format=%h%x09%s", "-n", "50", mb+"..HEAD"); err == nil && lg != "" {
+		lg, err := runGit(ctx, top, "log", "--format=%h%x09%s", "-n", "50", mb+"..HEAD")
+		if err != nil {
+			failed = true
+		}
+		if err == nil && lg != "" {
 			for _, l := range strings.Split(lg, "\n") {
 				if sha, subj, ok := strings.Cut(l, "\t"); ok {
 					d.Commits = append(d.Commits, panelCommit{SHA: sha, Subject: subj})
@@ -509,7 +526,10 @@ func panelDiffOf(ctx context.Context, dir, since string) panelDiff {
 	}
 	d.Files = len(seen)
 	d.Sig = panelSig(&d)
-	if fpOK { // the fingerprint was taken before the read, so an edit during it shows at the next poll
+	if ctx.Err() != nil {
+		failed = true
+	}
+	if fpOK && !failed { // the fingerprint was taken before the read, so an edit during it shows at the next poll
 		panelCachePut(top, fp, d)
 	}
 	if since != "" && since == d.Sig {
