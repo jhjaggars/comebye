@@ -81,6 +81,8 @@ async function watch() {
   });
 }
 const seen = () => page.evaluate(() => window.__ret);
+// The mark comes from a check one or two frames after the step back (or a timer at 150 ms): wait for it, never a fixed sleep.
+const markAppears = () => page.waitForSelector(".was-open", { state: "attached", timeout: 1500 }).catch(() => {});
 const clears = () => page.waitForFunction(() => !document.querySelector(".was-open"), null, { timeout: 2500 });
 
 async function go(hash, ready) {
@@ -110,7 +112,7 @@ async function openAndBack(id, back) {
   await watch();
   await back();
   await page.waitForSelector(rowSel(id), { state: "visible" });
-  await page.waitForTimeout(120);
+  await markAppears();
 }
 async function marked(id) {
   const m = await marks();
@@ -202,7 +204,7 @@ await check("palette: back from a step marks the command you came from", async (
   await watch();
   await tap("#pal-list .pal-it[data-key='c:Cancel']");
   await page.waitForSelector("#pal-list .pal-it[data-key='k:a-int']", { state: "visible" });
-  await page.waitForTimeout(120);
+  await markAppears();
   const m = await marks();
   assert(m.length === 1 && m[0].id === "k:a-int", "marked: " + JSON.stringify(m));
   await page.screenshot({ path: path.join(out, `returnmark-palette-${tag}.png`) });
@@ -212,7 +214,7 @@ await check("palette: back from a step marks the command you came from", async (
   await page.waitForSelector("#pal-list .pal-it[data-key='c:Cancel']", { state: "visible" });
   await page.waitForTimeout(200);
   await page.keyboard.press("Escape"); // back a step with the keyboard: marked as well
-  await page.waitForTimeout(150);
+  await markAppears();
   assert((await marks()).map((x) => x.id).join() === "k:a-int", "Esc back: marked " + JSON.stringify(await marks()));
   await page.keyboard.press("Escape"); // closed during the mark
   await page.waitForSelector("#palette", { state: "hidden" });
@@ -242,7 +244,7 @@ if (haveCli) {
     await page.waitForTimeout(300);
     await tap("#back");
     await page.waitForSelector(row, { state: "visible" });
-    await page.waitForTimeout(150);
+    await markAppears();
     const m = await marks();
     assert(m.length === 1 && m[0].id === id && m[0].cls.includes("td-row"), "marked: " + JSON.stringify(m));
     await page.screenshot({ path: path.join(out, `returnmark-todo-${tag}.png`) });
@@ -261,7 +263,7 @@ await check("Peers: back from a host marks its card", async () => {
   assert(!(await marks()).length, "marked while the host is open");
   await tap("#pr-back");
   await page.waitForSelector(`.pr-card[data-name="${name}"]`, { state: "visible" });
-  await page.waitForTimeout(150);
+  await markAppears();
   const m = await marks();
   assert(m.length === 1 && m[0].id === name, "marked: " + JSON.stringify(m));
   await page.screenshot({ path: path.join(out, `returnmark-peers-${tag}.png`) });
@@ -280,7 +282,7 @@ if (haveCli) {
     await watch();
     await tap(await back.elementHandle());
     await page.waitForSelector(`.pgs-card[data-id="${id}"]`, { state: "visible" });
-    await page.waitForTimeout(150);
+    await markAppears();
     const m = await marks();
     assert(m.length === 1 && m[0].id === id, "marked: " + JSON.stringify(m));
     await page.screenshot({ path: path.join(out, `returnmark-pages-${tag}.png`) });
