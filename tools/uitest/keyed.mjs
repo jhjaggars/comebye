@@ -86,12 +86,22 @@ for (const width of [390, 1280]) {
       if (!sc || sc === document.body) sc = document.scrollingElement;
       sc.scrollTop = 0; sc.scrollTop = Math.min(120, sc.scrollHeight - sc.clientHeight);
       window.__sc = sc;
-      return sc.scrollTop;
+      // the row in view at the top of the scroller, and where it is on the screen
+      const top = sc === document.scrollingElement ? 0 : sc.getBoundingClientRect().top;
+      const r = [...document.querySelectorAll("#agents .agent[data-id]")].find((x) => x.getBoundingClientRect().top >= top);
+      window.__anchor = r;
+      return { y: sc.scrollTop, id: r && r.dataset.id, at: r && Math.round(r.getBoundingClientRect().top) };
     });
-    assert(before > 0, "the list does not scroll at this size (the fixture list is too short)");
+    assert(before.y > 0, "the list does not scroll at this size (the fixture list is too short)");
     await polls(3);
-    const after = await page.evaluate(() => window.__sc.scrollTop);
-    assert(after === before, `the scroll moved from ${before} to ${after}`);
+    const after = await page.evaluate(() => ({ y: window.__sc.scrollTop, at: window.__anchor && window.__anchor.isConnected ? Math.round(window.__anchor.getBoundingClientRect().top) : null }));
+    // Kept: the same scroll, or the row in view still about where it was on the screen. The fixture hub's agents change
+    // between polls: when something above the rows changes height, the browser's scroll anchoring moves the scroll by as
+    // much (120 to 157 on the VM), and a row between its anchor and this one can still grow (the row then moved 13 px).
+    // What a rebuild did was lose the place: back to the top, or a screenful away. So: the same scroll, or the row
+    // within 20 px of where it was.
+    assert(after.y === before.y || (after.at !== null && Math.abs(after.at - before.at) <= 20), `the list moved: scroll ${before.y} -> ${after.y}, the row ${before.id} on the screen ${before.at} -> ${after.at}`);
+    if (after.y !== before.y) console.log(`     (scroll ${before.y} -> ${after.y} with the row still at ${after.at}: anchored)`);
     await page.evaluate(() => { window.__sc.scrollTop = 0; });
   });
 
