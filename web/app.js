@@ -86,6 +86,131 @@ addEventListener("scroll", () => { if (press.el) pressEnd(true); }, { capture: t
 // iOS Safari applies :active only to elements with a touch listener; one passive no-op lets the remaining :active rules work there.
 addEventListener("touchstart", () => {}, { passive: true });
 
+// ---- The return mark (#135 slice 3): back on a list from a row you opened, that row is briefly marked, as iOS
+// deselects the cell you came back from. A tap on a row in one of RET_LISTS remembers it. Once the list has gone from
+// the screen (the detail, a page or the next palette step covered it or took its place) and comes back, the row gets
+// .was-open: a 16% --blue layer drawn like the press layer, held a moment and faded out (index.html, "Return mark").
+// - Nothing changes when the list never left the screen: on a wide layout the open row already shows as selected.
+// - Shown or not is a hit test, so a list hidden by display:none and one covered by an overlay read the same.
+// - It is one-shot: a re-render or a poll of the list never marks it again (one that lands during the fade keeps
+//   the fade going on the new element). The scroll position is the list's own; the row is scrolled into view only
+//   when it is off screen.
+const RET_LISTS = [
+  { sel: "#agents .agent", attr: "data-id" },
+  { sel: "#todo .td-item, #pt-body .td-item", attr: "data-id", mark: ":scope > .td-row" },
+  { sel: ".pgs-card", attr: "data-id" },
+  { sel: ".pr-card", attr: "data-name" },
+  { sel: ".ar-item", attr: "data-id" },
+  { sel: "#pal-list .pal-it", attr: "data-key", live: () => !$("palette").hidden }, // closing the palette forgets it
+];
+const RET_MS = 1000, RET_REDUCED_MS = 600;
+const ret = { want: null, on: null };
+function retFind(w) {
+  for (const el of document.querySelectorAll(w.list.sel)) {
+    if (el.getAttribute(w.list.attr) !== w.key) continue;
+    const m = w.list.mark ? el.querySelector(w.list.mark) : el;
+    if (m) return m;
+  }
+  return null;
+}
+// retShown: is el on the screen, not hidden or covered? Off screen (scrolled away) counts as shown when the part of
+// the list that is on screen is not covered: the nearest ancestor with something on screen is hit-tested.
+function retShown(el) {
+  if (!el || !el.isConnected || !el.getClientRects().length) return false;
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    const v = retVisible(n);
+    if (!v) continue;
+    const hit = document.elementFromPoint((v.l + v.r) / 2, (v.t + v.b) / 2);
+    return !!hit && n.contains(hit);
+  }
+  return false;
+}
+// retVisible is the part of el on the screen, clipped by the viewport and by every ancestor that clips (a scroller), or null.
+function retVisible(el) {
+  const r = el.getBoundingClientRect();
+  let l = Math.max(r.left, 0), t = Math.max(r.top, 0), rt = Math.min(r.right, innerWidth), b = Math.min(r.bottom, innerHeight);
+  for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    const cs = getComputedStyle(n);
+    if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+    const c = n.getBoundingClientRect();
+    l = Math.max(l, c.left); t = Math.max(t, c.top); rt = Math.min(rt, c.right); b = Math.min(b, c.bottom);
+  }
+  return rt - l >= 1 && b - t >= 1 ? { l, t, r: rt, b } : null;
+}
+// retCheck marks the remembered row if it is back on the screen after being away, and says whether it did.
+function retCheck() {
+  const w = ret.want;
+  if (!w) return false;
+  if (w.list.live && !w.list.live()) { ret.want = null; return false; }
+  const el = retFind(w);
+  if (!retShown(el)) { w.away = true; return false; }
+  if (!w.away) return false;
+  ret.want = null;
+  // Already shown as selected (a layout that keeps the open row selected): it needs no second mark.
+  if (el.matches('.selected, .current, [aria-current="page"], [aria-current="true"]')) return true;
+  retMark(w, el);
+  return true;
+}
+function retMark(w, el) {
+  retClear();
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const r = el.getBoundingClientRect(), v = retVisible(el);
+  if (!v || v.b - v.t < r.height / 2) el.scrollIntoView({ block: "nearest" }); // off screen, or mostly
+  const on = { w, el, at: performance.now(), mo: null, timer: 0 };
+  ret.on = on;
+  el.classList.add("was-open");
+  // A re-render during the mark: put it on the new element, as far into the fade as the old one was.
+  on.mo = new MutationObserver(() => {
+    if (on.el.isConnected) return;
+    const n = retFind(w);
+    if (!n) return;
+    on.el = n;
+    n.style.animationDelay = -(performance.now() - on.at) + "ms";
+    n.classList.add("was-open");
+  });
+  on.mo.observe(document.body, { childList: true, subtree: true });
+  on.timer = setTimeout(retClear, reduced ? RET_REDUCED_MS : RET_MS + 50);
+}
+function retClear() {
+  const on = ret.on;
+  if (!on) return;
+  ret.on = null;
+  clearTimeout(on.timer);
+  on.mo.disconnect();
+  on.el.classList.remove("was-open");
+  on.el.style.animationDelay = "";
+}
+// A check now and over the next second: a list (or a detail) can draw a little after the click, key or history step.
+function retSoon() {
+  if (!ret.want && !ret.on) return;
+  requestAnimationFrame(() => requestAnimationFrame(retTick));
+  for (const ms of [150, 400, 1000]) setTimeout(retTick, ms);
+}
+function retTick() {
+  const on = ret.on;
+  if (on && on.w.list.live && !on.w.list.live()) retClear(); // its list closed during the mark (the palette)
+  retCheck();
+}
+// A tap on a row is remembered once the tap has done its work: a tap that brings the last row back (a step's Cancel
+// in the palette, which is a row of its own) marks that row, and is not remembered.
+addEventListener("click", (ev) => {
+  const t = ev.target;
+  let next = null;
+  if (t && t.closest) for (const list of RET_LISTS) {
+    const row = t.closest(list.sel);
+    const key = row && row.getAttribute(list.attr);
+    if (key) { next = { list, key, away: false }; break; }
+  }
+  if (!next) { retSoon(); return; }
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!retCheck()) ret.want = next;
+    retSoon();
+  }));
+}, true);
+addEventListener("popstate", retSoon);
+addEventListener("hashchange", retSoon);
+addEventListener("keydown", retSoon, true);
+
 /* ---------- helpers ---------- */
 
 const UNAUTHORIZED_MSG = "Not authorized: open this from a device logged into an allowed Tailscale account";

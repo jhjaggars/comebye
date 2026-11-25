@@ -401,6 +401,8 @@
     d.className = "pal-it" + (it.danger ? " danger" : "");
     d.id = "pal-o" + n;
     d.dataset.n = n;
+    // A key that outlives a rebuild, so the item a step was opened from is marked on the way back (app.js, RET_LISTS).
+    d.dataset.key = it.kind === "agent" ? "a:" + agentId(it.a) : it.kind === "todo" ? "t:" + it.t.id : it.kind === "choice" ? "c:" + it.label : "k:" + (it.c.id || it.c.label);
     d.setAttribute("role", "option");
     d.setAttribute("aria-selected", "false");
     const ic = document.createElement("span");
