@@ -9339,46 +9339,47 @@ function pgcRender() {
     strip.hidden = !pgc.sel;
     if (pgc.sel) pgcDrawStrip(strip);
   }
-  // The tray: the comments to send, Send, and below them what was sent.
-  tray.replaceChildren();
+  // The tray: the comments to send, Send, and below them what was sent. Patched, not rebuilt (#139 slice 5): a redraw
+  // that changed nothing touches nothing. Rebuilt on every pgcRender (a selection, the sent comments arriving), it put a
+  // relayout under a press on Comment in the strip above the Page's frame, and the release went to the frame.
   tray.hidden = items.length === 0 && pgc.sent.length === 0;
   rsNotesRefresh();
   pgcMarks();
-  if (tray.hidden) return;
-  if (items.length) tray.append(pgcEl("h3", "", "To send · " + items.length));
+  if (tray.hidden) { tray.replaceChildren(); return; }
+  let html = "";
+  if (items.length) html += `<h3>To send · ${items.length}</h3>`;
   items.forEach((c, i) => {
-    const card = pgcEl("div", "pgs-cmt");
-    const rm = pgcEl("button", "pgs-cmtx", "×");
-    rm.type = "button"; rm.setAttribute("aria-label", "Remove comment " + (i + 1));
-    rm.addEventListener("click", () => { const l = pgcItems().slice(); l.splice(i, 1); pgc.drafts.set(pgcKey(), l); pgcRender(); });
-    card.append(rm, pgcEl("div", "pgs-cmtq", "“" + c.quote + "”"), pgcEl("div", "pgs-cmtn", c.note));
-    tray.append(card);
+    html += `<div class="pgs-cmt" data-key="d${i}"><button class="pgs-cmtx" type="button" data-pgc-rm="${i}" aria-label="Remove comment ${i + 1}">×</button>`
+      + `<div class="pgs-cmtq">“${esc(c.quote)}”</div><div class="pgs-cmtn">${esc(c.note)}</div></div>`;
   });
   if (items.length) {
-    const send = pgcEl("button", "btn primary", pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"));
-    send.type = "button"; send.id = "pgs-sendc"; send.disabled = pgc.busy;
-    send.addEventListener("click", pgcSend);
-    tray.append(send, pgcEl("div", "pgs-cmthint", pgc.split ? "Or leave them: they go with your answer on the right. Send files one To do item and messages the page’s publisher." : "Files one To do item and messages the page’s publisher."));
+    html += `<button class="btn primary" type="button" id="pgs-sendc"${pgc.busy ? " disabled" : ""}>${esc(pgc.busy ? "Sending…" : "Send to " + (pgc.by || "publisher"))}</button>`
+      + `<div class="pgs-cmthint">${pgc.split ? "Or leave them: they go with your answer on the right. Send files one To do item and messages the page’s publisher." : "Files one To do item and messages the page’s publisher."}</div>`;
   }
   if (pgc.sent.length) {
-    tray.append(pgcEl("h3", "pgs-senth", "Sent · " + pgc.sent.length));
-    pgc.sent.slice().reverse().forEach((c) => {
-      const card = pgcEl("div", "pgs-cmt sent");
-      const rm = pgcEl("button", "pgs-cmtx", "×");
-      rm.type = "button"; rm.setAttribute("aria-label", "Forget this comment");
-      rm.addEventListener("click", async () => {
-        try { await api("/api/pages/" + encodeURIComponent(pgc.id) + "/comments/" + encodeURIComponent(c.id), { method: "DELETE" }); } catch (e) { toast("Could not remove it: " + (e && e.message ? e.message : e), true); return; }
-        pgc.sent = pgc.sent.filter((x) => x.id !== c.id); pgcRender();
-      });
-      const q = pgcEl("button", "pgs-cmtq link", "“" + c.quote + "”");
-      q.type = "button"; q.title = "Show it in the page";
-      q.addEventListener("click", () => pgcReveal(c.quote));
-      const meta = pgcEl("div", "pgs-cmtmeta");
-      meta.append(pgcEl("span", "chip " + (c.status === "addressed" ? "green" : "yellow"), c.status === "addressed" ? "addressed" : "open"), pgcEl("span", "", "v" + c.version));
-      card.append(rm, q, pgcEl("div", "pgs-cmtn", c.note), meta);
-      tray.append(card);
-    });
+    html += `<h3 class="pgs-senth">Sent · ${pgc.sent.length}</h3>`;
+    for (const c of pgc.sent.slice().reverse()) {
+      const done = c.status === "addressed";
+      html += `<div class="pgs-cmt sent" data-key="s${esc(c.id)}"><button class="pgs-cmtx" type="button" data-pgc-forget="${esc(c.id)}" aria-label="Forget this comment">×</button>`
+        + `<button class="pgs-cmtq link" type="button" data-pgc-show="${esc(c.id)}" title="Show it in the page">“${esc(c.quote)}”</button>`
+        + `<div class="pgs-cmtn">${esc(c.note)}</div>`
+        + `<div class="pgs-cmtmeta"><span class="chip ${done ? "green" : "yellow"}">${done ? "addressed" : "open"}</span><span>v${esc(String(c.version))}</span></div></div>`;
+    }
   }
+  patchHTML(tray, html);
+  tray.onclick = pgcTrayClick;
+}
+// pgcTrayClick: the tray's buttons, by what they carry (the tray is patched, so its buttons have no handlers of their own).
+async function pgcTrayClick(ev) {
+  const b = ev.target.closest("button");
+  if (!b || !ev.currentTarget.contains(b)) return;
+  if (b.id === "pgs-sendc") { pgcSend(); return; }
+  if (b.dataset.pgcRm != null) { const l = pgcItems().slice(); l.splice(+b.dataset.pgcRm, 1); pgc.drafts.set(pgcKey(), l); pgcRender(); return; }
+  const id = b.dataset.pgcForget || b.dataset.pgcShow, c = id && pgc.sent.find((x) => x.id === id);
+  if (!c) return;
+  if (b.dataset.pgcShow) { pgcReveal(c.quote); return; }
+  try { await api("/api/pages/" + encodeURIComponent(pgc.id) + "/comments/" + encodeURIComponent(c.id), { method: "DELETE" }); } catch (e) { toast("Could not remove it: " + (e && e.message ? e.message : e), true); return; }
+  pgc.sent = pgc.sent.filter((x) => x.id !== c.id); pgcRender();
 }
 
 async function pgcSend() {
@@ -15630,7 +15631,10 @@ function connectEvents() {
     }
     applyPendingRoute();
   });
-  es.addEventListener("ping", alive); // server heartbeat, every 15s
+  // The server's heartbeat, every 15 s. It also looks at the ledger again: a To do item the hub filed (an agent's
+  // question, a release) comes with no agents event when no agent changed, and Status and To do then showed it only
+  // at the next change (half a minute and more; statussplit's live check timed out on it).
+  es.addEventListener("ping", () => { alive(); scheduleLedger(); });
   es.addEventListener("resync", () => {
     // The server's herdr stream was interrupted; refetch authoritative state.
     state.lastEventAt = Date.now();
