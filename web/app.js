@@ -267,8 +267,8 @@ addEventListener("keydown", retSoon, true);
 // So a poll that changes one row leaves every other row the same node: focus, a scroller's place, an open menu, the
 // press layer and the return mark ride through it, and a click whose press and release straddle a redraw still lands.
 // - Classes in PATCH_KEEP are the app's, not the markup's, and stay on a kept node (and so does the return mark's style).
-// - A form control keeps what was typed or picked in it: its value, checked or selected follows the markup only when the
-//   markup's own value, checked or selected changed.
+// - A form control shows what the markup says (its value, checked or selected), as a new one would, except the control
+//   that has the focus (or the select whose option it is): what is being typed or picked there is kept.
 // - Bind handlers with on* properties (el.onclick = …) after a patch, or once on the container: a kept node is bound
 //   again on every redraw, and addEventListener would stack them.
 const PATCH_KEEP = ["is-pressed", "is-released", "was-open"];
@@ -355,9 +355,6 @@ function patchNode(a, b, pool) {
   if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
   const keep = PATCH_KEEP.filter((c) => a.classList.contains(c));
   const tag = a.localName;
-  // What the markup said before, for the form controls (read before the attributes change).
-  const was = tag === "input" || tag === "option" || tag === "textarea"
-    ? { v: a.getAttribute("value"), c: a.hasAttribute("checked"), s: a.hasAttribute("selected"), t: a.textContent } : null;
   for (const { name, value } of [...b.attributes]) {
     let v = value;
     if (name === "class" && keep.length) v = [...new Set([...value.split(/\s+/).filter(Boolean), ...keep])].join(" ");
@@ -371,13 +368,19 @@ function patchNode(a, b, pool) {
   }
   if (tag === "template") { if (a.innerHTML !== b.innerHTML) a.innerHTML = b.innerHTML; return; }
   patchKids(a, b, pool);
-  if (!was) return;
-  if (tag === "input") {
-    if (was.v !== b.getAttribute("value")) a.value = b.getAttribute("value") ?? "";
-    if (was.c !== b.hasAttribute("checked")) a.checked = b.hasAttribute("checked");
-  } else if (tag === "option") {
-    if (was.s !== b.hasAttribute("selected")) a.selected = b.hasAttribute("selected");
-  } else if (was.t !== a.textContent) a.value = a.textContent; // textarea
+  if (tag !== "input" && tag !== "option" && tag !== "textarea") return;
+  const busy = a.ownerDocument.activeElement;
+  if (tag === "option") {
+    const sel = b.hasAttribute("selected");
+    if (a.parentNode !== busy && a.parentNode?.parentNode !== busy && a.selected !== sel) a.selected = sel; // (optgroup)
+    return;
+  }
+  if (a === busy) return;
+  if (tag === "textarea") { if (a.value !== a.textContent) a.value = a.textContent; return; }
+  const v = b.getAttribute("value") ?? "";
+  if (a.type !== "file" && a.value !== v) a.value = v;
+  const c = b.hasAttribute("checked");
+  if (a.checked !== c) a.checked = c;
 }
 
 /* ---------- helpers ---------- */

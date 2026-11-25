@@ -853,14 +853,15 @@ const got = {};
   patchKids(el, list(row("a", "A", "agent working")));
   got.keep = a.getAttribute("class") + "|" + a.getAttribute("style") + "|" + a.hasAttribute("aria-busy");
 }
-// A typed value stays while the markup's value is the same, and follows it when the markup changes it.
+// A control shows the markup's value, as a new one would (Revert), except the one being typed in.
 {
   const el = list(h("input", { id: "q", value: "x" }));
   const q = el.childNodes[0];
-  q.value = "typed";
-  patchKids(el, list(h("input", { id: "q", value: "x" })));
-  got.typed = q.value;
+  q.value = "typed"; doc.activeElement = q;
   patchKids(el, list(h("input", { id: "q", value: "y" })));
+  got.typed = q.value;
+  doc.activeElement = null;
+  patchKids(el, list(h("input", { id: "q", value: "x" })));
   got.changed = q.value + "|" + (el.childNodes[0] === q);
 }
 // A row that moves to another group (its status changed) is the same node in its new place.
@@ -883,7 +884,7 @@ console.log(JSON.stringify(got));
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
-	want := `{"identity":true,"updated":"B2|agent blocked","identityMoves":0,"reorder":"d,a,b,c","reorderSame":true,"reorderMoves":1,"insert":"a,b,c","insertKept":true,"remove":"a,c","removeKept":true,"loose":true,"tag":true,"keep":"agent working is-pressed was-open|animation-delay: -200ms|false","typed":"typed","changed":"y|true","across":"a/b,c|true|agent blocked","across2":"a,b,c|true","run":"0,1,2,5"}`
+	want := `{"identity":true,"updated":"B2|agent blocked","identityMoves":0,"reorder":"d,a,b,c","reorderSame":true,"reorderMoves":1,"insert":"a,b,c","insertKept":true,"remove":"a,c","removeKept":true,"loose":true,"tag":true,"keep":"agent working is-pressed was-open|animation-delay: -200ms|false","typed":"typed","changed":"x|true","across":"a/b,c|true|agent blocked","across2":"a,b,c|true","run":"0,1,2,5"}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("patchHTML:\n got %s\nwant %s", out, want)
 	}
