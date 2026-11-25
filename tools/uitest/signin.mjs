@@ -6,7 +6,7 @@
 //
 // Click Sign in, read the link, type a wrong code (failed, Try again), try again with GOOD-CODE and expect green chips.
 // Each width (1280, then the 390 phone) starts on fresh servers: a host's sign-in state is cached for a minute.
-import { launch } from "./lib.mjs";
+import { clickStable, launch, readInPage } from "./lib.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -66,14 +66,24 @@ try {
       try { await fn(); results.push([name, true, ""]); }
       catch (e) {
         // What the page knew when it failed: the route, the host's settings load, the sign-in it holds and kept.
-        const seen = await page.evaluate(() => ({ hash: location.hash, cfg: prs.cfg.kube && prs.cfg.kube.state, si: sis.by.kube && { state: sis.by.kube.state, id: !!sis.by.kube.id, url: !!sis.by.kube.url },
+        const seen = await page.evaluate(() => ({ hash: location.hash, cfg: prs.cfg.kube && prs.cfg.kube.state, si: sis.by.kube && { state: sis.by.kube.state, id: !!sis.by.kube.id, url: !!sis.by.kube.url, attaching: !!sis.by.kube.attaching },
           kept: sessionStorage.getItem("comebye.signin"), dialog: !!document.querySelector(".si-dialog") })).catch((x) => ({ err: String(x.message).split("\n")[0] }));
+        seen.net = siNet.slice(-6); // the last sign-in answers: which server said what (#139)
         results.push([name, false, String(e.message).split("\n")[0] + " (page: " + JSON.stringify(seen) + ")"]);
         await page.screenshot({ path: `${out}/signin-${tag}-fail-${results.length}.png` }).catch(() => {});
       }
     }
     const { browser: b, page } = await launch({ width, height: width >= 1100 ? 800 : 844, dark });
     browser = b;
+    // Every answer to a sign-in call, with its code: a failed check says where a 404 came from (the hub or the host).
+    const siNet = [];
+    page.on("response", async (r) => {
+      const u = new URL(r.url());
+      if (!/\/signin(\/|$)/.test(u.pathname)) return;
+      const body = await r.text().catch(() => "");
+      const line = `${r.request().method()} ${u.pathname} ${r.status()} ${(/"code":"([^"]*)"/.exec(body) || [])[1] || ""}`.trim();
+      siNet.push(line); log.push("net: " + line);
+    });
     page.on("console", (m) => log.push(`console.${m.type()}: ${m.text()}`));
     page.on("pageerror", (e) => log.push(`pageerror: ${e.message}`));
     const shot = (n) => page.screenshot({ path: `${out}/signin-${tag}-${n}.png` }).catch(() => {});
@@ -89,14 +99,14 @@ try {
       const want = getComputedStyle(p).color; p.remove();
       const e = document.querySelector(q); return !!e && getComputedStyle(e).color === want;
     }, [sel, token], { timeout: 4000 }).catch(() => { throw new Error(`${what} is not ${token}`); });
-    const link = async () => { await page.waitForSelector("#si-url"); return (await page.locator("#si-url").innerText()).trim(); };
+    const link = async () => { await page.waitForSelector("#si-url"); return (await readInPage(page, "#si-url"))?.text ?? ""; };
 
     await check(`${tag}: kube's row has an orange dot while its claude is signed out, and the host page says Signed out with a Sign in button`, async () => {
       await page.goto(base + "/#/peers", { waitUntil: "load" });
       await page.waitForSelector('.pr-card[data-name="kube"]', { timeout: 5000 });
       await page.waitForSelector('.pr-card[data-name="kube"] .pr-need', { timeout: 5000 });
       await shot("list-dot");
-      await page.locator('.pr-card[data-name="kube"]').click();
+      await clickStable(page, '.pr-card[data-name="kube"]');
       await page.waitForSelector('.pr-agent[data-agent="claude"]');
       await page.waitForFunction(() => /Signed out/.test(document.querySelector('.pr-agent[data-agent="claude"] .chip')?.textContent || ""), null, { timeout: 5000 });
       if (!(await page.locator('.pr-agent[data-agent="claude"] [data-signin="claude"]').isVisible())) throw new Error("no Sign in button");
@@ -105,7 +115,7 @@ try {
     });
 
     await check(`${tag}: Sign in opens a dialog that names the host, shows the link as text with Copy, and a code box with autofill off`, async () => {
-      await page.locator('[data-signin="claude"]').click();
+      await clickStable(page, '[data-signin="claude"]');
       const url = await link();
       if (!/^https:\/\/claude\.com\/cai\/oauth\/authorize\?/.test(url)) throw new Error("link: " + url);
       const title = await page.locator("#si-title").innerText();
@@ -133,7 +143,7 @@ try {
       const before = await link();
       await page.evaluate(() => { location.hash = "#/peers"; });
       await page.waitForFunction(() => location.hash === "#/peers");
-      await page.locator('.pr-card[data-name="kube"]').click();
+      await clickStable(page, '.pr-card[data-name="kube"]');
       if ((await link()) !== before) throw new Error("another link after coming back");
       await page.reload({ waitUntil: "load" });
       await page.waitForSelector("#si-url", { timeout: 8000 });
@@ -142,7 +152,7 @@ try {
 
     await check(`${tag}: a wrong code shows Failed in red with Try again`, async () => {
       await page.locator("#si-code").fill("WRONG-CODE");
-      await page.locator('[data-si="send"]').click();
+      await clickStable(page, '[data-si="send"]');
       await page.waitForFunction(() => document.querySelector("#si-chip")?.textContent.trim() === "Failed", null, { timeout: 15000 });
       if (!(await page.locator('[data-si="retry"]').isVisible())) throw new Error("no Try again");
       if (!/not accepted/.test(await page.locator(".si-dialog").innerText())) throw new Error("no reason: " + await page.locator(".si-dialog").innerText());
@@ -152,17 +162,17 @@ try {
     });
 
     await check(`${tag}: Try again, then GOOD-CODE: the chip turns green, the dot goes, and the button is gone`, async () => {
-      await page.locator('[data-si="retry"]').click();
+      await clickStable(page, '[data-si="retry"]');
       await link();
       await page.locator("#si-code").fill("GOOD-CODE");
-      await page.locator('[data-si="send"]').click();
+      await clickStable(page, '[data-si="send"]');
       await page.waitForFunction(() => document.querySelector("#si-chip")?.textContent.trim().startsWith("Signed in"), null, { timeout: 15000 });
       await hasTone("#si-chip", "--green", "the dialog chip");
       await page.waitForFunction(() => /Signed in · claude\.ai/.test(document.querySelector('.pr-agent[data-agent="claude"] .chip')?.textContent || ""), null, { timeout: 8000 });
       await hasTone('.pr-agent[data-agent="claude"] .chip', "--green", "the row chip");
       if (await page.locator('.pr-agent[data-agent="claude"] [data-signin]').count()) throw new Error("Sign in is still offered");
       await shot("signed-in");
-      await page.locator('[data-si="close"]').click();
+      await clickStable(page, '[data-si="close"]');
       if (await page.locator(".si-dialog").count()) throw new Error("the dialog stayed after Done");
       const st = await fetch(base + "/api/hosts/kube/settings").then((r) => r.json());
       if (!st.agent_auth || st.agent_auth.claude.state !== "signed_in" || st.agent_auth.claude.method !== "claude.ai") throw new Error("agent_auth: " + JSON.stringify(st.agent_auth));

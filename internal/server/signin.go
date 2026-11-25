@@ -63,10 +63,16 @@ func (s *Server) handleSigninStart(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// signinGone is the 404 code of a sign-in this host does not have (ended and
+// forgotten, or never started here). The app drops a sign-in it holds only on
+// this answer, never on another 404 on the way (a hub that does not know the
+// host: "unknown_host").
+const signinGone = "no_signin"
+
 func (s *Server) handleSigninGet(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.signin.Get(r.PathValue("id"))
 	if err != nil {
-		signinError(w, http.StatusNotFound, "not_found", err.Error())
+		signinError(w, http.StatusNotFound, signinGone, err.Error())
 		return
 	}
 	writeJSON(w, snap)
@@ -88,7 +94,7 @@ func (s *Server) handleSigninCode(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, signin.ErrBadCode):
 		signinError(w, http.StatusBadRequest, "bad_code", err.Error())
 	case errors.Is(err, signin.ErrNotFound):
-		signinError(w, http.StatusNotFound, "not_found", err.Error())
+		signinError(w, http.StatusNotFound, signinGone, err.Error())
 	case errors.Is(err, signin.ErrNotWaiting), errors.Is(err, signin.ErrNoCodeInput):
 		signinError(w, http.StatusConflict, "not_waiting", err.Error())
 	default:
@@ -99,7 +105,7 @@ func (s *Server) handleSigninCode(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSigninCancel(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.signin.Cancel(r.PathValue("id"))
 	if err != nil {
-		signinError(w, http.StatusNotFound, "not_found", err.Error())
+		signinError(w, http.StatusNotFound, signinGone, err.Error())
 		return
 	}
 	writeJSON(w, snap)

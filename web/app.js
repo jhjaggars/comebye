@@ -9862,15 +9862,23 @@ function sinTick() {
   for (const host of hosts) sinPoll(host);
 }
 function sinWatch() { if (!sis.timer) sis.timer = setInterval(sinTick, 2000); }
+// The host itself says it has no such sign-in: the only answer that ends one the page holds. A 404 from the hub on the
+// way (it does not know the host for a moment: "unknown_host"; "not a proxied operation") is not that, nor is a time-out
+// or a 5xx. Hosts before "no_signin" answered "not_found" with the manager's own words.
+function sinGone(r) {
+  if (!r || r.status !== 404 || !r.body) return false;
+  return r.body.code === "no_signin" || (r.body.code === "not_found" && r.body.message === "no such sign-in");
+}
 async function sinPoll(host) {
   const v = sis.by[host];
   if (!v || !v.id) return;
   const r = await sinCall("GET", `${sinBase(host)}/${encodeURIComponent(v.id)}`);
   if (sis.by[host] !== v) return;
-  if (r.status === 200) sinApply(host, r.body);
-  else if (r.status === 404 && v.attaching) { delete sis.by[host]; sinSave(); } // a stale record of one that ended
-  else if (r.status === 404) sinFail(host, "The sign-in is gone (the host may have restarted). Try again.");
-  // anything else (a hiccup): keep what is shown and ask again
+  if (r.status === 200) { v.attaching = false; sinApply(host, r.body); }
+  else if (sinGone(r) && v.attaching) { delete sis.by[host]; sinSave(); } // a stale record of one that ended
+  else if (sinGone(r)) sinFail(host, "The sign-in is gone (the host may have restarted). Try again.");
+  // anything else (a hiccup, or a 404 that is not the host's own): keep the sign-in and what is shown, and ask again.
+  // A re-attach stays "attaching" until the host has answered for it.
   renderPeers();
 }
 async function sinStart(host, agent) {
@@ -9918,7 +9926,7 @@ function sinReattach(host) {
   const st = sinStored(host);
   if (!st || !st.id) return;
   sis.by[host] = { agent: st.agent, id: st.id, state: "checking", url: "", reason: "", message: "", method: "", err: "", copied: false, code_input: true, attaching: true };
-  sinPoll(host).then(() => { const v = sis.by[host]; if (v) v.attaching = false; if (sinActive(v)) sinWatch(); });
+  sinPoll(host).then(() => { if (sinActive(sis.by[host])) sinWatch(); });
 }
 
 // What an installed agent's row says about its sign-in: a chip tone and text, and whether to offer the button.

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -179,5 +180,30 @@ func TestSigninRelayUserOnly(t *testing.T) {
 	}
 	if _, err := peer.signin.Get("si_x"); err == nil {
 		t.Errorf("a refused call reached the sign-in manager")
+	}
+}
+
+// The app drops a sign-in it holds only when the host itself says it has no
+// such sign-in ("no_signin"); a 404 from the hub on the way ("unknown_host")
+// must look different, or a hub that loses a peer for a moment would end the
+// user's sign-in (#139: the phone's re-attach after a reload).
+func TestSigninGoneIsTheHostsOwnAnswer(t *testing.T) {
+	hub, _, _, _, _ := signinHub(t, "")
+	code := func(w *httptest.ResponseRecorder) string {
+		var b struct{ Code, Message string }
+		_ = json.Unmarshal(w.Body.Bytes(), &b)
+		return b.Code + " / " + b.Message
+	}
+	for _, c := range []struct{ method, path, body, want string }{
+		{"GET", "/api/hosts/kube/signin/si_nope", "", "no_signin / no such sign-in"},
+		{"POST", "/api/hosts/kube/signin/si_nope/code", `{"code":"X"}`, "no_signin / no such sign-in"},
+		{"DELETE", "/api/hosts/kube/signin/si_nope", "", "no_signin / no such sign-in"},
+		{"GET", "/api/signin/si_nope", "", "no_signin / no such sign-in"},
+		{"GET", "/api/hosts/gone/signin/si_nope", "", "unknown_host / no such host"},
+	} {
+		w := do(hub, c.method, c.path, userHdr, c.body)
+		if w.Code != 404 || code(w) != c.want {
+			t.Errorf("%s %s = %d %q, want 404 %q", c.method, c.path, w.Code, code(w), c.want)
+		}
 	}
 }

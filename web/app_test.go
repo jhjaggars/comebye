@@ -702,3 +702,45 @@ console.log(JSON.stringify(got));
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}
 }
+
+// A kept sign-in is dropped only on the host's own "no such sign-in" (#139):
+// the phone's re-attach after a reload lost the sign-in on another 404 on the
+// way. sinGone is cut out of app.js and run in Node.
+func TestSigninGoneOnlyOnTheHostsOwnAnswer(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	src, err := FS.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := regexp.MustCompile(`(?s)\nfunction sinGone\(r\) \{.*?\n\}\n`).Find(src)
+	if fn == nil {
+		t.Fatal("sinGone not found in app.js")
+	}
+	js := string(fn) + `
+const cases = [
+  [{ status: 404, body: { code: "no_signin", message: "no such sign-in" } }, true],
+  [{ status: 404, body: { code: "not_found", message: "no such sign-in" } }, true], // a host from before no_signin
+  [{ status: 404, body: { code: "unknown_host", message: "no such host: kube" } }, false],
+  [{ status: 404, body: { code: "unknown_host", message: "kube was removed" } }, false],
+  [{ status: 404, body: { code: "not_found", message: "not a proxied operation" } }, false],
+  [{ status: 404, body: {} }, false],
+  [{ status: 0, body: { message: "timed out" } }, false],
+  [{ status: 502, body: { code: "host_unreachable" } }, false],
+  [{ status: 504, body: { code: "host_timeout" } }, false],
+  [{ status: 200, body: { id: "si_x", state: "waiting_code" } }, false],
+  [null, false],
+];
+const bad = cases.filter(([r, want]) => sinGone(r) !== want).map(([r]) => JSON.stringify(r));
+console.log(JSON.stringify(bad));
+`
+	out, err := exec.Command(node, "-e", js).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "[]" {
+		t.Fatalf("sinGone gave the wrong answer for: %s", out)
+	}
+}
