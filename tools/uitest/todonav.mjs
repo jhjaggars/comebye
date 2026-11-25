@@ -89,7 +89,9 @@ for (const width of (process.env.WIDTHS || "390,1280").split(",").map(Number)) f
         await page.screenshot({ path: `${out}/todonav-${mode}-${width}-${dark ? "dark" : "light"}-open.png` });
         await r.go(page);
         if (r.screen) await page.waitForSelector(`${r.screen}:not([hidden])`, { timeout: 5000 });
-        if (r.agent) await page.waitForFunction(() => state.selected, null, { timeout: 5000 });
+        // A selector, not a function: under the page's CSP Playwright cannot poll a predicate (no eval), and the agent
+        // shows a frame after the click once a screen change runs as a View Transition.
+        if (r.agent) await page.waitForSelector("body.has-detail", { state: "attached", timeout: 5000 });
         if (r.status) await page.waitForFunction(() => location.hash === "#/status", null, { timeout: 5000 });
         await page.waitForTimeout(150);
         if (mode === "split") {

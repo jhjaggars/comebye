@@ -9300,7 +9300,8 @@ function vtOpenAgent(id) {
   const from = vt.hash;
   history.pushState(null, "", hash);
   state.pushedRoute = true;
-  vtRun("fwd", () => { if (state.selected !== id) openDetail(id); syncScreens(); }, "", from);
+  // Left again before the redraw (Back while it was pending): the route that came with it has the say.
+  vtRun("fwd", () => { if (location.hash !== hash) return; if (state.selected !== id) openDetail(id); syncScreens(); }, "", from);
 }
 
 function route() {
