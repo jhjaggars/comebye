@@ -165,6 +165,8 @@ if want parked; then node parked.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; f
 if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Honest loading and empty states on a held or dead link (issue #136, slice 1): /api/ routed in the browser, the shared hub untouched.
 if want offline; then node offline.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Saved state (issue #136, slice 4): the last lists kept in IndexedDB, shown at once and marked old; cleared on another viewer, a 401 or Forget; the caps; a broken IndexedDB.
+if want saved; then node saved.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The press layer (#135): every tappable kind shows a pressed look under real touch input; a scroll is not a press.

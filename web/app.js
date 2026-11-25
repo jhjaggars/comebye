@@ -96,6 +96,7 @@ const UNAUTHORIZED_MSG = "Not authorized: open this from a device logged into an
 function setUnauthorized(on) {
   if (state.unauthorized === on) return;
   state.unauthorized = on;
+  if (on) cacheForget("401"); // this login is not allowed (any more): what this device saved goes
   renderList();
 }
 
@@ -1408,7 +1409,7 @@ const srcs = new Map(); // name -> source, for the Try again buttons
 // srcNew makes (or, for the same name, replaces) a source. retry asks again; redraw repaints the screens that show it.
 // The wait counts from now, or for a lazy source (read only when its screen opens) from its first read (srcStart).
 function srcNew(name, retry, redraw, lazy) {
-  const s = { name, at: 0, err: "", since: Date.now(), started: !lazy, retry, redraw, timer: null };
+  const s = { name, at: 0, err: "", since: Date.now(), started: !lazy, retry, redraw, timer: null, saved: false };
   const old = srcs.get(name);
   if (old) clearTimeout(old.timer);
   srcs.set(name, s);
@@ -1420,7 +1421,8 @@ function srcArm(s) {
   if (s.timer || !s.started || s.at || !s.redraw) return;
   s.timer = setTimeout(() => { s.timer = null; if (!s.at) s.redraw(); }, Math.max(0, s.since + SRC_GIVEUP_MS - Date.now()) + 50);
 }
-function srcOk(s) { s.at = Date.now(); s.err = ""; clearTimeout(s.timer); s.timer = null; stripSoon(); }
+// A fresh answer replaces one shown from what this device saved (saved), and is saved in turn (cacheFresh).
+function srcOk(s) { s.at = Date.now(); s.err = ""; s.saved = false; clearTimeout(s.timer); s.timer = null; stripSoon(); cacheFresh(s); }
 // srcFail notes why the last try failed. Before any answer the screen says so; after one it keeps its rows, marked as old.
 function srcFail(s, e) { s.err = hubErrText(e); stripSoon(); }
 // srcDown: nothing has come from the hub, and the last try failed or has taken too long.
@@ -1444,6 +1446,241 @@ function hubErrText(e) {
   return String((e && e.message) || e || "failed");
 }
 
+// ---- Saved state (#136 slice 4) ----
+//
+// The last good answer of each list (agents and hosts, To do, Status's ledger and board, Pages' list, peers, releases,
+// archived, usage) is kept on this device in IndexedDB, one record per list, so opening the app shows them at once:
+// marked old (srcStale, the strip's "Updating… · list from 2 h ago") until the hub's fresh answer replaces them.
+// - Never saved: transcripts, page bodies, or anything else not in that list. Long strings are cut.
+// - Per hub, since IndexedDB is per origin; per user, since every record carries the viewer /api/version named
+//   (an HMAC of the login, viewer.go). Another viewer, a 401, or Settings › Forget saved data empties the store.
+// - Caps: 512 KB a record (a bigger one is not kept), 2 MB in all (answered to-dos go first, then the board, then the
+//   oldest record), 7 days (an older record is deleted, not shown). Writes: at most one per list every 10 s, and all
+//   that are waiting when the page is hidden.
+// - A real empty state still waits for a fresh answer: an empty list is never saved, and never shown from here.
+// - Storage that fails (private mode, quota, IndexedDB missing, blocked or throwing) only means nothing is saved:
+//   every call here swallows its errors, and the app works as it did without it.
+const CACHE_DB = "comebye-cache", CACHE_STORE = "src";
+const CACHE_MAX = 2 << 20, CACHE_REC_MAX = 512 << 10, CACHE_AGE_MS = 7 * 86400000, CACHE_GAP_MS = 10000, CACHE_OPEN_MS = 3000;
+const cache = {
+  db: null,           // Promise of the IDBDatabase, or of null when there is none to be had
+  off: false,         // storage failed: nothing is read or written for the rest of this visit
+  viewer: "",         // who /api/version says is asking; nothing is written until it is known
+  items: new Map(),   // name -> { name, src, get, put, drop, lean, has, saved }
+  dirty: new Set(),   // names with a fresh answer not written yet
+  last: new Map(),    // name -> when it was last written
+  sizes: new Map(),   // name -> { size, at } of what the store holds
+  timer: null, flushing: false, gen: 0,
+};
+// cacheItem registers a list. get() is what to save (null: nothing, and the record goes); put(data) shows a saved
+// answer (false when it would show nothing); drop() forgets one that was shown; lean(data) is a smaller version for
+// when the store is full; has() says a fresh answer is already in (default: its source has answered).
+function cacheItem(name, o) { cache.items.set(name, { name, src: null, lean: null, has: null, ...o, saved: false }); }
+// cacheCut is v with every string cut to n characters (and a depth limit): an agent's blocked reason, a report.
+function cacheCut(v, n, depth = 0) {
+  if (typeof v === "string") return v.length > n ? v.slice(0, n) + "…" : v;
+  if (!v || typeof v !== "object" || depth > 8) return v;
+  if (Array.isArray(v)) return v.map((x) => cacheCut(x, n, depth + 1));
+  const o = {};
+  for (const [k, x] of Object.entries(v)) o[k] = cacheCut(x, n, depth + 1);
+  return o;
+}
+function cacheDb() {
+  if (cache.off) return Promise.resolve(null);
+  if (!cache.db) {
+    cache.db = new Promise((resolve) => {
+      let done = false, timer = 0;
+      const end = (db) => {
+        if (done) { try { if (db) db.close(); } catch {} return; }
+        done = true;
+        clearTimeout(timer);
+        if (!db) cache.off = true;
+        resolve(db);
+      };
+      timer = setTimeout(() => end(null), CACHE_OPEN_MS); // blocked by another tab, or a browser that never answers
+      try {
+        const rq = indexedDB.open(CACHE_DB, 1);
+        rq.onupgradeneeded = () => { try { rq.result.createObjectStore(CACHE_STORE, { keyPath: "name" }); } catch {} };
+        rq.onsuccess = () => {
+          const db = rq.result;
+          db.onversionchange = () => { try { db.close(); } catch {} cache.db = null; };
+          end(db);
+        };
+        rq.onerror = (ev) => { try { ev.preventDefault(); } catch {} end(null); };
+      } catch { end(null); } // no indexedDB at all, or a SecurityError
+    });
+  }
+  return cache.db;
+}
+// cacheTx runs fn(store) in one transaction; it resolves with what fn returned (a box its callbacks fill), or null
+// when anything failed. It never rejects.
+async function cacheTx(mode, fn) {
+  const db = await cacheDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(CACHE_STORE, mode);
+      const box = fn(tx.objectStore(CACHE_STORE)) || {};
+      tx.oncomplete = () => resolve(box);
+      tx.onerror = (ev) => { try { ev.preventDefault(); } catch {} };
+      tx.onabort = () => resolve(null); // quota, or the store went away
+    } catch { resolve(null); }
+  });
+}
+function cacheRec(it, data, viewer) {
+  let json;
+  try { json = JSON.stringify(data); } catch { return null; }
+  if (typeof json !== "string") return null;
+  return { name: it.name, viewer, at: (it.src && it.src.at) || Date.now(), json, size: new TextEncoder().encode(json).length };
+}
+// cacheFresh: s has a fresh answer; its list is written (within the 10 s gap).
+function cacheFresh(s) {
+  for (const it of cache.items.values()) if (it.src === s) cacheMark(it.name);
+}
+// cacheMark: the list name has a fresh answer that is not a source's (the board, peers).
+function cacheMark(name) {
+  const it = cache.items.get(name);
+  if (!it) return;
+  it.saved = false;
+  if (cache.off) return;
+  cache.dirty.add(name);
+  cacheSchedule();
+}
+function cacheSchedule() {
+  if (cache.timer || !cache.dirty.size || cache.off) return;
+  let at = Infinity;
+  for (const n of cache.dirty) at = Math.min(at, (cache.last.get(n) || 0) + CACHE_GAP_MS);
+  cache.timer = setTimeout(() => { cache.timer = null; cacheFlush(false); }, Math.max(300, at - Date.now()));
+}
+// cacheFlush writes the lists that have waited out their gap (all of them when the page is being hidden).
+async function cacheFlush(all) {
+  if (cache.off || cache.flushing || !cache.viewer || state.unauthorized || !cache.dirty.size) return;
+  cache.flushing = true;
+  try {
+    const db = await cacheDb();
+    if (!db) return;
+    const now = Date.now(), viewer = cache.viewer, gen = cache.gen;
+    const due = [...cache.dirty].filter((n) => all || now - (cache.last.get(n) || 0) >= CACHE_GAP_MS);
+    if (!due.length || gen !== cache.gen) return;
+    const puts = new Map(), dels = new Set();
+    for (const n of due) {
+      cache.dirty.delete(n);
+      cache.last.set(n, now);
+      const it = cache.items.get(n);
+      let data = null;
+      try { data = it.get(); } catch { data = null; }
+      let rec = data == null ? null : cacheRec(it, data, viewer);
+      if (rec && rec.size > CACHE_REC_MAX && it.lean) { const l = it.lean(data); rec = l == null ? null : cacheRec(it, l, viewer); }
+      if (rec && rec.size <= CACHE_REC_MAX) puts.set(n, rec); else dels.add(n);
+    }
+    // Over 2 MB in all: answered to-dos go first, then the board, then the oldest record.
+    const sizes = new Map(cache.sizes);
+    for (const n of dels) sizes.delete(n);
+    for (const [n, r] of puts) sizes.set(n, { size: r.size, at: r.at });
+    const total = () => { let t = 0; for (const v of sizes.values()) t += v.size; return t; };
+    const evict = (n) => { sizes.delete(n); puts.delete(n); dels.add(n); };
+    if (total() > CACHE_MAX && sizes.has("todos")) {
+      const it = cache.items.get("todos");
+      let l = null;
+      try { l = it.lean(it.get()); } catch { l = null; }
+      const r = l == null ? null : cacheRec(it, l, viewer);
+      if (r && r.size < sizes.get("todos").size) { puts.set("todos", r); dels.delete("todos"); sizes.set("todos", { size: r.size, at: r.at }); }
+    }
+    if (total() > CACHE_MAX && sizes.has("board")) evict("board");
+    while (total() > CACHE_MAX && sizes.size) {
+      let old = null;
+      for (const [n, v] of sizes) if (!old || v.at < sizes.get(old).at) old = n;
+      evict(old);
+    }
+    const box = await cacheTx("readwrite", (st) => {
+      for (const n of dels) st.delete(n);
+      for (const r of puts.values()) st.put(r);
+    });
+    if (box && gen === cache.gen) cache.sizes = sizes;
+  } finally {
+    cache.flushing = false;
+    cacheSchedule();
+  }
+}
+// cacheRestore (on open) shows what was saved for the lists the hub has not answered yet, marked old.
+async function cacheRestore() {
+  const gen = cache.gen;
+  const box = await cacheTx("readonly", (st) => { const b = {}; const rq = st.getAll(); rq.onsuccess = () => { b.value = rq.result; }; return b; });
+  if (!box || !Array.isArray(box.value) || gen !== cache.gen) return;
+  const now = Date.now(), gone = [], shown = [];
+  const viewers = new Set(box.value.map((r) => r && r.viewer));
+  if (viewers.size > 1 || (cache.viewer && !viewers.has(cache.viewer) && box.value.length)) { cacheClear(); return; } // not one person's: forget it all
+  for (const r of box.value) {
+    const it = r && cache.items.get(r.name);
+    if (!it || typeof r.json !== "string" || !(r.at > 0) || now - r.at > CACHE_AGE_MS || r.at > now + 300000) { if (r && r.name != null) gone.push(r.name); continue; }
+    cache.sizes.set(r.name, { size: r.size || r.json.length, at: r.at });
+    if (it.has ? it.has() : it.src && it.src.at > 0) continue; // the hub was quicker
+    let ok = false;
+    try { ok = it.put(JSON.parse(r.json)) !== false; } catch { ok = false; }
+    if (!ok) continue;
+    it.saved = true;
+    const s = it.src;
+    if (s) { s.at = r.at; s.saved = true; s.err = ""; clearTimeout(s.timer); s.timer = null; }
+    shown.push(it);
+  }
+  if (gone.length) cacheTx("readwrite", (st) => { for (const n of gone) st.delete(n); });
+  if (shown.length) cacheRedraw();
+}
+function cacheRedraw() {
+  for (const s of srcs.values()) if (s.redraw) { try { s.redraw(); } catch {} }
+  try { renderTodos(true); renderStatus(); peersHostsChanged(); renderNav(); } catch {}
+  stripSoon();
+}
+// cacheDropShown takes away what was shown from the store (another viewer's, or forgotten on a 401): those screens
+// wait for the hub again, or say they can't reach it.
+function cacheDropShown() {
+  let any = false;
+  for (const it of cache.items.values()) {
+    if (!it.saved) continue;
+    any = true;
+    it.saved = false;
+    try { it.drop(); } catch {}
+    const s = it.src;
+    if (s && s.saved) {
+      s.saved = false; s.at = 0;
+      if (!hub.up) s.err = hubErrText(null);
+    }
+  }
+  if (any) cacheRedraw();
+}
+// cacheClear empties the store and stops what was waiting to be written.
+function cacheClear() {
+  cache.gen++;
+  cache.dirty.clear();
+  cache.sizes.clear();
+  clearTimeout(cache.timer); cache.timer = null;
+  return cacheTx("readwrite", (st) => { st.clear(); });
+}
+// cacheForget: a 401 (this login is no longer allowed), or Settings › Forget saved data.
+function cacheForget(why) {
+  if (why === "401") cache.viewer = "";
+  cacheDropShown();
+  return cacheClear();
+}
+// cacheViewer: /api/version named who is asking. What was saved for someone else is forgotten, and from now on
+// what this viewer reads is saved. A hub that names no viewer (an older one) gets nothing saved.
+function cacheViewer(v) {
+  if (!v || typeof v !== "string" || v === cache.viewer) return;
+  cache.viewer = v;
+  const gen = cache.gen;
+  cacheTx("readonly", (st) => { const b = {}; const rq = st.getAll(); rq.onsuccess = () => { b.value = rq.result; }; return b; }).then((box) => {
+    if (!box || gen !== cache.gen || cache.viewer !== v) return;
+    const recs = Array.isArray(box.value) ? box.value : [];
+    if (recs.some((r) => !r || r.viewer !== v)) {
+      cacheDropShown();
+      cacheClear().then(() => { for (const it of cache.items.values()) if (it.has ? it.has() : it.src && it.src.at > 0) cacheMark(it.name); });
+    } else cacheSchedule();
+  });
+  cacheSchedule();
+}
+// cacheBytes: how much the store holds, for Settings.
+function cacheBytes() { let t = 0; for (const v of cache.sizes.values()) t += v.size; return t; }
+
 // ---- The offline strip and old rows (#136 slice 2) ----
 //
 // One quiet strip under the header of the screen you are on, while that screen shows rows from an answer that is not
@@ -1465,8 +1702,8 @@ const hub = {
 // hubLost: the live connection is gone, past a blip (or the device itself says it is offline).
 function hubLost() { return !hub.up && (navigator.onLine === false || Date.now() - hub.downAt >= STRIP_BLIP_MS); }
 // srcStale: s has rows from the hub, but they are not live: its last read failed, the connection is lost, or the
-// answer predates the last loss and no fresh one has come since.
-function srcStale(s) { return !!s && s.at > 0 && (!!s.err || hubLost() || s.at < hub.lostAt); }
+// answer predates the last loss and no fresh one has come since, or it is what this device saved (no answer this visit).
+function srcStale(s) { return !!s && s.at > 0 && (!!s.err || s.saved || hubLost() || s.at < hub.lostAt); }
 function hubUp() {
   if (hub.up) return;
   hub.up = true;
@@ -1560,7 +1797,7 @@ function stripSync() {
   if (s.at) {
     if (hubLost()) kind = navigator.onLine === false ? "offline" : "down";
     else if (s.err) kind = "stuck";
-    else if (s.at < hub.lostAt) kind = "updating";
+    else if (s.at < hub.lostAt || s.saved) kind = "updating";
   }
   if (!kind && hub.kind && hub.kind !== "back") hub.backUntil = now + STRIP_BACK_MS;
   if (!kind && hub.backUntil > now) kind = "back";
@@ -8794,6 +9031,7 @@ async function loadBoard() {
     const d = await api("/api/board");
     if (d && Array.isArray(d.lanes)) {
       board.data = d;
+      cacheMark("board");
       if (d.loose && arch.data && (d.loose.archived || 0) !== arch.data.count) loadArchived();
       if (!board.seen) { board.seen = boardSnapshot(d); lsSet(BOARD_SEEN_KEY, JSON.stringify(board.seen)); }
     }
@@ -9063,6 +9301,7 @@ function onStatusToggle(ev) {
 const prs = {
   route: null, timer: null, seq: 0,
   info: {},      // name -> the hub's record of a peer (urls, source, added by); /api/peers, hub only
+  infoAt: 0,     // when /api/peers last answered (0: not in this visit; info may be what this device saved)
   hubVersion: "",
   cfg: {},       // name -> { state: "loading"|"ok"|"old"|"err", data, err }
   cats: {},      // name -> { kind -> catalog } once loaded
@@ -9090,6 +9329,8 @@ async function peersLoadInfo() {
     prs.info = {};
     for (const p of r.peers || []) prs.info[p.name] = p;
     prs.hubVersion = r.version || "";
+    prs.infoAt = Date.now();
+    cacheMark("peers");
   } catch { /* not a hub: only this host is listed */ }
 }
 
@@ -11037,7 +11278,7 @@ function closeUsage() {
 // PRF output of the check is dropped at once and nothing is stored.
 
 const SX_NO_PRF = "This passkey cannot do PRF. In iOS, turn on Passwords under Settings, General, AutoFill & Passwords, AutoFill From.";
-const sx = { route: false, status: "loading", err: "", list: [], rp: "", csrf: "", max: 16, busy: "", msg: "", msgErr: false, confirm: "", rename: "", name: "" };
+const sx = { route: false, status: "loading", err: "", list: [], rp: "", csrf: "", max: 16, busy: "", msg: "", msgErr: false, confirm: "", rename: "", name: "", forgot: false };
 
 const sxB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const sxUnb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
@@ -11057,6 +11298,20 @@ async function sxLoad() {
 
 const sxCall = (method, path, body) => api(path, { method, headers: { "X-Comebye-Csrf": sx.csrf }, body: JSON.stringify(body || {}) });
 
+// sxSaved: what this device keeps of the hub's lists (the saved state, #136 slice 4), and Forget saved data.
+function sxSaved() {
+  const n = cacheBytes();
+  const now = cache.off ? "This browser does not let the app keep anything here (private browsing, or storage that is blocked or full), so nothing is saved."
+    : n ? `About ${esc(fmtBytes(n))} is saved now.` : "Nothing is saved now.";
+  return `<h2>Saved on this device</h2><p class="sx-note">So the app opens at once, and still shows where things stood when the hub can’t be reached, this device keeps the last lists it read from this hub, for up to 7 days: agents, To do, Status, Pages, hosts, releases, archived and usage. Messages and page bodies are never saved. Anyone who can open this browser can read it. ${now}</p>
+    <div class="sx-acts"><button type="button" class="btn" data-sx="forget" id="sx-forget">Forget saved data</button></div>
+    ${sx.forgot ? `<p class="sx-msg" role="status">Forgotten. The app saves the lists again as it reads them from the hub.</p>` : ""}`;
+}
+async function sxForget() {
+  await cacheForget("forget");
+  sx.forgot = true;
+  renderSettings();
+}
 function sxSay(msg, isErr) { sx.msg = msg; sx.msgErr = !!isErr; renderSettings(); }
 
 function sxAgo(iso) { const t = Date.parse(iso); return Number.isNaN(t) ? "" : fmtAgo(t) + " ago"; }
@@ -11195,7 +11450,7 @@ function sxColKey(ev) {
 function renderSettings() {
   const el = $("sx-view");
   if (!el || !sx.route) return;
-  let h = sxAppearance() + `<h2>Passkeys</h2><p class="sx-note">A passkey approves a sensitive action with Face ID. Only Apple Passwords passkeys work, and they must support PRF: in iOS, turn on Passwords under Settings, General, AutoFill &amp; Passwords, AutoFill From.</p>`;
+  let h = sxAppearance() + sxSaved() + `<h2>Passkeys</h2><p class="sx-note">A passkey approves a sensitive action with Face ID. Only Apple Passwords passkeys work, and they must support PRF: in iOS, turn on Passwords under Settings, General, AutoFill &amp; Passwords, AutoFill From.</p>`;
   if (sx.status === "loading") h += `<div class="empty">Loading…</div>`;
   else if (sx.status === "off") h += `<div class="empty"><b>Passkeys live on the hub</b><span>Open the hub's app to manage them.</span></div>`;
   else if (sx.status === "err") h += `<p class="sx-msg err" role="alert">${esc(sx.err)}</p>`;
@@ -11335,6 +11590,7 @@ function settingsClick(ev) {
     case "remove": sx.confirm = id; sx.rename = ""; sx.msg = ""; renderSettings(); break;
     case "cancel": sx.rename = ""; sx.confirm = ""; renderSettings(); break;
     case "remove-go": sxRemoveGo(); break;
+    case "forget": sxForget(); break;
   }
 }
 
@@ -11353,7 +11609,7 @@ function syncSettings() {
   el.hidden = !on;
   if (!on) return;
   if (!was) {
-    sx.status = "loading"; sx.msg = ""; sx.rename = ""; sx.confirm = ""; el._html = "";
+    sx.status = "loading"; sx.msg = ""; sx.rename = ""; sx.confirm = ""; sx.forgot = false; el._html = "";
     sxLoad();
     ($("sx-back").offsetParent ? $("sx-back") : $("sx-body")).focus({ preventScroll: true });
   }
@@ -15675,6 +15931,116 @@ async function submitSwitch() {
 
 /* ---------- wiring ---------- */
 
+/* ---------- saved state: the lists (see "Saved state" above) ---------- */
+
+// agents: what the list draws, and the hosts with it. Long strings (a blocked reason) are cut to 300 characters.
+cacheItem("agents", {
+  src: agentsSrc,
+  get: () => (state.agents.length ? { agents: cacheCut(state.agents, 300), hosts: cacheCut(state.hosts, 300) } : null),
+  put: (d) => {
+    if (!d || !Array.isArray(d.agents) || !d.agents.length) return false;
+    state.agents = d.agents;
+    for (const a of state.agents) if (!AGENT_STATUSES.has(a.agent_status)) a.agent_status = "unknown";
+    if (Array.isArray(d.hosts)) {
+      state.hosts = d.hosts;
+      const local = d.hosts.find((h) => h.local);
+      state.localHost = local ? local.name : null;
+    }
+  },
+  drop: () => { state.agents = []; state.hosts = []; state.localHost = null; },
+});
+// todos: the open ones, and the last 20 answered (the first to go when the store is full).
+const todoSaved = (lean) => {
+  const open = todos.items.filter((t) => t && t.state === "open");
+  const rest = lean ? [] : todos.items.filter((t) => t && t.state !== "open").slice(0, 20);
+  return open.length || rest.length ? { todos: cacheCut(open.concat(rest), 4000), open: todos.open, answered: todos.answered } : null;
+};
+cacheItem("todos", {
+  src: todosSrc,
+  get: () => (todos.on === true ? todoSaved(false) : null),
+  lean: () => (todos.on === true ? todoSaved(true) : null),
+  put: (d) => {
+    if (!d || !Array.isArray(d.todos) || !d.todos.length) return false;
+    todos.on = true;
+    todos.items = d.todos;
+    todos.open = d.open | 0;
+    todos.answered = d.answered | 0;
+  },
+  drop: () => { todos.on = null; todos.items = []; todos.open = 0; todos.answered = 0; },
+});
+// ledger and board: what Status draws.
+cacheItem("ledger", {
+  src: ledgerSrc,
+  get: () => (ledger.on === true && (ledger.entries.length || ledger.marks.length)
+    ? cacheCut({ plans: ledger.plans || [], entries: ledger.entries, marks: ledger.marks, roles: Object.fromEntries(ledger.roles) }, 4000) : null),
+  put: (d) => {
+    if (!d || !((Array.isArray(d.entries) && d.entries.length) || (Array.isArray(d.marks) && d.marks.length))) return false;
+    setLedger(d);
+  },
+  drop: () => { setLedger({}); ledger.on = null; },
+});
+cacheItem("board", {
+  has: () => board.at > 0 && !!board.data,
+  get: () => (board.data ? cacheCut(board.data, 4000) : null),
+  put: (d) => { if (!d || !Array.isArray(d.lanes)) return false; board.data = d; },
+  drop: () => { board.data = null; },
+});
+// pages: the list only (titles, authors, dates), never a page's body.
+cacheItem("pages", {
+  src: pagesSrc,
+  get: () => (pgs.loaded && !pgs.err && pgs.items.length ? { pages: cacheCut(pgs.items, 2000), public_url: pgs.publicUrl, pages_url: pgs.pagesUrl } : null),
+  put: (d) => {
+    if (!d || !Array.isArray(d.pages) || !d.pages.length) return false;
+    pgs.items = d.pages;
+    pgs.publicUrl = typeof d.public_url === "string" ? d.public_url : "";
+    pgs.pagesUrl = typeof d.pages_url === "string" ? d.pages_url : "";
+    pgsOpenedInit();
+    pgs.loaded = true;
+  },
+  drop: () => { pgs.items = []; pgs.loaded = false; },
+});
+// peers (their versions and settings links) and releases.
+cacheItem("peers", {
+  has: () => prs.infoAt > 0,
+  get: () => (Object.keys(prs.info || {}).length ? cacheCut({ info: prs.info, version: prs.hubVersion || "" }, 2000) : null),
+  put: (d) => {
+    if (!d || !d.info || typeof d.info !== "object" || !Object.keys(d.info).length) return false;
+    prs.info = d.info;
+    prs.hubVersion = typeof d.version === "string" ? d.version : "";
+  },
+  drop: () => { prs.info = {}; prs.hubVersion = ""; },
+});
+cacheItem("releases", {
+  src: rlsSrc,
+  get: () => (rls.data ? cacheCut(rls.data, 4000) : null),
+  put: (d) => { if (!d || typeof d !== "object") return false; rls.data = d; rls.err = ""; },
+  drop: () => { rls.data = null; },
+});
+cacheItem("archived", {
+  src: archSrc,
+  get: () => (arch.data && arch.data.archived && arch.data.archived.length ? cacheCut(arch.data, 4000) : null),
+  put: (d) => {
+    if (!d || !Array.isArray(d.archived) || !d.archived.length) return false;
+    for (const r of d.archived) r.archive = r.archive || {};
+    arch.data = d; arch.err = "";
+  },
+  drop: () => { arch.data = null; },
+});
+// usage: the screen as it opens (14 days, by kind, fresh tokens, no drill-down).
+const usDefault = () => us.r === 14 && us.d === "kind" && us.m === "fresh" && !us.p && !us.h;
+cacheItem("usage", {
+  src: usageSrc,
+  get: () => (us.status === "ok" && us.main && usDefault() ? { main: us.main, prev: us.prev, drill: us.drill, roles: us.roles, models: us.models, hosts: us.hosts, asOf: us.asOf } : null),
+  put: (d) => {
+    if (!d || !d.main || !d.prev || !d.drill || !d.roles || !d.models || !usDefault()) return false;
+    Object.assign(us, { main: d.main, prev: d.prev, drill: d.drill, roles: d.roles, models: d.models, hosts: Array.isArray(d.hosts) ? d.hosts : [], asOf: d.asOf, status: "ok", err: "" });
+  },
+  drop: () => { Object.assign(us, { main: null, prev: null, drill: null, roles: null, models: null, hosts: [], status: "loading" }); },
+});
+// What waits to be written goes when the page is hidden (a phone may not bring it back).
+document.addEventListener("visibilitychange", () => { if (document.hidden) cacheFlush(true); });
+window.addEventListener("pagehide", () => cacheFlush(true));
+
 /* ---------- new deploys ---------- */
 //
 // An installed iOS app stays in memory across server deploys, so an old
@@ -15727,7 +16093,7 @@ function reloadOnce(v) {
 // and the event stream may take a moment to come back.
 function checkVersion() {
   if (document.hidden) return;
-  api("/api/version").then((d) => noteVersion(d.version)).catch(() => {});
+  api("/api/version").then((d) => { noteVersion(d.version); cacheViewer(d.viewer); }).catch(() => {});
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -15739,6 +16105,9 @@ window.addEventListener("DOMContentLoaded", () => {
 window.addEventListener("DOMContentLoaded", () => {
   renderList();
   renderTodos(); // the phone's To do card says it is waiting, rather than nothing
+  // What this device saved shows at once, marked old, while the hub is asked (and who is asking: the viewer).
+  cacheRestore();
+  api("/api/version").then((d) => { noteVersion(d.version); cacheViewer(d.viewer); }).catch(() => {});
   // Probe first so a 401 is reported to the user (EventSource alone would
   // just fail and retry silently).
   // Its answer draws the list at once (the stream's first snapshot may come later on a slow link).

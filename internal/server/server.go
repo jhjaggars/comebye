@@ -218,13 +218,15 @@ type Config struct {
 type Server struct {
 	// bg counts the queued-prompt senders that run in the background, so a test can wait for them before its
 	// state directory is removed (waitBackground).
-	bg      sync.WaitGroup
-	cfg     Config
-	recall  *archive.Reader
-	client  *herdr.Client
-	manager *state.Manager
-	fleet   *fleet.Fleet
-	mux     *http.ServeMux
+	bg     sync.WaitGroup
+	cfg    Config
+	recall *archive.Reader
+	// viewerKey signs the viewer value of /api/version (viewer.go).
+	viewerKey []byte
+	client    *herdr.Client
+	manager   *state.Manager
+	fleet     *fleet.Fleet
+	mux       *http.ServeMux
 	// version is this build's app version (a hash of the embedded web
 	// assets). Pages compare it to the one they loaded with and reload
 	// after a deploy.
@@ -421,6 +423,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	s.typing = newTypingTracker()
 	s.initParkMode(cfg.ParkSuggestAfter, cfg.ParkMode)
 	s.rel = newRelState()
+	s.viewerKey = openViewerKey(cfg.StateDir)
 	s.prov = newProvState()
 	if cfg.TestMode { // browser tests: a forced refresh may repeat after a moment, not after 20 s
 		s.prov.catGap, s.prov.hostsGap = time.Second, 300*time.Millisecond
@@ -889,7 +892,8 @@ func (s *Server) handleTestMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"version": s.version})
+	// viewer: who is asking, as an HMAC of the login (viewer.go), so the app can tell users apart in what it saved.
+	writeJSON(w, map[string]string{"version": s.version, "viewer": s.viewerOf(r)})
 }
 
 // handleHosts returns each host's status.
