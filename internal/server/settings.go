@@ -50,9 +50,13 @@ type hostSettings struct {
 	// PushlessFetch is the hub bringing branches back from push-less hosts
 	// (pushless.go): nil is off.
 	PushlessFetch *pushlessFetchSettings `json:"pushless_fetch,omitempty"`
-	Rev           int                    `json:"rev"`
-	UpdatedBy     string                 `json:"updated_by,omitempty"`
-	UpdatedAt     *time.Time             `json:"updated_at,omitempty"`
+	// AutoRollout is the hub starting Roll out to all by itself once an
+	// approved release is tagged and its build is green (rollout_auto.go):
+	// nil is on.
+	AutoRollout *bool      `json:"auto_rollout,omitempty"`
+	Rev         int        `json:"rev"`
+	UpdatedBy   string     `json:"updated_by,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // settingsStore keeps settings.json. Safe for concurrent use; a nil store
@@ -135,6 +139,10 @@ func copySettings(h hostSettings) hostSettings {
 	}
 	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
 	h.PushlessFetch = normalizePushless(h.PushlessFetch)
+	if h.AutoRollout != nil {
+		v := *h.AutoRollout
+		h.AutoRollout = &v
+	}
 	h.AllowedKinds = slices.Clone(h.AllowedKinds)
 	if h.Kinds != nil {
 		m := make(map[string]kindSettings, len(h.Kinds))
@@ -325,8 +333,14 @@ type settingsView struct {
 		Notice string `json:"notice,omitempty"`
 	} `json:"effective"`
 	// SweepLoop is the scheduled sweep: the setting in force and its last run.
-	SweepLoop      sweepLoopView `json:"sweep_loop"`
-	InstalledKinds []string      `json:"installed_kinds"`
+	SweepLoop sweepLoopView `json:"sweep_loop"`
+	// AutoRollout is the automatic rollout in force (on unless switched off);
+	// Hub says this host is the one that runs it.
+	AutoRollout struct {
+		Enabled bool `json:"enabled"`
+		Hub     bool `json:"hub"`
+	} `json:"auto_rollout"`
+	InstalledKinds []string `json:"installed_kinds"`
 	// AgentAuth is each installed agent's sign-in state and method (no account),
 	// probed on this host and kept for a minute.
 	AgentAuth  map[string]signin.AuthInfo `json:"agent_auth"`
@@ -348,6 +362,7 @@ func (s *Server) settingsView() settingsView {
 		v.Effective.MaxWorkersPerRepoSource = "setting"
 	}
 	v.SweepLoop = s.sweepLoopView()
+	v.AutoRollout.Enabled, v.AutoRollout.Hub = s.autoRolloutOn(), s.rollout != nil
 	if v.Effective.AllowedKinds == nil {
 		v.Effective.AllowedKinds = []string{}
 	}
@@ -400,6 +415,8 @@ type settingsBody struct {
 	SweepLoop *sweepLoopSettings `json:"sweep_loop"`
 	// PushlessFetch: absent keeps what is set; {} turns it off.
 	PushlessFetch *pushlessFetchSettings `json:"pushless_fetch"`
+	// AutoRollout: absent keeps what is set; true or false sets it.
+	AutoRollout *bool `json:"auto_rollout"`
 	// Rev, when given, must be the revision read; a later one is a 409.
 	Rev *int `json:"rev"`
 }
@@ -432,7 +449,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop, PushlessFetch: pushless})
+	autoRollout := s.settings.get().AutoRollout
+	if b.AutoRollout != nil {
+		v := *b.AutoRollout
+		autoRollout = &v
+	}
+	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop, PushlessFetch: pushless, AutoRollout: autoRollout})
 	if b.SweepLoop != nil && b.SweepLoop.EveryMinutes != nil && (*b.SweepLoop.EveryMinutes < int(minSweepEvery/time.Minute) || *b.SweepLoop.EveryMinutes > int(maxSweepEvery/time.Minute)) {
 		badSettings(w, fmt.Sprintf("sweep_loop.every_minutes: want %d to %d", int(minSweepEvery/time.Minute), int(maxSweepEvery/time.Minute)))
 		return

@@ -126,14 +126,18 @@ type Rollout struct {
 	State   string `json:"state"`
 	// PauseRequested: Pause was pressed while a step was in flight; the job
 	// pauses when that step ends.
-	PauseRequested bool          `json:"pause_requested,omitempty"`
-	By             string        `json:"by"` // who confirmed it; the loop acts as them
-	Canary         string        `json:"canary,omitempty"`
-	Plan           []RolloutStep `json:"plan"`
-	Started        time.Time     `json:"started"`
-	Updated        time.Time     `json:"updated"`
-	Rev            int           `json:"rev"` // counts saves: a tick that raced a control sees it changed
-	Finished       *time.Time    `json:"finished,omitempty"`
+	PauseRequested bool   `json:"pause_requested,omitempty"`
+	By             string `json:"by"` // who confirmed it; the loop acts as them
+	// Auto: the hub started it by itself once the approved release's build
+	// was green (rollout_auto.go). An automatic rollout never wakes a
+	// stopped worker: it is upgraded when it next starts (catchUp).
+	Auto     bool          `json:"auto,omitempty"`
+	Canary   string        `json:"canary,omitempty"`
+	Plan     []RolloutStep `json:"plan"`
+	Started  time.Time     `json:"started"`
+	Updated  time.Time     `json:"updated"`
+	Rev      int           `json:"rev"` // counts saves: a tick that raced a control sees it changed
+	Finished *time.Time    `json:"finished,omitempty"`
 	// Stop is why a stopped rollout stopped.
 	Stop *RolloutStop `json:"stop,omitempty"`
 	// Note is the line the band shows: what it is doing now, or why it waits.
@@ -351,10 +355,25 @@ func hostUp(h relHost) bool { return h.Status == "ok" && !h.Unknown }
 // time. The caller has checked the release (tagged, build green) and built
 // the plan.
 func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
+	return e.start(todo, version, commit, by, plan, false)
+}
+
+// StartAuto is Start for the hub's own automatic rollout. It refuses, too,
+// when the job on file is already this release item's, whatever its state:
+// one release is rolled out automatically once, even across a restart.
+func (e *rolloutEngine) StartAuto(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
+	return e.start(todo, version, commit, by, plan, true)
+}
+
+var errRolloutSame = errors.New("this release already has a rollout")
+
+func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutStep, auto bool) (Rollout, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if cur, ok := e.load(); ok && cur.live() {
 		return cur, errRolloutActive
+	} else if ok && auto && cur.Todo == todo {
+		return cur, errRolloutSame
 	}
 	if !actionable(plan) {
 		return Rollout{}, errors.New("the plan has no host the app can upgrade")
@@ -363,7 +382,7 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 	var idb [3]byte
 	_, _ = rand.Read(idb[:])
 	j := Rollout{ID: fmt.Sprintf("r%x", idb), Todo: todo, Version: version, Commit: commit, State: roRunning, By: by,
-		Plan: plan, Started: now}
+		Auto: auto, Plan: plan, Started: now}
 	for i := range plan {
 		if plan[i].Phase == roSkipped && plan[i].Done == nil {
 			plan[i].Done = &now
@@ -383,12 +402,16 @@ func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutSt
 			names[i] = "|" + st.Host
 		}
 	}
+	how := ""
+	if auto {
+		how = " auto=true"
+	}
 	for _, st := range plan {
 		if isHubStep(st) && st.Phase == roSkipped && e.onHubTrouble != nil {
 			e.onHubTrouble(j, st)
 		}
 	}
-	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%q id=%s", version, strings.Join(names, " "), j.Canary, j.ID), by)
+	e.emit(j, "", "rollout.start", true, fmt.Sprintf("%s plan=[%s] canary=%q%s id=%s", version, strings.Join(names, " "), j.Canary, how, j.ID), by)
 	if e.onState != nil {
 		e.onState(j)
 	}
@@ -781,7 +804,7 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		e.finishStep(j, st, h, now, "already on the version")
 		return true
 	case !hostUp(h):
-		if st.OfflineSince == nil && st.Mode != stepModeDeploy {
+		if st.OfflineSince == nil && st.Mode != stepModeDeploy && !j.Auto {
 			// A stopped provisioned worker is started, not waited for: the
 			// offline grace is for hosts that went quiet for unknown reasons.
 			cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)

@@ -82,6 +82,10 @@ type TodoRelease struct {
 	// (stopped at a host, done with a skipped host, cancelled); empty while it
 	// runs or when it finished cleanly.
 	RolloutNote string `json:"rollout_note,omitempty"`
+	// AutoRollout settles the hub's automatic rollout of this release
+	// (rollout_auto.go): the id of the job it started (or found), or
+	// "none: why". Set once; the loop never looks at a marked item again.
+	AutoRollout string `json:"auto_rollout,omitempty"`
 	// DryRun is the last dry run's output (a server run with
 	// -release-dry-run never tags).
 	DryRun string `json:"dry_run,omitempty"`

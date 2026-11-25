@@ -566,6 +566,7 @@ func main() {
 	go srv.RunAutoTodo(context.Background())
 	go srv.RunReleaseSweep(context.Background())
 	go srv.RunRollout(context.Background())
+	go srv.RunAutoRollout(context.Background())
 	go srv.RunProvision(context.Background())
 	go srv.RunBlockedRelay(context.Background())
 	go srv.RunQuiet(context.Background())

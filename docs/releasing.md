@@ -181,8 +181,18 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
 - **Finishing:** a rollout with every host upgraded finishes `ok: all N hosts`. One that skipped a host finishes
   `not ok: X of N hosts upgraded, K skipped (…)` (audited with ok=false); when the hub was skipped it adds "the hub
   was not bumped", and the item's line says to bump it from its row in Peers (Roll out again never retries the hub).
-- Only the user starts one (user role and the page's CSRF token; the body repeats version, commit and the ordered
-  hosts); there is no automatic option.
+- The user starts one from the page (user role and the page's CSRF token; the body repeats version, commit and the
+  ordered hosts), or the hub does, by itself:
+- **Automatic rollout** (on by default): once a release item the user approved is tagged and its Release workflow
+  is green, the hub starts the same rollout Roll out to all starts (every peer behind, then the hub wave), with no
+  tap (`rollout.auto`, and `auto=true` on `rollout.start`). The loop looks once a minute at the newest open, tagged
+  item tagged in the last 24 hours, and waits while another rollout is live or a deploy runs. A red or running build
+  starts nothing. It starts once per release: the item keeps the job's id (`auto_rollout`), and the job on file
+  names its item, so a hub restart between the tag and the start, or between the start and that mark, neither
+  misses the release nor starts it twice. An automatic rollout never wakes a stopped worker: it is listed as skipped
+  and upgraded when it next starts. Turn it off with **Roll out automatically** in the hub's settings (Peers, the
+  hub's row: `auto_rollout: false` in `settings.json`); Roll out to all is then the only way. Under `-test-mode`
+  (the browser tests, which tap Roll out themselves) it is off unless the setting turns it on.
 
 ## Deploying a release: your own command
 

@@ -10255,7 +10255,9 @@ function draftFrom(name, data) {
   for (const [k, v] of Object.entries(s.kinds || {})) kinds[k] = { model: v.model || "", thinking: v.thinking || "" };
   return { host: name, rev: s.rev || 0, default_kind: s.default_kind || "", allowed: [...(s.allowed_kinds || [])], kinds, max_workers: s.max_workers_per_repo == null ? "" : String(s.max_workers_per_repo),
     // The scheduled sweep (sweep_loop): on unless switched off; "" minutes is the default hour. Hosts too old to have it send nothing.
-    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "" };
+    sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "",
+    // The automatic rollout (auto_rollout): on unless switched off; only the hub runs one.
+    auto_known: !!(data && data.auto_rollout && data.auto_rollout.hub), auto_on: s.auto_rollout !== false };
 }
 
 function draftBody(d) {
@@ -10270,6 +10272,7 @@ function draftBody(d) {
     if (/^\d+$/.test(ev)) sl.every_minutes = Number(ev);
     body.sweep_loop = sl; // {} puts the default back
   }
+  if (d.auto_known) body.auto_rollout = d.auto_on;
   return body;
 }
 
@@ -10392,6 +10395,9 @@ function peerSettingsForm(h, c, d) {
       <div class="pr-checks" role="group" aria-labelledby="pr-sweep-l"><label class="pr-check"><input type="checkbox" id="pr-sweep-on"${d.sweep_on ? " checked" : ""}>Clean up automatically</label>
         <label class="pr-check" for="pr-sweep-every">every <input type="number" id="pr-sweep-every" min="15" max="1440" step="5" inputmode="numeric" value="${esc(d.sweep_every)}" placeholder="60" autocomplete="off"${d.sweep_on ? "" : " disabled"}> minutes</label></div>
       <div class="pr-note" id="pr-sweep-note">${esc(sweepNote(d, data.sweep_loop))}</div></div>` : ""}
+    ${d.auto_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-auto-l">Releases</span>
+      <div class="pr-checks" role="group" aria-labelledby="pr-auto-l"><label class="pr-check"><input type="checkbox" id="pr-auto-on"${d.auto_on ? " checked" : ""}>Roll out automatically</label></div>
+      <div class="pr-note" id="pr-auto-note">${esc(d.auto_on ? "On: once a release you approved is tagged and its build is green, the hub rolls it out to every host, the hub last. Stopped workers are upgraded when they next start." : "Off: a tagged release waits for you to tap Roll out to all.")}</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
       <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
@@ -10720,6 +10726,7 @@ function initPeers() {
     if (!d) return;
     if (t.id === "pr-default") d.default_kind = t.value;
     else if (t.id === "pr-sweep-on") d.sweep_on = t.checked;
+    else if (t.id === "pr-auto-on") d.auto_on = t.checked;
     else if (t.dataset.allow) d.allowed = t.checked ? [...new Set([...d.allowed, t.dataset.allow])] : d.allowed.filter((k) => k !== t.dataset.allow);
     else if (t.dataset.think) (d.kinds[t.dataset.think] ||= { model: "", thinking: "" }).thinking = t.value;
     else return;
