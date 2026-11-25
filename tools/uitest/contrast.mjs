@@ -11,6 +11,7 @@
 //     against the page and panel backgrounds;
 //   - text stops reading on a surface while it is pressed (the press layer's 10% --text);
 //   - text, or a status dot, stops reading on a gradient stop (--g-attn, --g-blk, --g-off) or muted on a blocked row;
+//   - text stops reading on a row marked on the way back to its list (the return mark's 16% --blue);
 //   - a var(--token) used by index.html is missing from the theme.
 // Tokens themes.js nudged to pass (an official palette colour that failed
 // AA) are listed under "adjusted" in the output.
@@ -101,6 +102,20 @@ const PRESSED = [
   ...["g-attn", "g-off"].flatMap((b) => [["text", b, UI, "text on pressed " + b], ["muted", b, UI, "muted on pressed " + b]]),
 ];
 
+// The return mark (index.html "Return mark"): back on a list, the row you came back from gets 16% of --blue over it, held
+// for about a third of a second and then faded out by 1 s. Like the press layer it is a moment, not a resting state, and no
+// layer at all keeps AA where a theme's text only just meets it (Tokyo Night Day's panel2 is 4.54 bare): what sits on a
+// marked row must stay 3:1 (the lowest is about 3.4, Solarized Dark).
+const RET = 0.16;
+const mix = (base, over, k) => "#" + [1, 3, 5].map((i) => {
+  const b = parseInt(base.slice(i, i + 2), 16), f = parseInt(over.slice(i, i + 2), 16);
+  return Math.round(b + (f - b) * k).toString(16).padStart(2, "0");
+}).join("");
+const MARKED = [
+  ...["bg", "panel", "panel2", "s1", "s2", "s3"].flatMap((b) => [["text", b, UI, "text on a marked " + b], ["muted", b, UI, "muted on a marked " + b]]),
+  ["text", "blocked-bg", UI, "text on a marked blocked row"], ["blocked-name", "blocked-bg", UI, "blocked name on a marked blocked row"],
+];
+
 let fails = 0, checks = 0;
 for (const t of THEMES) {
   const bad = [];
@@ -110,6 +125,13 @@ for (const t of THEMES) {
     if (!/^#[0-9a-f]{6}$/i.test(f || "") || !/^#[0-9a-f]{6}$/i.test(b || "") || !/^#[0-9a-f]{6}$/i.test(t.vars.text || "")) { bad.push(`${what}: ${fg}, ${bg} or text is not a 6-digit hex`); continue; }
     const pb = pressed(b, t.vars.text), r = contrast(f, pb);
     if (r < min) bad.push(`${what}: ${fg} ${f} on ${bg} ${b} pressed (${pb}) = ${r.toFixed(2)} < ${min}`);
+  }
+  for (const [fg, bg, min, what] of MARKED) {
+    checks++;
+    const f = t.vars[fg], b = t.vars[bg], bl = t.vars.blue;
+    if (![f, b, bl].every((x) => /^#[0-9a-f]{6}$/i.test(x || ""))) { bad.push(`${what}: ${fg}, ${bg} or blue is not a 6-digit hex`); continue; }
+    const mb = mix(b, bl, RET), r = contrast(f, mb);
+    if (r < min) bad.push(`${what}: ${fg} ${f} on ${bg} ${b} marked (${mb}) = ${r.toFixed(2)} < ${min}`);
   }
   for (const [fg, bg, min, what] of TEXT) {
     checks++;

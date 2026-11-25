@@ -1,7 +1,8 @@
 # Seconds each script takes on a CI runner: the median of its "== script NAME: N s" lines over the 5 green pushes to main
 # of Nov 25 2026 (runs 45528201712 to 45545896651; landscape from the 3 runs since its new checks). tools/ci/browser.sh
 # balances the rest and visual parts from these, and tools/ci/select.sh estimates a pull request's smoke job from them;
-# a script not listed counts 30. Refresh from a CI run's lines when the parts drift apart.
+# a script not listed counts 30. Refresh from a CI run's lines when the parts drift apart. returnmark (new) is its
+# author's estimate.
 offline 166
 landscape 114
 saved 64
@@ -10,6 +11,7 @@ pages 46
 appearance 43
 sidepanel 41
 groupby 40
+returnmark 40
 hostpicker 38
 press 38
 pagetheme 30

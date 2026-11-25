@@ -2344,6 +2344,13 @@
     .is-pressed { --press-c: color-mix(in srgb, var(--text) 10%, transparent); transition: none !important; }
     .is-released { transition: --press-c .18s ease-out !important; }
     @media (prefers-reduced-motion: reduce) { .is-released { transition: none !important; } }
+    /* Return mark (issue 135): back on a list, the row you came back from (app.js, RET_LISTS) is marked for a second,
+       as iOS deselects the cell: 16% --blue drawn like the press layer, held for a third, then faded. With reduced motion
+       it shows still and app.js takes it away. A finger on the marked row draws the press layer instead; a press fade still ending (a quick back) gives way to the mark. */
+    @property --ret-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
+    .was-open:not(.is-pressed) { background-image: linear-gradient(var(--ret-c), var(--ret-c)), var(--grad, none) !important; animation: was-open 1s ease-out both; }
+    @keyframes was-open { 0%, 35% { --ret-c: color-mix(in srgb, var(--blue) 16%, transparent); } 100% { --ret-c: transparent; } }
+    @media (prefers-reduced-motion: reduce) { .was-open:not(.is-pressed) { animation: none; --ret-c: color-mix(in srgb, var(--blue) 16%, transparent); } }
     /* Pages: reports agents publish (comebye publish). A screen of its own, like Transcripts. */
     #pgs-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pgs-panes { flex: 1; min-height: 0; display: flex; }

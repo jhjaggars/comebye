@@ -49,12 +49,49 @@ function pressScrolls(el) { // is el inside something the finger could be starti
   const s = document.scrollingElement;
   return !!s && s.scrollHeight > s.clientHeight + 1;
 }
-function pressShow(el) { el.classList.remove("is-released"); el.classList.add("is-pressed"); press.at = performance.now(); }
+// A redraw can replace the element under the finger: the agent list re-renders its rows on every poll, so a poll that
+// lands while a row is held (or fading) would drop the layer, and a later timer would act on a detached element. Each
+// element that carries the layer is tracked with a key (its tag, first class and data-id, data-name, data-key or id);
+// while any is tracked, a MutationObserver moves the layer to the element that replaced it, and pressNow() follows the
+// move. An element with no key cannot be found again, and its layer goes with it.
+const pressMoved = new WeakMap(), pressLive = new Map(); // replaced -> replacement; element carrying the layer -> key
+let pressMo = null;
+const pressNow = (el) => { while (el && pressMoved.has(el)) el = pressMoved.get(el); return el; };
+function pressKey(el) {
+  for (const a of ["data-id", "data-name", "data-key", "id"]) {
+    const v = el.getAttribute(a);
+    if (v) return `${el.localName}${el.classList[0] && !el.classList[0].startsWith("is-") ? "." + CSS.escape(el.classList[0]) : ""}[${a}="${CSS.escape(v)}"]`;
+  }
+  return "";
+}
+function pressTrack(el) {
+  if (pressLive.has(el)) return;
+  pressLive.set(el, pressKey(el));
+  if (!pressMo) { pressMo = new MutationObserver(pressFollow); pressMo.observe(document.body, { childList: true, subtree: true }); }
+}
+function pressUntrack(el) {
+  pressLive.delete(el);
+  if (!pressLive.size && pressMo) { pressMo.disconnect(); pressMo = null; }
+}
+function pressFollow() {
+  for (const [el, key] of [...pressLive]) {
+    if (el.isConnected) continue;
+    pressUntrack(el);
+    const n = key && document.querySelector(key);
+    if (!n || n === el) continue;
+    pressMoved.set(el, n);
+    for (const c of ["is-pressed", "is-released"]) if (el.classList.contains(c)) n.classList.add(c);
+    if (press.el === el) press.el = n;
+    pressTrack(n);
+  }
+}
+function pressShow(el) { el = pressNow(el); el.classList.remove("is-released"); el.classList.add("is-pressed"); press.at = performance.now(); pressTrack(el); }
 function pressFade(el) {
+  el = pressNow(el);
   if (el === press.el) return; // pressed again meanwhile: that press owns it now
   el.classList.remove("is-pressed");
   el.classList.add("is-released");
-  setTimeout(() => { if (el !== press.el) el.classList.remove("is-released"); }, PRESS_FADE + 40);
+  setTimeout(() => { const n = pressNow(el); if (n !== press.el) { n.classList.remove("is-released"); pressUntrack(n); } }, PRESS_FADE + 40);
 }
 function pressEnd(cancel) {
   const el = press.el;
@@ -62,7 +99,7 @@ function pressEnd(cancel) {
   press.el = null; press.id = -1;
   if (press.timer) { // released before the delay ran out
     clearTimeout(press.timer); press.timer = 0;
-    if (cancel) return; // a scroll: never shown
+    if (cancel) { pressUntrack(el); return; } // a scroll: never shown
     pressShow(el); // a quick tap: show it now, for PRESS_MIN
   }
   const left = cancel ? 0 : PRESS_MIN - (performance.now() - press.at);
@@ -74,6 +111,7 @@ addEventListener("pointerdown", (ev) => {
   const el = ev.target.closest?.(PRESS_SEL);
   if (!el || el.matches(PRESS_SKIP) || el.closest("[inert]")) return;
   Object.assign(press, { el, id: ev.pointerId, x: ev.clientX, y: ev.clientY });
+  pressTrack(el); // from now, so a redraw during the delay below is followed too
   if (ev.pointerType === "touch" && pressScrolls(el)) press.timer = setTimeout(() => { press.timer = 0; pressShow(el); }, PRESS_DELAY);
   else pressShow(el);
 }, { capture: true, passive: true });
@@ -85,6 +123,139 @@ addEventListener("pointercancel", (ev) => { if (ev.pointerId === press.id) press
 addEventListener("scroll", () => { if (press.el) pressEnd(true); }, { capture: true, passive: true });
 // iOS Safari applies :active only to elements with a touch listener; one passive no-op lets the remaining :active rules work there.
 addEventListener("touchstart", () => {}, { passive: true });
+
+// ---- The return mark (#135 slice 3): back on a list from a row you opened, that row is briefly marked, as iOS
+// deselects the cell you came back from. A tap on a row in one of RET_LISTS remembers it. Once the list has gone from
+// the screen (the detail, a page or the next palette step covered it or took its place) and comes back, the row gets
+// .was-open: a 16% --blue layer drawn like the press layer, held a moment and faded out (index.html, "Return mark").
+// - Nothing changes when the list never left the screen: on a wide layout the open row already shows as selected.
+// - Shown or not is a hit test, so a list hidden by display:none and one covered by an overlay read the same.
+// - It is one-shot: a re-render or a poll of the list never marks it again (one that lands during the fade keeps
+//   the fade going on the new element). The scroll position is the list's own; the row is scrolled into view only
+//   when it is off screen.
+const RET_LISTS = [
+  { sel: "#agents .agent", attr: "data-id" },
+  { sel: "#todo .td-item, #pt-body .td-item", attr: "data-id", mark: ":scope > .td-row" },
+  { sel: ".pgs-card", attr: "data-id" },
+  { sel: ".pr-card", attr: "data-name" },
+  { sel: ".ar-item", attr: "data-id" },
+  { sel: "#pal-list .pal-it", attr: "data-key", live: () => !$("palette").hidden }, // closing the palette forgets it
+];
+const RET_MS = 1000, RET_REDUCED_MS = 600;
+const ret = { want: null, on: null, pend: null };
+function retFind(w) {
+  for (const el of document.querySelectorAll(w.list.sel)) {
+    if (el.getAttribute(w.list.attr) !== w.key) continue;
+    const m = w.list.mark ? el.querySelector(w.list.mark) : el;
+    if (m) return m;
+  }
+  return null;
+}
+// retShown: is el on the screen, not hidden or covered? Off screen (scrolled away) counts as shown when the part of
+// the list that is on screen is not covered: the nearest ancestor with something on screen is hit-tested.
+function retShown(el) {
+  if (!el || !el.isConnected || !el.getClientRects().length) return false;
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    const v = retVisible(n);
+    if (!v) continue;
+    const hit = document.elementFromPoint((v.l + v.r) / 2, (v.t + v.b) / 2);
+    return !!hit && n.contains(hit);
+  }
+  return false;
+}
+// retVisible is the part of el on the screen, clipped by the viewport and by every ancestor that clips (a scroller), or null.
+function retVisible(el) {
+  const r = el.getBoundingClientRect();
+  let l = Math.max(r.left, 0), t = Math.max(r.top, 0), rt = Math.min(r.right, innerWidth), b = Math.min(r.bottom, innerHeight);
+  for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    const cs = getComputedStyle(n);
+    if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+    const c = n.getBoundingClientRect();
+    l = Math.max(l, c.left); t = Math.max(t, c.top); rt = Math.min(rt, c.right); b = Math.min(b, c.bottom);
+  }
+  return rt - l >= 1 && b - t >= 1 ? { l, t, r: rt, b } : null;
+}
+// retCheck marks the remembered row if it is back on the screen after being away, and says whether it did.
+function retCheck() {
+  const w = ret.want;
+  if (!w) return false;
+  if (w.list.live && !w.list.live()) { ret.want = null; return false; }
+  const el = retFind(w);
+  if (!retShown(el)) { w.away = true; return false; }
+  if (!w.away) return false;
+  ret.want = null;
+  // Already shown as selected (a layout that keeps the open row selected): it needs no second mark.
+  if (el.matches('.selected, .current, [aria-current="page"], [aria-current="true"]')) return true;
+  retMark(w, el);
+  return true;
+}
+function retMark(w, el) {
+  retClear();
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const r = el.getBoundingClientRect(), v = retVisible(el);
+  if (!v || v.b - v.t < r.height / 2) el.scrollIntoView({ block: "nearest" }); // off screen, or mostly
+  const on = { w, el, at: performance.now(), mo: null, timer: 0 };
+  ret.on = on;
+  el.classList.add("was-open");
+  // A re-render during the mark: put it on the new element, as far into the fade as the old one was.
+  on.mo = new MutationObserver(() => {
+    if (on.el.isConnected) return;
+    const n = retFind(w);
+    if (!n) return;
+    on.el = n;
+    n.style.animationDelay = -(performance.now() - on.at) + "ms";
+    n.classList.add("was-open");
+  });
+  on.mo.observe(document.body, { childList: true, subtree: true });
+  on.timer = setTimeout(retClear, reduced ? RET_REDUCED_MS : RET_MS + 50);
+}
+function retClear() {
+  const on = ret.on;
+  if (!on) return;
+  ret.on = null;
+  clearTimeout(on.timer);
+  on.mo.disconnect();
+  on.el.classList.remove("was-open");
+  on.el.style.animationDelay = "";
+}
+// A check now and over the next second: a list (or a detail) can draw a little after the click, key or history step.
+function retSoon() {
+  if (!ret.want && !ret.on) return;
+  requestAnimationFrame(() => requestAnimationFrame(retTick));
+  for (const ms of [150, 400, 1000]) setTimeout(retTick, ms);
+}
+function retTick() {
+  const on = ret.on;
+  if (on && on.w.list.live && !on.w.list.live()) retClear(); // its list closed during the mark (the palette)
+  retCheck();
+}
+// A tap on a row is remembered once the tap has done its work: a tap that brings the last row back (a step's Cancel
+// in the palette, which is a row of its own) marks that row, and is not remembered. The capture listener notes the
+// row; the bubble listener, which runs after the row's own handlers in the same task, takes it, so a key pressed right
+// after (Esc back in the palette) already finds it. A handler that stops the click's propagation leaves it to the
+// fallback two frames on.
+function retTake(next) {
+  if (!next || ret.pend !== next) return;
+  ret.pend = null;
+  if (!retCheck()) ret.want = next;
+  retSoon();
+}
+addEventListener("click", (ev) => {
+  const t = ev.target;
+  let next = null;
+  if (t && t.closest) for (const list of RET_LISTS) {
+    const row = t.closest(list.sel);
+    const key = row && row.getAttribute(list.attr);
+    if (key) { next = { list, key, away: false }; break; }
+  }
+  ret.pend = next;
+  if (!next) { retSoon(); return; }
+  requestAnimationFrame(() => requestAnimationFrame(() => retTake(next)));
+}, true);
+addEventListener("click", () => retTake(ret.pend));
+addEventListener("popstate", retSoon);
+addEventListener("hashchange", retSoon);
+addEventListener("keydown", retSoon, true);
 
 /* ---------- helpers ---------- */
 
