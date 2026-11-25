@@ -183,6 +183,7 @@ func newRolloutRig(t *testing.T, names ...string) *rolloutRig {
 func (r *rolloutRig) engine() *rolloutEngine {
 	e := newRolloutEngine(r.path, r.f, func(ev ledger.AuditEvent) { r.audit = append(r.audit, ev) })
 	e.now = r.f.clock
+	e.soak = 2 * time.Minute // most tests here were written for a 2-minute soak; TestRolloutHappyPath runs the 10-minute default
 	e.onState = func(j Rollout) { r.states = append(r.states, j) }
 	return e
 }
@@ -244,6 +245,7 @@ func (r *rolloutRig) actions() string {
 
 func TestRolloutHappyPath(t *testing.T) {
 	r := newRolloutRig(t, "a", "b", "c")
+	r.e.soak = rolloutSoak
 	r.start()
 	r.tick()
 	r.want("running a=upgrading b=pending c=pending")
@@ -256,9 +258,13 @@ func TestRolloutHappyPath(t *testing.T) {
 	r.f.finish("a", upgrade.RecOK, "v0.6.4")
 	r.tick()
 	r.want("running a=soaking b=pending c=pending")
-	r.f.advance(time.Minute)
+	// The soak is 10 minutes by default; nothing else starts meanwhile.
+	r.f.advance(9 * time.Minute)
 	r.tick()
 	r.want("running a=soaking b=pending c=pending")
+	if len(r.f.starts) != 1 {
+		t.Fatalf("a host started during the soak: %v", r.f.starts)
+	}
 	r.f.advance(70 * time.Second)
 	r.tick()
 	r.want("running a=ok b=upgrading c=pending")

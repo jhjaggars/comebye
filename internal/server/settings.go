@@ -53,10 +53,13 @@ type hostSettings struct {
 	// AutoRollout is the hub starting Roll out to all by itself once an
 	// approved release is tagged and its build is green (rollout_auto.go):
 	// nil is on.
-	AutoRollout *bool      `json:"auto_rollout,omitempty"`
-	Rev         int        `json:"rev"`
-	UpdatedBy   string     `json:"updated_by,omitempty"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
+	AutoRollout *bool `json:"auto_rollout,omitempty"`
+	// Rollout is the rollout's canary and its soak (rollout_canary.go): nil
+	// is the defaults (the release host, 10 minutes).
+	Rollout   *rolloutSettings `json:"rollout,omitempty"`
+	Rev       int              `json:"rev"`
+	UpdatedBy string           `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time       `json:"updated_at,omitempty"`
 }
 
 // settingsStore keeps settings.json. Safe for concurrent use; a nil store
@@ -105,6 +108,7 @@ func normalizeSettings(h hostSettings) hostSettings {
 	}
 	h.SweepLoop = normalizeSweepLoop(h.SweepLoop)
 	h.PushlessFetch = normalizePushless(h.PushlessFetch)
+	h.Rollout = normalizeRolloutSettings(h.Rollout)
 	h.Kinds = nil
 	if len(kinds) > 0 {
 		h.Kinds = kinds
@@ -143,6 +147,7 @@ func copySettings(h hostSettings) hostSettings {
 		v := *h.AutoRollout
 		h.AutoRollout = &v
 	}
+	h.Rollout = copyRolloutSettings(h.Rollout)
 	h.AllowedKinds = slices.Clone(h.AllowedKinds)
 	if h.Kinds != nil {
 		m := make(map[string]kindSettings, len(h.Kinds))
@@ -340,7 +345,10 @@ type settingsView struct {
 		Enabled bool `json:"enabled"`
 		Hub     bool `json:"hub"`
 	} `json:"auto_rollout"`
-	InstalledKinds []string `json:"installed_kinds"`
+	// Rollout is the canary and the soak in force, and where the canary
+	// comes from; only the hub runs a rollout.
+	Rollout        rolloutSettingsView `json:"rollout"`
+	InstalledKinds []string            `json:"installed_kinds"`
 	// AgentAuth is each installed agent's sign-in state and method (no account),
 	// probed on this host and kept for a minute.
 	AgentAuth  map[string]signin.AuthInfo `json:"agent_auth"`
@@ -363,6 +371,7 @@ func (s *Server) settingsView() settingsView {
 	}
 	v.SweepLoop = s.sweepLoopView()
 	v.AutoRollout.Enabled, v.AutoRollout.Hub = s.autoRolloutOn(), s.rollout != nil
+	v.Rollout = s.rolloutSettingsView()
 	if v.Effective.AllowedKinds == nil {
 		v.Effective.AllowedKinds = []string{}
 	}
@@ -417,6 +426,8 @@ type settingsBody struct {
 	PushlessFetch *pushlessFetchSettings `json:"pushless_fetch"`
 	// AutoRollout: absent keeps what is set; true or false sets it.
 	AutoRollout *bool `json:"auto_rollout"`
+	// Rollout: absent keeps what is set; {} puts the defaults back.
+	Rollout *rolloutSettings `json:"rollout"`
 	// Rev, when given, must be the revision read; a later one is a 409.
 	Rev *int `json:"rev"`
 }
@@ -454,7 +465,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		v := *b.AutoRollout
 		autoRollout = &v
 	}
-	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop, PushlessFetch: pushless, AutoRollout: autoRollout})
+	roll := s.settings.get().Rollout
+	if b.Rollout != nil {
+		if msg := checkRolloutSettings(b.Rollout); msg != "" {
+			badSettings(w, msg)
+			return
+		}
+		roll = b.Rollout
+	}
+	n := normalizeSettings(hostSettings{DefaultKind: b.DefaultKind, AllowedKinds: b.AllowedKinds, Kinds: b.Kinds, MaxWorkersPerRepo: b.MaxWorkersPerRepo, SweepLoop: sweepLoop, PushlessFetch: pushless, AutoRollout: autoRollout, Rollout: roll})
 	if b.SweepLoop != nil && b.SweepLoop.EveryMinutes != nil && (*b.SweepLoop.EveryMinutes < int(minSweepEvery/time.Minute) || *b.SweepLoop.EveryMinutes > int(maxSweepEvery/time.Minute)) {
 		badSettings(w, fmt.Sprintf("sweep_loop.every_minutes: want %d to %d", int(minSweepEvery/time.Minute), int(maxSweepEvery/time.Minute)))
 		return

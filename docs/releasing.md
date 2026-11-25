@@ -137,12 +137,23 @@ peer, so the hub needs neither `gh` nor a clone for it.
 On the Releases tab, **Roll out to all** upgrades the fleet in one go, run by the hub, so closing the tab or
 restarting the hub loses nothing. The confirm names the version, the commit, the hosts in order and the hub wave.
 
-- **Order:** the peers one at a time (fleet order, one wave, no canary and no soak), then the hub last. The hub
-  wave is the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what is running in
-  the cluster and has no automatic undo, so it only follows peers that came back healthy. To opt back in to a canary,
-  start the hub with `-release-canary NAME` (or `COMEBYE_RELEASE_CANARY`): that peer goes first, alone, and soaks for
-  2 minutes before the others. A rollout saved with a canary step before this change still resumes and finishes as
-  it was planned.
+- **Order:** the canary first, alone, then a soak, then the other peers one at a time (fleet order), then the hub
+  last. The hub wave is the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what
+  is running in the cluster and has no automatic undo, so it only follows peers that came back healthy.
+- **The canary and its soak:** every rollout, automatic or tapped, upgrades the canary first. It is a hub setting
+  (the hub's Settings, "Canary host"; `rollout.canary` in `PUT /api/settings`): empty is the default, the
+  `-release-canary` peer (`COMEBYE_RELEASE_CANARY`) if one is set, else the release host (`-release-host`), which
+  tags and runs Bump hub, so proving it first also proves the machine that runs the last wave; `none` turns the
+  canary off. Once the canary is back on the version it soaks for 10 minutes (`rollout.soak_minutes`, 1 to 120)
+  before any other host is touched. The soak fails on a restart (the host's comebye process started again: a crash
+  loop, even one systemd brings back too fast for the hub to see it offline), a failed health check (offline, or
+  it did not answer), a version that went back, or a new upgrade run there that failed. A failed soak stops the
+  rollout: nothing else is touched, the canary keeps what it runs (its own `comebye.prev` when its smoke check put
+  it back), and the hub files one To do saying what failed. The soak's end is saved in the job, so a hub restart in
+  the middle carries on with the time that is left. The Releases tab shows the soak and the time left. A tapped
+  rollout can skip the soak, for an urgent fix: **Skip the soak** at the confirm, or on the band while it soaks
+  (audited `rollout.soak-skip`); an automatic rollout always soaks. A lone host is no canary. A rollout saved
+  before the soak was kept in the job still resumes and finishes as it was planned.
 - **Peers upgraded with the hub:** a `-hub-only` peer with no ledger (the in-cluster provisioner) runs from the hub's
   image and is rolled by the hub's deploy, never in place. It says so itself: its `GET /api/release/upgrade` answers
   `with_hub: true` (unless it is started with `-release-upgrade`). The rollout lists it after the hub as "upgraded

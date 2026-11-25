@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -68,7 +69,7 @@ const (
 // The waits. Constants at first; a setting can come later.
 const (
 	rolloutTick         = 5 * time.Second
-	rolloutSoak         = 2 * time.Minute
+	rolloutSoak         = rolloutSoakDefault                  // the canary's (rollout_canary.go); the setting can change it
 	rolloutBackWait     = 5 * time.Minute                     // after the record is ok: back online on the version
 	rolloutOfflineGrace = 2 * time.Minute                     // an offline host is skipped after this long
 	rolloutRunWait      = upgrade.StaleAfter + 30*time.Second // a run with no verdict at all
@@ -111,6 +112,12 @@ type RolloutStep struct {
 	// asked to start the deploy, or said it has no command; the loop asks it
 	// again and retries the step once it answers with one (retryHub).
 	Reask bool `json:"reask,omitempty"`
+	// SoakUntil is when the canary's soak ends: set as it starts, so a hub
+	// restart resumes the same soak, neither from zero nor skipped.
+	// ProcStart is the host's process start time the soak began with: a
+	// later one is a restart (rollout_canary.go).
+	SoakUntil *time.Time `json:"soak_until,omitempty"`
+	ProcStart *time.Time `json:"proc_start,omitempty"`
 	// Detail is the one line the card shows beside the phase (why it waits,
 	// why it was skipped, what failed).
 	Detail string `json:"detail,omitempty"`
@@ -131,13 +138,16 @@ type Rollout struct {
 	// Auto: the hub started it by itself once the approved release's build
 	// was green (rollout_auto.go). An automatic rollout never wakes a
 	// stopped worker: it is upgraded when it next starts (catchUp).
-	Auto     bool          `json:"auto,omitempty"`
-	Canary   string        `json:"canary,omitempty"`
-	Plan     []RolloutStep `json:"plan"`
-	Started  time.Time     `json:"started"`
-	Updated  time.Time     `json:"updated"`
-	Rev      int           `json:"rev"` // counts saves: a tick that raced a control sees it changed
-	Finished *time.Time    `json:"finished,omitempty"`
+	Auto   bool   `json:"auto,omitempty"`
+	Canary string `json:"canary,omitempty"`
+	// SoakSkipped: the user skipped the canary's soak (a tapped rollout,
+	// for an urgent fix), at the confirm or while it soaked.
+	SoakSkipped bool          `json:"soak_skipped,omitempty"`
+	Plan        []RolloutStep `json:"plan"`
+	Started     time.Time     `json:"started"`
+	Updated     time.Time     `json:"updated"`
+	Rev         int           `json:"rev"` // counts saves: a tick that raced a control sees it changed
+	Finished    *time.Time    `json:"finished,omitempty"`
 	// Stop is why a stopped rollout stopped.
 	Stop *RolloutStop `json:"stop,omitempty"`
 	// Note is the line the band shows: what it is doing now, or why it waits.
@@ -202,7 +212,9 @@ type rolloutEngine struct {
 	audit func(ledger.AuditEvent)
 	// hosts is the fleet answer of the tick in progress (guarded by mu).
 	hosts []relHost
-	// Timings; tests shorten them.
+	// Timings; tests shorten them. soakFor, when set and above 0, is the
+	// soak a canary gets when it starts soaking (the hub's setting); else soak.
+	soakFor                                                     func() time.Duration
 	soak, backWait, offlineGrace, runWait, startRetry, wakeWait time.Duration
 	// catchUpEvery is how often a done job with hosts skipped while offline
 	// asks the fleet whether they are back; lastCatchUp is when it last did.
@@ -217,6 +229,9 @@ type rolloutEngine struct {
 	// onHubTrouble is told when the hub's step stops or is skipped (also a
 	// step planned skipped): the hub files its To do (rollout_alarm.go).
 	onHubTrouble func(Rollout, RolloutStep)
+	// onSoakFail is told when the canary's soak failed: the hub files its
+	// To do (alarmSoak).
+	onSoakFail func(Rollout, RolloutStep)
 	// lastReask is when retryHub last asked the release host.
 	lastReask time.Time
 }
@@ -355,19 +370,26 @@ func hostUp(h relHost) bool { return h.Status == "ok" && !h.Unknown }
 // time. The caller has checked the release (tagged, build green) and built
 // the plan.
 func (e *rolloutEngine) Start(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
-	return e.start(todo, version, commit, by, plan, false)
+	return e.start(todo, version, commit, by, plan, false, false)
+}
+
+// StartSkipSoak is Start with the canary's soak skipped (the confirm's
+// skip_soak, for an urgent fix): the canary still goes first, and does not
+// soak.
+func (e *rolloutEngine) StartSkipSoak(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
+	return e.start(todo, version, commit, by, noSoak(plan), false, true)
 }
 
 // StartAuto is Start for the hub's own automatic rollout. It refuses, too,
 // when the job on file is already this release item's, whatever its state:
 // one release is rolled out automatically once, even across a restart.
 func (e *rolloutEngine) StartAuto(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
-	return e.start(todo, version, commit, by, plan, true)
+	return e.start(todo, version, commit, by, plan, true, false)
 }
 
 var errRolloutSame = errors.New("this release already has a rollout")
 
-func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutStep, auto bool) (Rollout, error) {
+func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutStep, auto, skipSoak bool) (Rollout, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if cur, ok := e.load(); ok && cur.live() {
@@ -382,7 +404,7 @@ func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutSt
 	var idb [3]byte
 	_, _ = rand.Read(idb[:])
 	j := Rollout{ID: fmt.Sprintf("r%x", idb), Todo: todo, Version: version, Commit: commit, State: roRunning, By: by,
-		Auto: auto, Plan: plan, Started: now}
+		Auto: auto, SoakSkipped: skipSoak, Plan: plan, Started: now}
 	for i := range plan {
 		if plan[i].Phase == roSkipped && plan[i].Done == nil {
 			plan[i].Done = &now
@@ -405,6 +427,9 @@ func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutSt
 	how := ""
 	if auto {
 		how = " auto=true"
+	}
+	if skipSoak {
+		how += " soak=skipped"
 	}
 	for _, st := range plan {
 		if isHubStep(st) && st.Phase == roSkipped && e.onHubTrouble != nil {
@@ -574,7 +599,11 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 	}
 	j = cur
 	e.hosts = hosts
+	// before is a deep copy: advance changes the steps in place, and a
+	// shallow copy shares them, so a step-only change (the soak's time
+	// left) would look like no change and never be saved.
 	before := j
+	before.Plan = slices.Clone(j.Plan)
 	for n := 0; n <= 2*len(j.Plan)+2; n++ {
 		if !e.advance(ctx, &j, hosts) || j.State != roRunning {
 			break
@@ -980,10 +1009,12 @@ func (e *rolloutEngine) verify(j *Rollout, st *RolloutStep, h relHost, found boo
 	dry := st.Dry || (found && h.DryRun && h.Record != nil && h.Record.State == upgrade.RecDryRun)
 	if found && hostUp(h) && (h.Current || dry) && (st.Mode != stepModeDeploy || e.peersBack(*j, st)) {
 		st.To = h.Version
-		if st.Wave == waveCanary && e.soak > 0 {
-			st.Phase, st.At, st.Detail = roSoaking, now, ""
+		if d := e.soakDuration(); st.Wave == waveCanary && d > 0 {
+			until := now.Add(d)
+			st.Phase, st.At, st.SoakUntil, st.ProcStart = roSoaking, now, &until, h.ProcStart
+			st.Detail = "soak: " + d.Round(time.Second).String() + " left of " + d.Round(time.Second).String()
 			j.Note = "soaking " + st.Host
-			e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("upgrade=ok back=ok version=%s took=%s", h.Version, took(*st, now)), "comebye")
+			e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("upgrade=ok back=ok version=%s took=%s soak=%s", h.Version, took(*st, now), d.Round(time.Second)), "comebye")
 			return false
 		}
 		e.finishStep(j, st, h, now, "")
@@ -1021,27 +1052,60 @@ func took(st RolloutStep, now time.Time) string {
 }
 
 // soaking: the canary is watched for a while; any change for the worse
-// stops the rollout before another host is touched.
+// stops the rollout before another host is touched (rollout_canary.go).
+// The soak's end is in the step (SoakUntil), so a restart of the hub in the
+// middle carries on with the time that is left.
 func (e *rolloutEngine) soaking(j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
 	j.Note = "soaking " + st.Host
+	until := st.At.Add(e.soak) // a job saved before SoakUntil was kept
+	if st.SoakUntil != nil {
+		until = *st.SoakUntil
+	} else {
+		st.SoakUntil = &until
+	}
 	switch {
-	case !found || !hostUp(h):
-		e.fail(j, st, now, "went offline while soaking", "")
+	case !found:
+		e.failSoak(j, st, now, "left the fleet during the soak", "")
+		return false
+	case !hostUp(h):
+		why := "went offline during the soak (a failed health check)"
+		if h.Unknown {
+			why = "did not answer its health check during the soak"
+		}
+		e.failSoak(j, st, now, why, "")
 		return false
 	case !h.Current && !(h.DryRun && h.Record != nil && h.Record.State == upgrade.RecDryRun):
-		e.fail(j, st, now, "no longer on "+j.Version+" while soaking (it runs "+orUnknown(h.Version)+")", "")
+		e.failSoak(j, st, now, "went back to "+orUnknown(h.Version)+" during the soak: it no longer runs "+j.Version, "")
 		return false
 	case h.Record != nil && h.Record.ID != st.Run && (h.Record.State == upgrade.RecFailed || h.Record.State == upgrade.RecRolledBack):
-		e.fail(j, st, now, "a new upgrade run failed while soaking: "+oneLine(h.Record.Error, 200), h.Record.Output)
+		e.failSoak(j, st, now, "a new upgrade run failed during the soak: "+oneLine(h.Record.Error, 200), h.Record.Output)
+		return false
+	case st.ProcStart != nil && h.ProcStart != nil && !h.ProcStart.Equal(*st.ProcStart):
+		e.failSoak(j, st, now, fmt.Sprintf("comebye restarted on %s during the soak (it started again at %s, %s into the soak): a crash loop",
+			st.Host, h.ProcStart.UTC().Format("15:04:05"), h.ProcStart.Sub(st.At).Round(time.Second)), "")
 		return false
 	}
-	if left := e.soak - now.Sub(st.At); left > 0 {
-		st.Detail = "soak: " + left.Round(time.Second).String() + " left"
+	if st.ProcStart == nil && h.ProcStart != nil {
+		t := *h.ProcStart // the host says it only now (a hub that kept no start time)
+		st.ProcStart = &t
+	}
+	total := until.Sub(st.At).Round(time.Second)
+	if left := until.Sub(now); left > 0 {
+		st.Detail = "soak: " + left.Round(time.Second).String() + " left of " + total.String()
 		return false
 	}
-	e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("soak=ok %s", e.soak), "comebye")
-	e.finishStep(j, st, h, now, "")
+	e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("soak=ok %s", total), "comebye")
+	st.Detail = ""
+	e.finishStep(j, st, h, now, "soaked "+total.String())
 	return true
+}
+
+// failSoak stops the rollout at the canary, and files its To do.
+func (e *rolloutEngine) failSoak(j *Rollout, st *RolloutStep, now time.Time, why, output string) {
+	e.fail(j, st, now, why, output)
+	if e.onSoakFail != nil {
+		e.onSoakFail(*j, *st)
+	}
 }
 
 func (e *rolloutEngine) finishStep(j *Rollout, st *RolloutStep, h relHost, now time.Time, note string) {

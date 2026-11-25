@@ -14,8 +14,9 @@ import (
 // between the click and the confirm cannot start something different.
 // An agent can never start one.
 //
-//	POST /api/release/rollout          {todo, version, commit, hosts: [...]}
+//	POST /api/release/rollout          {todo, version, commit, hosts: [...], skip_soak}
 //	POST /api/release/rollout/pause    {id}
+//	POST /api/release/rollout/skip-soak {id}  (a tapped rollout: end the canary's soak now)
 //	POST /api/release/rollout/resume   {id}   (also: retry the failed step)
 //	POST /api/release/rollout/cancel   {id}
 //
@@ -29,6 +30,8 @@ type rolloutStartBody struct {
 	// Hub asks for the hub wave, last: the deploy (Bump hub), or the hub's own
 	// upgrade on a single-host setup.
 	Hub bool `json:"hub,omitempty"`
+	// SkipSoak: the canary goes first and does not soak (an urgent fix).
+	SkipSoak bool `json:"skip_soak,omitempty"`
 }
 
 func (s *Server) rolloutOff(w http.ResponseWriter) bool {
@@ -101,7 +104,7 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "deploy_running", "a deploy is running: wait for it to finish")
 		return
 	}
-	plan, err := rolloutPlan(hosts, b.Hosts, s.cfg.Release.Canary, b.Hub, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
+	plan, err := rolloutPlan(hosts, b.Hosts, s.canaryName(), b.Hub, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
 	if err != nil {
 		relErr(w, http.StatusConflict, "bad_plan", err.Error())
 		return
@@ -120,7 +123,11 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusConflict, "bad_plan", why)
 		return
 	}
-	job, err := s.rollout.Start(it.ID, it.Release.Version, it.Release.Commit, s.by(r, ""), plan)
+	start := s.rollout.Start
+	if b.SkipSoak {
+		start = s.rollout.StartSkipSoak
+	}
+	job, err := start(it.ID, it.Release.Version, it.Release.Commit, s.by(r, ""), plan)
 	switch {
 	case errors.Is(err, errRolloutActive):
 		relErr(w, http.StatusConflict, "rollout_active", err.Error())
@@ -168,6 +175,12 @@ func (s *Server) rolloutControl(op string, w http.ResponseWriter, r *http.Reques
 		job, err = s.rollout.Resume(by)
 	case "cancel":
 		job, err = s.rollout.Cancel(by)
+	case "skip-soak":
+		if cur.Auto {
+			relErr(w, http.StatusConflict, "soak_required", "an automatic rollout always soaks its canary: pause or cancel it instead")
+			return
+		}
+		job, err = s.rollout.SkipSoak(by)
 	default:
 		http.NotFound(w, r)
 		return
@@ -246,7 +259,8 @@ func (s *Server) rolloutView(out map[string]any, it Todo, hosts []relHost, dep *
 	if has && job.live() {
 		return
 	}
-	plan, err := rolloutPlan(hosts, nil, s.cfg.Release.Canary, true, deployOn)
+	out["rollout_soak_s"] = int(s.rollout.soakDuration() / time.Second) // the soak a canary would get now
+	plan, err := rolloutPlan(hosts, nil, s.canaryName(), true, deployOn)
 	if err != nil {
 		out["rollout_plan_error"] = err.Error()
 		return

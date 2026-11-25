@@ -467,8 +467,10 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.rollout = newRolloutEngine(filepath.Join(cfg.StateDir, "release", "rollout.json"), serverRolloutOps{s}, s.auditBy)
 			s.rollout.onState = s.noteRollout
 			s.rollout.onHubTrouble = s.alarmHubStep
+			s.rollout.onSoakFail = s.alarmSoak
+			s.rollout.soakFor = s.rolloutSoakSetting // the setting; unset: the engine's own (10 min, shorter below)
 			if cfg.Release.Simulated {
-				s.rollout.soak = 8 * time.Second // a demo does not wait two minutes
+				s.rollout.soak = 8 * time.Second // a demo does not wait ten minutes (unless the setting asks)
 			}
 			if cfg.TestMode { // browser tests: the rollout engine ticks and soaks in a second, not 5 and 8; offline hosts wait seconds, not minutes
 				s.rollout.tickEvery = TestPollMs * time.Millisecond
@@ -747,7 +749,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/release/{id}/deploy", s.auth(s.handleReleaseDeploy))
 	s.mux.HandleFunc("POST /api/hosts/{host}/release/upgrade", s.auth(s.handleHostUpgrade))
 	s.mux.HandleFunc("POST /api/release/rollout", s.auth(s.handleRolloutStart))
-	for _, op := range []string{"pause", "resume", "cancel"} {
+	for _, op := range []string{"pause", "resume", "cancel", "skip-soak"} {
 		s.mux.HandleFunc("POST /api/release/rollout/"+op, s.auth(s.handleRolloutControl(op)))
 	}
 	s.provisionRoutes()

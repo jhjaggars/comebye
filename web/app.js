@@ -4753,11 +4753,29 @@ function roStepText(st, job) {
     case "waking": return st.detail || "starting " + st.host + "…";
     case "upgrading": return (st.mode === "deploy" ? "running the deploy; it restarts the hub" : "upgrading") + (st.detail ? " · " + st.detail : "…");
     case "verifying": return wh ? st.detail || "upgraded with the hub: waiting for it to be back" : (st.mode === "deploy" ? "deploy ok · " : "upgrade ok · ") + (st.detail || "waiting for it to be back");
-    case "soaking": return st.detail || "soaking";
+    case "soaking": return roSoakText(st);
     case "ok": return (st.detail || "") + (st.woke ? (st.detail ? " · " : "") + "woke it" : "");
     case "skipped": return "skipped · " + (st.detail || "") + (st.catch_up ? " · upgrades when it is back" : "");
     default: return st.detail || "failed";
   }
+}
+
+// The canary's soak and its time left, counted from soak_until (the server's
+// own detail is a tick old); a crash loop, a failed health check or a version
+// that went back ends it.
+function roSoakLeft(st) {
+  if (!st.soak_until) return null;
+  return Math.max(0, Math.round((Date.parse(st.soak_until) - Date.now()) / 1000));
+}
+function roDur(sec) {
+  const m = Math.floor(sec / 60), x = sec % 60;
+  return m ? `${m} min${x ? " " + x + " s" : ""}` : `${x} s`;
+}
+function roSoakText(st) {
+  const left = roSoakLeft(st);
+  if (left == null) return st.detail || "soaking";
+  const total = st.at ? Math.round((Date.parse(st.soak_until) - Date.parse(st.at)) / 1000) : 0;
+  return `soaking: ${roDur(left)} left${total > 0 ? " of " + roDur(total) : ""} · stops on a restart, a failed health check or a version that went back`;
 }
 
 // The three gates of a host: its own upgrade finished ok, the hub sees it
@@ -4792,6 +4810,8 @@ function roBandHtml(d, job) {
     case "running":
       title = `Rolling out ${cur.version} · ${doneN} of ${hosts.length} done`;
       acts = job.pause_requested ? b("ro-cancel", "Cancel") : b("ro-pause", "Pause") + b("ro-cancel", "Cancel");
+      // A tapped rollout can end its canary's soak now, for an urgent fix; an automatic one always soaks.
+      if (!job.auto && hosts.some((x) => x.phase === "soaking")) acts = b("ro-skip-soak", "Skip the soak") + acts;
       break;
     case "paused":
       title = `Paused · ${doneN} of ${hosts.length} done`;
@@ -4852,9 +4872,11 @@ function roConfirmHtml(d) {
   }).join("");
   const hubLi = hubStep ? `<li class="rl-hubli" data-host="${escAttr(hubStep.host)}" data-wave="hub"><b>${esc(hubStep.host)}</b> <span class="rl-tag">hub</span> <span class="rl-ver rl-v-old">${esc(hubH.version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span><div class="rl-sub">${hubStep.mode === "deploy" ? `last: <b>${esc(hubLabel)}</b>${d.release_host && d.release_host !== hubStep.host ? ` runs on ${esc(d.release_host)}` : ""}. This changes what is running in the cluster and restarts the hub; it has no automatic undo.` : "last: the hub upgrades itself and restarts."}</div></li>` : "";
   const whLi = withHub.map((st) => st.phase === "skipped" ? skipLi(st, "") : `<li class="rl-hubli" data-host="${escAttr(st.host)}" data-wave="hub" data-with-hub><b>${esc(st.host)}</b> <span class="rl-tag">with the hub</span> <span class="rl-ver rl-v-old">${esc((by.get(st.host) || {}).version || "?")}</span> → <span class="rl-to"><b>${esc(rl.version)}</b></span><div class="rl-sub">upgraded with the hub by ${esc(hubLabel)}; the rollout waits for it to be back on ${esc(rl.version)}.</div></li>`).join("") + hubSkip.map((st) => skipLi(st, '<span class="rl-tag">hub</span> ')).join("");
-  const soak = canary ? ` ${esc(canary)} goes first, alone, and soaks for 2 minutes; the rest follow one at a time only if it stays healthy.` : order.length > 1 ? " The peers go one at a time." : "";
+  const soakFor = roDur(d.rollout_soak_s || 600);
+  const soak = canary ? (c.skip_soak ? ` ${esc(canary)} goes first and does not soak; the rest follow one at a time.` : ` ${esc(canary)} goes first, alone, and soaks for ${esc(soakFor)}; the rest follow one at a time only if it stays healthy (no restart, no failed health check, still on ${esc(rl.version)}).`) : order.length > 1 ? " The peers go one at a time." : "";
+  const skipBox = canary ? `<label class="pr-check rl-skip-soak"><input type="checkbox" data-rel-skip-soak${c.skip_soak ? " checked" : ""}> Skip the soak (an urgent fix)</label>` : "";
   return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and upgraded when they are back; a stopped worker is started first.</div>
-    <ol class="rl-order">${li}${hubLi}${whLi}</ol>
+    <ol class="rl-order">${li}${hubLi}${whLi}</ol>${skipBox}
     <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${total} host${total === 1 ? "" : "s"}</button>
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
 }
@@ -5173,15 +5195,15 @@ async function relClick(act, host) {
     case "confirm-rollout": {
       const c = rls.confirm;
       if (!c || !c.order || (!c.order.length && !c.hub)) return;
-      if (await relPost("/api/release/rollout", { todo: t.id, version: t.release.version, commit: t.release.commit, hosts: c.order, hub: !!c.hub })) toast("Rolling out " + t.release.version + "…");
+      if (await relPost("/api/release/rollout", { todo: t.id, version: t.release.version, commit: t.release.commit, hosts: c.order, hub: !!c.hub, skip_soak: !!c.skip_soak })) toast("Rolling out " + t.release.version + "…");
       await loadReleases(true);
       return;
     }
-    case "ro-pause": case "ro-resume": case "ro-cancel": {
+    case "ro-pause": case "ro-resume": case "ro-cancel": case "ro-skip-soak": {
       const job = roJob(d);
       if (!job) return;
       const verb = act.slice(3);
-      if (await relPost(`/api/release/rollout/${verb}`, { id: job.id })) toast({ pause: "Pausing after the step in flight…", resume: "Resuming…", cancel: "Rollout cancelled. Nothing was reverted." }[verb]);
+      if (await relPost(`/api/release/rollout/${verb}`, { id: job.id })) toast({ pause: "Pausing after the step in flight…", resume: "Resuming…", cancel: "Rollout cancelled. Nothing was reverted.", "skip-soak": "Soak skipped: the other hosts follow." }[verb]);
       await loadReleases(true);
       return;
     }
@@ -10257,7 +10279,17 @@ function draftFrom(name, data) {
     // The scheduled sweep (sweep_loop): on unless switched off; "" minutes is the default hour. Hosts too old to have it send nothing.
     sweep_known: !!(data && data.sweep_loop && data.sweep_loop.hub), sweep_on: !(s.sweep_loop && s.sweep_loop.enabled === false), sweep_every: s.sweep_loop && s.sweep_loop.every_minutes ? String(s.sweep_loop.every_minutes) : "",
     // The automatic rollout (auto_rollout): on unless switched off; only the hub runs one.
-    auto_known: !!(data && data.auto_rollout && data.auto_rollout.hub), auto_on: s.auto_rollout !== false };
+    auto_known: !!(data && data.auto_rollout && data.auto_rollout.hub), auto_on: s.auto_rollout !== false,
+    // The rollout's canary ("" the default, "none" off) and its soak in minutes ("" the default 10).
+    roll_known: !!(data && data.rollout && data.rollout.hub), canary: (s.rollout && s.rollout.canary) || "", soak_min: s.rollout && s.rollout.soak_minutes ? String(s.rollout.soak_minutes) : "" };
+}
+
+// The canary in force when the field is empty: the -release-canary peer, else the release host, else none.
+function canaryPlaceholder(r) {
+  if (!r) return "";
+  if (r.canary_from === "flag") return r.canary + " (-release-canary)";
+  if (r.canary_from === "release host") return r.canary + " (the release host)";
+  return "none";
 }
 
 function draftBody(d) {
@@ -10273,6 +10305,12 @@ function draftBody(d) {
     body.sweep_loop = sl; // {} puts the default back
   }
   if (d.auto_known) body.auto_rollout = d.auto_on;
+  if (d.roll_known) {
+    const ro = {}, c = String(d.canary || "").trim(), m = String(d.soak_min || "").trim();
+    if (c) ro.canary = c;
+    if (/^\d+$/.test(m)) ro.soak_minutes = Number(m);
+    body.rollout = ro; // {} puts the defaults back
+  }
   return body;
 }
 
@@ -10398,6 +10436,10 @@ function peerSettingsForm(h, c, d) {
     ${d.auto_known ? `<div class="pr-field"><span class="pr-lbl" id="pr-auto-l">Releases</span>
       <div class="pr-checks" role="group" aria-labelledby="pr-auto-l"><label class="pr-check"><input type="checkbox" id="pr-auto-on"${d.auto_on ? " checked" : ""}>Roll out automatically</label></div>
       <div class="pr-note" id="pr-auto-note">${esc(d.auto_on ? "On: once a release you approved is tagged and its build is green, the hub rolls it out to every host, the hub last. Stopped workers are upgraded when they next start." : "Off: a tagged release waits for you to tap Roll out to all.")}</div></div>` : ""}
+    ${d.roll_known ? `<div class="pr-field"><label for="pr-canary">Canary host</label>
+      <input type="text" id="pr-canary" maxlength="64" value="${esc(d.canary)}" placeholder="${esc(canaryPlaceholder(data.rollout))}" autocomplete="off" spellcheck="false">
+      <label class="pr-check" for="pr-soak">soak <input type="number" id="pr-soak" min="1" max="120" step="1" inputmode="numeric" value="${esc(d.soak_min)}" placeholder="10" autocomplete="off"> minutes</label>
+      <div class="pr-note">Every rollout upgrades this host first, alone, and watches it before any other: a restart (a crash loop), a failed health check or a version that went back stops the rollout and files a To do. Empty is the default; <code>none</code> turns the canary off.</div></div>` : ""}
     ${lists ? `<div class="pr-field"><span class="pr-lbl">Model and thinking by agent</span>${lists}<div class="pr-note">Empty passes no flag: the agent uses its own setting. A request's model wins.</div></div>` : ""}
     <div class="pr-acts"><button type="submit" class="btn primary" id="pr-save"${dirty && !prs.saving ? "" : " disabled"}>${prs.saving ? "Saving…" : "Save"}</button>
       <button type="button" class="btn" id="pr-revert"${dirty ? "" : " disabled"}>Revert</button>
@@ -10708,6 +10750,10 @@ function initPeers() {
     const b = ev.target.closest("[data-rel]");
     if (b && !b.disabled) relClick(b.dataset.rel, b.dataset.host);
   });
+  $("pr-releases").addEventListener("change", (ev) => {
+    // The confirm's "Skip the soak": kept on the confirm, sent with it.
+    if (ev.target.matches("[data-rel-skip-soak]") && rls.confirm && rls.confirm.k === "rollout") { rls.confirm.skip_soak = ev.target.checked; renderReleases(); }
+  });
   $("peers").addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); peersBack(); } });
   const v = $("pr-view");
   const touch = () => { v._html = ""; /* the dirty marks change; the fields keep what was typed */ };
@@ -10719,6 +10765,8 @@ function initPeers() {
     if (!d) return;
     if (t.id === "pr-maxw") { d.max_workers = t.value.replace(/[^0-9]/g, ""); refreshDirty(); const n = $("pr-maxw-note"), c = prs.cfg[d.host]; if (n && c && c.data) n.textContent = maxwNote(d, c.data.effective || {}) + " Agents cannot change it."; }
     else if (t.id === "pr-sweep-every") { d.sweep_every = t.value.replace(/[^0-9]/g, ""); refreshDirty(); }
+    else if (t.id === "pr-canary") { d.canary = t.value; refreshDirty(); }
+    else if (t.id === "pr-soak") { d.soak_min = t.value.replace(/[^0-9]/g, ""); refreshDirty(); }
     else if (t.dataset.model) { (d.kinds[t.dataset.model] ||= { model: "", thinking: "" }).model = t.value; refreshDirty(); }
   });
   v.addEventListener("change", (ev) => {

@@ -128,7 +128,7 @@ func (s *Server) autoRolloutTick(ctx context.Context) string {
 	if derr == nil && dst.Record != nil && dst.Record.State == depRunning {
 		return "deploy running"
 	}
-	plan, err := rolloutPlan(hosts, nil, s.cfg.Release.Canary, true, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
+	plan, err := rolloutPlan(hosts, nil, s.canaryName(), true, hubDeploys(hosts, dst, derr, s.cfg.Release.Host != ""))
 	if err != nil {
 		s.markAuto(it.ID, "none: "+oneLine(err.Error(), 120))
 		return "bad plan"

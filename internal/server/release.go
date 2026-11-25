@@ -288,6 +288,9 @@ type relHost struct {
 	Stopped  bool   `json:"stopped,omitempty"`
 	WakeMin  int    `json:"wake_min,omitempty"`
 	WakeNote string `json:"wake_note,omitempty"`
+	// ProcStart is when the host's comebye process started, as it says
+	// itself (nil: too old to say). The canary's soak watches it.
+	ProcStart *time.Time `json:"proc_start,omitempty"`
 }
 
 // How old an answer from git or GitHub the page may be shown. The refresh
@@ -495,6 +498,7 @@ func (s *Server) relHosts(ctx context.Context) []relHost {
 				}
 			}
 			out[i].Enabled, out[i].DryRun, out[i].Record, out[i].WithHub = st.Enabled, st.DryRun, st.Record, st.WithHub && !local
+			out[i].ProcStart = st.Started
 			if st.Version != "" {
 				out[i].Version = st.Version
 			}
@@ -651,7 +655,15 @@ type upgradeStatus struct {
 	DryRun  bool            `json:"dry_run,omitempty"`
 	Version string          `json:"version,omitempty"`
 	Record  *upgrade.Record `json:"record,omitempty"`
+	// Started is when this comebye process started. The rollout's soak
+	// compares it tick to tick: a change is a restart, and a crash loop that
+	// systemd's Restart=on-failure brings back within seconds shows as one
+	// even when the hub never sees the host offline.
+	Started *time.Time `json:"started,omitempty"`
 }
+
+// processStarted is when this process started (upgradeStatus.Started).
+var processStarted = time.Now().UTC()
 
 func (s *Server) upgradeRecordPath() string {
 	if s.cfg.StateDir == "" {
@@ -661,8 +673,9 @@ func (s *Server) upgradeRecordPath() string {
 }
 
 func (s *Server) upgradeStatus() upgradeStatus {
+	started := processStarted
 	st := upgradeStatus{Enabled: s.cfg.Release.Upgrade, DryRun: s.cfg.Release.DryRun, Version: s.cfg.Version,
-		WithHub: s.cfg.HubOnly && s.cfg.NoLedger && !s.cfg.Release.Upgrade}
+		WithHub: s.cfg.HubOnly && s.cfg.NoLedger && !s.cfg.Release.Upgrade, Started: &started}
 	if p := s.upgradeRecordPath(); p != "" {
 		if rec, err := upgrade.ReadRecord(p); err == nil && rec.ID != "" {
 			if rec.State == upgrade.RecRunning && !rec.Live(time.Now()) {
