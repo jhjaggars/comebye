@@ -121,6 +121,15 @@ await check("390: a row tap slides forward, Back slides back and keeps the scrol
     const y0 = await page.evaluate(() => scrollY);
     assert(y0 > 200, "the list did not scroll: " + y0);
     const nth = await page.evaluate(() => document.querySelectorAll("#agents .agent[data-id]").length - 1);
+    const farId = await page.evaluate((n) => document.querySelectorAll("#agents .agent[data-id]")[n].dataset.id, nth);
+    const rowTop = () => page.evaluate((id) => Math.round(document.querySelector(`#agents .agent[data-id="${CSS.escape(id)}"]`).getBoundingClientRect().top), farId);
+    const top0 = await rowTop();
+    // The list keeps its place: the same scroll, or the row where it was on the screen. The rows are patched (#139), so
+    // when something above them changes height meanwhile, scroll anchoring moves the scroll by as much and the row stays.
+    const kept = async (how) => {
+      const y1 = await page.evaluate(() => scrollY), top1 = await rowTop();
+      assert(y1 === y0 || Math.abs(top1 - top0) <= 1, `${how} lost the list's place: scroll ${y0} -> ${y1}, the row's top on the screen ${top0} -> ${top1}`);
+    };
     await tap("#agents .agent[data-id]", { nth });
     await page.waitForFunction(() => document.body.classList.contains("has-detail"));
     await ended();
@@ -128,7 +137,7 @@ await check("390: a row tap slides forward, Back slides back and keeps the scrol
     await page.waitForFunction(() => !document.body.classList.contains("has-detail"));
     await ended();
     await page.waitForTimeout(100);
-    assert((await page.evaluate(() => scrollY)) === y0, `the app's Back lost the scroll position: ${y0} -> ${await page.evaluate(() => scrollY)}`);
+    await kept("the app's Back");
     v = await vts();
     assert(v.length === 4 && v[2].dir === "fwd" && v[3].dir === "back", "far row: " + JSON.stringify(v.map((r) => r.dir)));
     // The browser's back: no transition, and the scroll position is kept.
@@ -142,7 +151,7 @@ await check("390: a row tap slides forward, Back slides back and keeps the scrol
     v = await vts();
     assert(v.length === 5, "the browser's back ran a transition: " + JSON.stringify(v.map((r) => r.dir)));
     assert(await listShown(), "the list is not shown after back");
-    assert((await page.evaluate(() => scrollY)) === y0, `the browser's back lost the scroll position: ${y0} -> ${await page.evaluate(() => scrollY)}`);
+    await kept("the browser's back");
     await page.screenshot({ path: path.join(out, `viewtrans-list-${tag}.png`) });
   } finally { await l.browser.close(); }
 });
