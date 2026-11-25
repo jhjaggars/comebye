@@ -37,13 +37,16 @@ function release() {
 // false keeps the servers' Content-Security-Policy in force (the Pages checks
 // test the sandbox it sets). Returns { browser, ctx, page }: browser.close() closes
 // this context (and Chrome once no context is left); browser.newContext() is the shared Chrome's.
-export async function launch({ width = 390, height = 844, dark, bypassCSP = true } = {}) {
+// serviceWorkers: "block" by default. sw.js answers the app shell (#136 slice 5), and a request a service worker
+// lets fall through to the network is not always seen by page.route, so the scripts that hold or cut /api/ with
+// routes would race it; shell.mjs, which tests the worker, passes "allow".
+export async function launch({ width = 390, height = 844, dark, bypassCSP = true, serviceWorkers = "block" } = {}) {
   const real = await acquire();
   const mobile = width <= 500;
   let ctx;
   try {
     ctx = await real.newContext({
-      viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP,
+      viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile, bypassCSP, serviceWorkers,
       ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1" } : {}),
       ...(dark === undefined ? {} : { colorScheme: dark ? "dark" : "light" }),
     });

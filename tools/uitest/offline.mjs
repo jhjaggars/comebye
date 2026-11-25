@@ -15,6 +15,7 @@ const [base, out] = process.argv.slice(2);
 const dark = process.env.SCHEME !== "light";
 const results = [];
 async function check(name, fn) {
+  if (process.env.ONLY && !new RegExp(process.env.ONLY).test(name)) return; // ONLY=regex: just those checks, for a quick look
   try { await fn(); results.push({ name, ok: true }); console.log("ok   " + name); }
   catch (e) { results.push({ name, ok: false }); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }
 }
@@ -381,23 +382,33 @@ async function phase2(width) {
     try {
       await page.goto(base + "/");
       await waitLive(page);
-      await page.route(/\/api\/usage/, async (r) => { await sleep(20000); r.continue().catch(() => {}); });
+      // One route for the whole check, switched by mode: "hold" keeps a request unanswered (it is cut when the check
+      // moves on, never let through: page.unroute releases a held request at once, and its answer could land before
+      // the next read and fill the screen), "reset" cuts it as a dead link would, "pass" lets it go to the hub.
+      let mode = "hold";
+      const held = [];
+      await page.route(/\/api\/usage/, (r) => {
+        if (mode === "hold") held.push(r);
+        else if (mode === "reset") r.abort("connectionreset").catch(() => {});
+        else r.continue().catch(() => {});
+      });
       await page.evaluate(() => { location.hash = "#/usage"; });
       await sleep(1200);
       let t = await textOf(page, "#us-view");
       if (/Loading…/.test(t)) throw new Error("Usage says Loading…");
       if (!(await page.locator("#us-view .src-wait .skel-row").count())) throw new Error("no skeleton: " + JSON.stringify(t));
-      await page.unroute(/\/api\/usage/);
-      await page.route(/\/api\/usage/, (r) => r.abort("connectionreset"));
+      mode = "reset";
+      for (const r of held.splice(0)) await r.abort("connectionreset").catch(() => {});
       await page.evaluate(() => { us.seq++; usageLoad(); });
-      await page.waitForFunction(() => /Can.t reach the hub/.test(document.getElementById("us-view")?.innerText || ""), null, { timeout: 5000 });
+      await page.waitForFunction(() => /Can.t reach the hub/.test(document.getElementById("us-view")?.innerText || ""), null, { timeout: 5000 })
+        .catch(async () => { throw new Error("no Can't reach: " + JSON.stringify(await page.evaluate(() => ({ seq: us.seq, status: us.status, main: !!us.main, at: usageSrc.at, err: usageSrc.err, view: document.getElementById("us-view")?.innerText.slice(0, 200) })))); });
       await noRaw(page);
       await page.screenshot({ path: `${out}/offline-usage-${tag}.png` });
-      await page.unroute(/\/api\/usage/);
+      mode = "pass";
       await page.click("#us-view button.src-retry");
       await page.waitForFunction(() => us.status !== "loading" && !document.querySelector("#us-view .src-wait, #us-view .src-down"), null, { timeout: 10000 });
       // A failed read after the numbers came keeps them.
-      await page.route(/\/api\/usage/, (r) => r.abort("connectionreset"));
+      mode = "reset";
       const before = await textOf(page, "#us-view");
       await page.evaluate(() => usageLoad());
       await page.waitForFunction(() => usageSrc.err, null, { timeout: 5000 });
@@ -598,7 +609,9 @@ async function phase3(width) {
       const live = await age();
       if (!/^\d+[smh]$/.test(live)) throw new Error("live age: " + JSON.stringify(live));
       await offline(page);
-      await page.waitForFunction((s) => /^at /.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 5000 });
+      const diag = () => page.evaluate((id) => ({ hubUp: hub.up, kind: hub.kind, lostAt: hub.lostAt, onLine: navigator.onLine, todos: { at: todosSrc.at, err: todosSrc.err, saved: todosSrc.saved }, stale: srcStale(todosSrc), on: todos.on, ages: [...document.querySelectorAll(`.td-item[data-id="${id}"] .td-age`)].map((e) => e.closest("[id]")?.id + ":" + e.textContent), now: Date.now() }), id);
+      await page.waitForFunction((s) => /^at /.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 5000 })
+        .catch(async () => { throw new Error("the age did not freeze: " + JSON.stringify(await diag())); });
       const frozen = await age();
       const asked = await textOf(page, `${listSel} .td-item.open[data-id="${id}"] .td-strip`);
       if (desk && !/Asked\s*at /i.test(asked)) throw new Error("the panel's Asked still counts: " + JSON.stringify(asked));
@@ -609,7 +622,7 @@ async function phase3(width) {
       await page.screenshot({ path: `${out}/offline-actions-ages-${tag}.png` });
       await online(page);
       await page.waitForFunction((s) => /^1[23]m$/.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 8000 })
-        .catch(async () => { throw new Error("the age does not count again: " + JSON.stringify(await age())); });
+        .catch(async () => { throw new Error("the age does not count again: " + JSON.stringify(await age()) + " " + JSON.stringify(await diag())); });
       await page.clock.fastForward("02:00");
       await page.evaluate(() => renderTodos(true));
       if (!/^1[45]m$/.test(await age())) throw new Error("the age does not tick: " + JSON.stringify(await age()));

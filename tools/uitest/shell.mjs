@@ -78,7 +78,7 @@ function proxy() {
 async function phase(width) {
   const desk = width > 500, tag = desk ? "desktop" : "phone";
   const open = async () => {
-    const { browser, ctx, page } = await launch({ width, height: desk ? 800 : 844, dark });
+    const { browser, ctx, page } = await launch({ width, height: desk ? 800 : 844, dark, serviceWorkers: "allow" });
     const errs = [], fromSW = [];
     page.on("pageerror", (e) => errs.push(e.message));
     page.on("response", (r) => { if (/\/api\//.test(r.url()) && r.fromServiceWorker()) fromSW.push(r.url()); });
@@ -122,7 +122,14 @@ async function phase(width) {
       if (page.url().startsWith("chrome-error:") || !(await isApp(page))) throw new Error("no app offline: " + page.url() + " " + (await page.evaluate(() => document.body.innerText.slice(0, 200))));
       await page.waitForFunction(() => document.querySelectorAll("#agents .agent").length > 0, null, { timeout: 5000 }).catch(async () => { throw new Error("no saved rows offline: " + JSON.stringify(await page.evaluate(() => [document.querySelector("#agents")?.innerText.slice(0, 300), document.getElementById("hub-strip")?.innerText]))); });
       await page.waitForFunction(() => { const e = document.getElementById("hub-strip"); return e && !e.hidden && e.dataset.kind === "offline"; }, null, { timeout: 5000 })
-        .catch(async () => { throw new Error("strip: " + JSON.stringify(await stripText(page))); });
+        .catch(async () => {
+          await page.screenshot({ path: `${out}/shell-nostrip-${tag}.png` });
+          throw new Error("strip: " + JSON.stringify(await stripText(page)) + " " + JSON.stringify(await page.evaluate(() => {
+            const v = stripView();
+            return { hash: location.hash, header: v.header && (v.header.closest("[id]")?.id || v.header.className), src: v.src.name, at: v.src.at, saved: v.src.saved, err: v.src.err,
+              up: hub.up, onLine: navigator.onLine, kind: hub.kind, srcs: [...srcs.values()].map((x) => `${x.name}:${x.at ? "at" : "-"}${x.saved ? "s" : ""}`).join(" ") };
+          })));
+        });
       const s = await stripText(page);
       if (!/^Offline · /.test(s)) throw new Error("strip: " + JSON.stringify(s));
       if (!(await page.evaluate(() => document.querySelector("#agents").classList.contains("stale")))) throw new Error("the saved rows are not marked old");
