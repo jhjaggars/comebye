@@ -142,7 +142,7 @@ const RET_LISTS = [
   { sel: "#pal-list .pal-it", attr: "data-key", live: () => !$("palette").hidden }, // closing the palette forgets it
 ];
 const RET_MS = 1000, RET_REDUCED_MS = 600;
-const ret = { want: null, on: null };
+const ret = { want: null, on: null, pend: null };
 function retFind(w) {
   for (const el of document.querySelectorAll(w.list.sel)) {
     if (el.getAttribute(w.list.attr) !== w.key) continue;
@@ -230,7 +230,16 @@ function retTick() {
   retCheck();
 }
 // A tap on a row is remembered once the tap has done its work: a tap that brings the last row back (a step's Cancel
-// in the palette, which is a row of its own) marks that row, and is not remembered.
+// in the palette, which is a row of its own) marks that row, and is not remembered. The capture listener notes the
+// row; the bubble listener, which runs after the row's own handlers in the same task, takes it, so a key pressed right
+// after (Esc back in the palette) already finds it. A handler that stops the click's propagation leaves it to the
+// fallback two frames on.
+function retTake(next) {
+  if (!next || ret.pend !== next) return;
+  ret.pend = null;
+  if (!retCheck()) ret.want = next;
+  retSoon();
+}
 addEventListener("click", (ev) => {
   const t = ev.target;
   let next = null;
@@ -239,12 +248,11 @@ addEventListener("click", (ev) => {
     const key = row && row.getAttribute(list.attr);
     if (key) { next = { list, key, away: false }; break; }
   }
+  ret.pend = next;
   if (!next) { retSoon(); return; }
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (!retCheck()) ret.want = next;
-    retSoon();
-  }));
+  requestAnimationFrame(() => requestAnimationFrame(() => retTake(next)));
 }, true);
+addEventListener("click", () => retTake(ret.pend));
 addEventListener("popstate", retSoon);
 addEventListener("hashchange", retSoon);
 addEventListener("keydown", retSoon, true);
