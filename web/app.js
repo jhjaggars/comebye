@@ -105,6 +105,19 @@ function pressEnd(cancel) {
   const left = cancel ? 0 : PRESS_MIN - (performance.now() - press.at);
   if (left > 0) setTimeout(() => pressFade(el), left); else pressFade(el);
 }
+// A pointerdown during a screen change (#135 slice 5): the transition's overlay is what the browser hit-tests, so
+// the event comes to the page root. End the transition (vtFlush) and send the event on to what is under the finger,
+// so the press layer and every other listener see the real target. Registered before the press listener on purpose.
+addEventListener("pointerdown", (ev) => {
+  if (!vt.pend && !vt.cur) return;
+  vtFlush();
+  const t = ev.target;
+  if (t !== document.documentElement && t !== document.body) return;
+  const el = document.elementFromPoint(ev.clientX, ev.clientY);
+  if (!el || el === t) return;
+  ev.stopImmediatePropagation();
+  el.dispatchEvent(new PointerEvent("pointerdown", ev));
+}, { capture: true });
 addEventListener("pointerdown", (ev) => {
   if (!ev.isPrimary || ev.button > 0) return;
   pressEnd(true);
@@ -179,6 +192,7 @@ function retVisible(el) {
 function retCheck() {
   const w = ret.want;
   if (!w) return false;
+  if (vt.cur || vt.pend) return false; // a screen change in progress hit-tests as its overlay: look once it ends (vtRun)
   if (w.list.live && !w.list.live()) { ret.want = null; return false; }
   const el = retFind(w);
   if (!retShown(el)) { w.away = true; return false; }
@@ -6350,8 +6364,7 @@ function syncArchived() {
 }
 
 function closeArchived() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 function initArchived() {
@@ -6440,8 +6453,7 @@ function hideReview() {
 
 // closeReview is the phone's Back: it leaves for the list.
 function closeReview() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 function syncReview() {
@@ -8091,8 +8103,7 @@ function renderRecallMessages() {
 function openRecall() { location.hash = rcSearchHash(rc.q, {}); }
 
 function closeRecall() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 function rcBack() {
@@ -8989,13 +9000,11 @@ function pagesStamp(r, was, prev) {
 // history shrinks instead of piling a gallery entry on top of the page).
 function pagesUnwind() {
   if (history.state && history.state.pgFrom === "app") { history.back(); return; }
-  history.replaceState(null, "", "#/pages");
-  route();
+  vtLeave("#/pages");
 }
 
 function closePages() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 // Back from a page is the gallery; back from the gallery is the way out, on a phone. In the pane (desktop) the nav is the way out.
@@ -9177,7 +9186,8 @@ function syncScreens() {
 // Input is never held up: ::view-transition takes no pointer events (index.html), so a tap goes to the live page under
 // it, and any pointerdown or key during a transition skips to its end, running a pending update first, so what the tap
 // or key acts on is the new screen. The phone's Status screen has its own slide and is left out.
-const vt = { cur: null, pend: null, kind: "", inUpdate: false, hash: null };
+const vt = { cur: null, pend: null, kind: "", inUpdate: false, hash: null, gestureAt: -1e9, in: null, scroll: new Map() };
+const VT_GESTURE_MS = 400;
 const vtSupported = () => typeof document.startViewTransition === "function";
 // vtKey is the screen a hash names: its path without a query, so typing a search does not count as a screen change.
 const vtKey = (h) => (h || "").split("?")[0].replace(/^#\/?$/, "");
@@ -9189,18 +9199,25 @@ function vtDepth(k) {
   return Math.min(n.length, 2);
 }
 // vtRun runs update inside a view transition going dir ("fwd", "back"), or at once when there is none to run.
-function vtRun(dir, update, kind = "") {
+// The update runs a frame later than it used to, after the browser has restored the scroll position for a history step
+// (on a page that did not yet show the list): so the window's scroll is kept per screen here, and put back on the way back.
+function vtRun(dir, update, kind = "", from = vt.hash) {
   if (vt.inUpdate) { update(); return; }
   vtFlush();
   if (!vtSupported() || reducedMotion() || document.visibilityState !== "visible") { update(); return; }
   const root = document.documentElement;
+  if (from != null) vt.scroll.set(from, scrollY);
   let done = false;
   const run = () => {
     if (done) return;
     done = true;
     if (vt.pend === run) { vt.pend = null; vt.kind = ""; }
     vt.inUpdate = true;
-    try { update(); } catch (e) { setTimeout(() => { throw e; }); } // still a page error, not a rejected promise
+    try {
+      update();
+      const y = dir === "back" ? vt.scroll.get(vtKey(location.hash)) : undefined;
+      if (y !== undefined && scrollY !== y) scrollTo(scrollX, y);
+    } catch (e) { setTimeout(() => { throw e; }); } // still a page error, not a rejected promise
     finally { vt.inUpdate = false; }
   };
   vt.pend = run; vt.kind = kind;
@@ -9208,7 +9225,7 @@ function vtRun(dir, update, kind = "") {
   let t;
   try { t = document.startViewTransition(run); } catch { run(); delete root.dataset.vt; return; }
   vt.cur = t;
-  const end = () => { if (vt.cur === t) { vt.cur = null; delete root.dataset.vt; } };
+  const end = () => { if (vt.cur === t) { vt.cur = null; delete root.dataset.vt; retSoon(); } }; // the return mark waited for it
   t.finished.then(end, end);
   t.ready.catch(() => {}); t.updateCallbackDone.catch(() => {});
 }
@@ -9217,8 +9234,35 @@ function vtFlush() {
   if (vt.pend) vt.pend();
   if (vt.cur) { try { vt.cur.skipTransition(); } catch {} }
 }
-addEventListener("pointerdown", () => { if (vt.pend || vt.cur) vtFlush(); }, { capture: true, passive: true });
 addEventListener("keydown", () => { if (vt.pend || vt.cur) vtFlush(); }, true);
+// A screen change animates only when the user asked for it in the app: a click, tap or key whose handlers changed the
+// URL or stepped back in history (a row, the app's Back, a link, a screen's close). The browser's or the system's Back
+// (iOS draws its own swipe), a script setting the hash, and a click that changed nothing change the screen at once.
+// vt.in is the click or key being handled; vtGestureEnd, after its handlers (or from the route it caused, whichever
+// comes first), arms vt.gestureAt when it navigated, and the next screen change takes it.
+function vtGestureStart(ev) { vt.in = { href: location.href, back: false, ev }; setTimeout(vtGestureEnd); } // the timer: a handler that stopped the event
+function vtGestureEnd() {
+  const g = vt.in;
+  if (!g) return;
+  vt.in = null;
+  if (!g.taken && (g.back || location.href !== g.href)) vt.gestureAt = performance.now();
+}
+function vtTakeGesture() {
+  // Inside the click's own handlers (its eventPhase is not NONE while it is dispatched; a hash set there fires popstate at
+  // once): this change is the one it asked for.
+  if (vt.in && vt.in.ev && vt.in.ev.eventPhase !== 0) { vt.in.taken = true; return true; }
+  // A click that is over but not yet ended (its handler stopped it; the timer has not run): what changed the URL since
+  // cannot be told apart from its own change, so it is no gesture.
+  vt.in = null;
+  const ok = performance.now() - vt.gestureAt < VT_GESTURE_MS;
+  vt.gestureAt = -1e9;
+  return ok;
+}
+for (const ev of ["click", "keydown"]) { addEventListener(ev, vtGestureStart, true); addEventListener(ev, vtGestureEnd); }
+for (const m of ["back", "go"]) {
+  const o = history[m];
+  history[m] = function (...a) { if (vt.in) vt.in.back = true; return o.apply(this, a); };
+}
 // vt.hash is the screen on show: the app's own pushState and replaceState keep it, so a popstate or hashchange compares
 // the screen it brings with the one it leaves.
 for (const m of ["pushState", "replaceState"]) {
@@ -9232,12 +9276,31 @@ function vtRoute() {
   const to = vtKey(location.hash), from = vt.hash == null ? to : vt.hash;
   vt.hash = to;
   const status = !isDesktop() && (from === STATUS_HASH || to === STATUS_HASH); // it slides itself
-  if (from === to || status) { vtFlush(); route(); return; }
-  vtRun(vtDepth(to) < vtDepth(from) ? "back" : "fwd", route, "route");
+  // A step that keeps the screen (a menu or sheet closing through history) leaves the gesture for the change it made.
+  if (from === to || status || !vtTakeGesture()) { vtFlush(); route(); return; }
+  vtRun(vtDepth(to) < vtDepth(from) ? "back" : "fwd", route, "route", from);
+}
+// vtLeave is a screen's own Back or close that replaces the URL instead of stepping back in history (Pages, Search,
+// Settings ...): it slides back when the user asked for it.
+// The URL changes at once, as before; only the redraw waits for the transition, and route() reads the URL when it runs,
+// so a later step (a hash set meanwhile) is never undone by this one.
+function vtLeave(url) {
+  const asked = vtTakeGesture(), from = vt.hash;
+  vtFlush();
+  history.replaceState(null, "", url);
+  if (asked) vtRun("back", route, "route", from); else route();
 }
 // vtOpenAgent is a tap or Enter on an agent row.
 function vtOpenAgent(id) {
-  vtRun("fwd", () => openDetail(id));
+  const a = agentById(id), hash = a && agentHash(a);
+  if (!hash || location.hash === hash || !vtSupported() || reducedMotion()) { vtRun("fwd", () => openDetail(id)); return; }
+  // The history entry now, as openDetail would make it; the redraw follows in the transition. A step taken meanwhile
+  // (Back) finds the entry in place.
+  vtFlush();
+  const from = vt.hash;
+  history.pushState(null, "", hash);
+  state.pushedRoute = true;
+  vtRun("fwd", () => { if (state.selected !== id) openDetail(id); syncScreens(); }, "", from);
 }
 
 function route() {
@@ -10149,8 +10212,7 @@ function syncPeers() {
 }
 
 function closePeers() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 function peersBack() {
   if (prs.route && prs.route.name && !isDesktop()) location.hash = "#/peers";
@@ -11634,8 +11696,7 @@ function syncUsage() {
 }
 
 function closeUsage() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 /* ---------- Settings: passkeys ---------- */
@@ -12032,8 +12093,7 @@ function syncSettings() {
 }
 
 function closeSettings() {
-  history.replaceState(null, "", location.pathname + location.search);
-  route();
+  vtLeave(location.pathname + location.search);
 }
 
 function initSettings() {

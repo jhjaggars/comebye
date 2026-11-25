@@ -1,9 +1,13 @@
 // View Transitions between screens (#135 slice 5). document.startViewTransition is wrapped in the page, so every
 // transition the app starts is recorded with its direction (html[data-vt]) and the animations it ran.
-//   - 390 px with real touch input: a row tap slides forward (vt-in-right on the new screen, 200 ms), the app's Back and
-//     the browser's back slide back (vt-out-right on the old one); Pages and its Back do the same through the hash;
+//   - 390 px with real touch input: a row tap slides forward (vt-in-right on the new screen, 200 ms), the app's Back
+//     slides back (vt-out-right on the old one) and puts the list's scroll position back; Pages from the ⋮ menu and its
+//     Back do the same;
+//   - the browser's back (or the system's: iOS draws its own swipe) and a script setting the hash change the screen at
+//     once, with no transition, and the list keeps its scroll position;
 //   - the return mark still shows on the row you came back from, and the press layer still shows on a row held down;
-//   - a tap on Back while the forward slide is running lands: the list is back and the slide skipped to its end;
+//   - a tap on Back while the forward slide is running lands: the list is back, the slide skipped to its end, and the
+//     press layer showed on Back under the finger;
 //   - 1280 px with a mouse: a row click cross-fades (120 ms, data-vt=fade); a click on another row mid-fade opens it;
 //   - prefers-reduced-motion: reduce starts no transition, and the screens still change;
 //   - no transition API (an older browser): the screens change as before.
@@ -85,8 +89,11 @@ async function tap(sel, { hold = 40, nth = 0 } = {}) {
   return b;
 }
 const anim = (r, name) => r.anims.find((a) => a.name === name);
+// A screen change counts as asked for in the app for 400 ms after a click or key (web/app.js VT_GESTURE_MS): wait that
+// out before a step that must not animate.
+const VT_GESTURE_WAIT = 450;
 
-await check("390: a row tap slides forward; Back and the browser's back slide back; the row is marked on return", async () => {
+await check("390: a row tap slides forward, Back slides back and keeps the scroll; the browser's back has none; the row is marked on return", async () => {
   const l = await open({ width: 390, height: 844 });
   cdp = await l.ctx.newCDPSession(page);
   try {
@@ -108,34 +115,60 @@ await check("390: a row tap slides forward; Back and the browser's back slide ba
     assert(v.length === 2 && v[1].dir === "back" && anim(v[1], "vt-out-right"), "Back did not slide back: " + JSON.stringify(v[1]));
     await page.waitForFunction((id) => !!document.querySelector(`#agents .agent.was-open[data-id="${CSS.escape(id)}"]`), row.id, { timeout: 3000 })
       .catch(() => { throw new Error("the return mark did not show on the row after the transition"); });
-    // The browser's back.
-    await tap("#agents .agent[data-id]");
+    // The scroll position: a row far down the list, opened and closed with the app's Back, then the browser's back.
+    await page.evaluate(() => { const rows = [...document.querySelectorAll("#agents .agent[data-id]")]; rows[rows.length - 1].scrollIntoView({ block: "center" }); });
+    await page.waitForTimeout(100);
+    const y0 = await page.evaluate(() => scrollY);
+    assert(y0 > 200, "the list did not scroll: " + y0);
+    const nth = await page.evaluate(() => document.querySelectorAll("#agents .agent[data-id]").length - 1);
+    await tap("#agents .agent[data-id]", { nth });
     await page.waitForFunction(() => document.body.classList.contains("has-detail"));
     await ended();
-    await page.goBack();
+    await tap("#back");
     await page.waitForFunction(() => !document.body.classList.contains("has-detail"));
     await ended();
+    await page.waitForTimeout(100);
+    assert((await page.evaluate(() => scrollY)) === y0, `the app's Back lost the scroll position: ${y0} -> ${await page.evaluate(() => scrollY)}`);
     v = await vts();
-    assert(v.length === 4 && v[2].dir === "fwd" && v[3].dir === "back", "browser back: " + JSON.stringify(v.map((r) => r.dir)));
+    assert(v.length === 4 && v[2].dir === "fwd" && v[3].dir === "back", "far row: " + JSON.stringify(v.map((r) => r.dir)));
+    // The browser's back: no transition, and the scroll position is kept.
+    await tap("#agents .agent[data-id]", { nth });
+    await page.waitForFunction(() => document.body.classList.contains("has-detail"));
+    await ended();
+    await page.waitForTimeout(VT_GESTURE_WAIT);
+    await page.goBack();
+    await page.waitForFunction(() => !document.body.classList.contains("has-detail"));
+    await page.waitForTimeout(100);
+    v = await vts();
+    assert(v.length === 5, "the browser's back ran a transition: " + JSON.stringify(v.map((r) => r.dir)));
     assert(await listShown(), "the list is not shown after back");
+    assert((await page.evaluate(() => scrollY)) === y0, `the browser's back lost the scroll position: ${y0} -> ${await page.evaluate(() => scrollY)}`);
     await page.screenshot({ path: path.join(out, `viewtrans-list-${tag}.png`) });
   } finally { await l.browser.close(); }
 });
 
-await check("390: Pages through the hash slides forward, its Back slides back", async () => {
+await check("390: Pages from the ⋮ menu slides forward, its Back slides back; a script's hash change has none", async () => {
   const l = await open({ width: 390, height: 844 });
   cdp = await l.ctx.newCDPSession(page);
   try {
-    await page.evaluate(() => { location.hash = "#/pages"; });
+    await tap("#btn-fleet");
+    await page.waitForSelector("#f-pages", { state: "visible" });
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getTiming().iterations === Infinity)); // the menu has opened
+    await tap("#f-pages");
     await page.waitForSelector("#pages:not([hidden])");
     await ended();
     let v = await vts();
     assert(v.length === 1 && v[0].dir === "fwd" && anim(v[0], "vt-in-right"), "Pages: " + JSON.stringify(v));
-    await page.goBack();
+    await tap("#pgs-back");
     await page.waitForSelector("#pages", { state: "hidden" });
     await ended();
     v = await vts();
     assert(v.length === 2 && v[1].dir === "back" && anim(v[1], "vt-out-right"), "Pages back: " + JSON.stringify(v));
+    await page.waitForTimeout(VT_GESTURE_WAIT);
+    await page.evaluate(() => { location.hash = "#/pages"; });
+    await page.waitForSelector("#pages:not([hidden])", { timeout: 3000 }).catch(async () => { throw new Error("Pages did not open from the hash: " + JSON.stringify(await page.evaluate(() => [location.hash, document.getElementById("pages").hidden, window.__vts.length]))); });
+    await page.waitForTimeout(100);
+    assert((await vts()).length === 2, "a script's hash change ran a transition");
   } finally { await l.browser.close(); }
 });
 
@@ -161,13 +194,15 @@ await check("390: a tap on Back during the forward slide lands", async () => {
     // Mid-slide: the transition has started and not finished.
     await page.waitForFunction(() => window.__vts.length === 1 && window.__vts[0].ready === "ok" && !window.__vts[0].end, null, { timeout: 2000, polling: "raf" });
     const t0 = await page.evaluate(() => performance.now());
-    await tap("#back", { hold: 20 });
+    await page.evaluate(() => { window.__pressedBack = false; new MutationObserver(() => { if (document.getElementById("back").classList.contains("is-pressed")) window.__pressedBack = true; }).observe(document.getElementById("back"), { attributes: true }); });
+    await tap("#back", { hold: 60 });
     await page.waitForFunction(() => !document.body.classList.contains("has-detail"), null, { timeout: 2000 });
     await ended();
     const v = await vts();
     assert(v[0].end - v[0].at < 190, `the forward slide ran its full length (${Math.round(v[0].end - v[0].at)} ms) instead of skipping to its end`);
     assert(v[0].end <= t0 + 60, "the forward slide did not end at the tap");
     assert(await listShown(), "the list is not shown after Back");
+    assert(await page.evaluate(() => window.__pressedBack), "the press layer did not show on Back, tapped mid-slide");
   } finally { await l.browser.close(); }
 });
 
@@ -205,9 +240,12 @@ await check("390 with reduced motion: no transition, and the screens still chang
     await page.waitForFunction(() => document.body.classList.contains("has-detail"));
     await tap("#back");
     await page.waitForFunction(() => !document.body.classList.contains("has-detail"));
-    await page.evaluate(() => { location.hash = "#/pages"; });
+    await tap("#btn-fleet");
+    await page.waitForSelector("#f-pages", { state: "visible" });
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getTiming().iterations === Infinity)); // the menu has opened
+    await tap("#f-pages");
     await page.waitForSelector("#pages:not([hidden])");
-    await page.goBack();
+    await tap("#pgs-back");
     await page.waitForSelector("#pages", { state: "hidden" });
     const v = await vts();
     assert(v.length === 0, "transitions ran under reduced motion: " + JSON.stringify(v));
