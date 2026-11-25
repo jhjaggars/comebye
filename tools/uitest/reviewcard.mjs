@@ -54,6 +54,57 @@ for (const width of [1280, 390]) {
   page.on("pageerror", (e) => errs.push(String(e)));
   const ids = [];
   const item = (id) => page.locator(`${L} .td-item[data-id="${id}"]`);
+  // pressComment presses Comment in the strip over the Page's frame and releases it, with between() (a forced redraw)
+  // run while it is held. Used by every check that comments on a selection.
+  const pressComment = async (between) => {
+    await page.locator("#pgs-addc").waitFor();
+    const cb = await page.locator("#pgs-addc").boundingBox(), cx = cb.x + cb.width / 2, cy = cb.y + cb.height / 2;
+    // The strip lies over the Page's frame, which runs in its own process (the pages origin). The browser sends pointer
+    // input to a process by where the last drawn frame put things, so a press sent before a frame with the new strip is
+    // drawn goes to the Page, and Comment never sees it (#pgs-note never appears, composing false). Press only once a
+    // move at that spot has reached the button itself. :hover is no proof: the app's document sets it on its own after
+    // a layout, from where the pointer last was (an earlier check pressed Comment at this very spot). A 1px nudge makes
+    // each poll a real move.
+    //
+    // Even then the press itself can go to the frame: Chrome routes each event by its own hit test against the frames
+    // it has drawn, and on a loaded runner a press right after the move was still sent to the Page (traced in CI: focus
+    // on the IFRAME, no pointerdown on Comment, composing false). That is the browser's routing, not the app's redraw,
+    // so the press is checked: the app's document must have had the trusted pointerdown, on Comment. When it did not, the
+    // button goes up over the frame (nothing happens there: the Page has no selection), and the move and the press are
+    // tried again. What is under test comes after a press that reached Comment: the redraw before the release must not
+    // lose the tap.
+    //
+    // What reached the app's document: each trusted pointerdown, pointerup and click, with its target and whether that
+    // target is still in the page. Events the browser sent to the Page's frame never get here.
+    await page.evaluate(() => {
+      if (window.__rc) return; // once per page
+      const rec = (ev) => { if (!ev.isTrusted) return; const t = ev.target; window.__rc.push({ type: ev.type, id: t.id || t.tagName, node: t }); };
+      window.__rc = [];
+      for (const type of ["pointerdown", "pointerup", "click"]) document.addEventListener(type, rec, true);
+    });
+    await page.locator("#pgs-addc").evaluate((b) => b.addEventListener("pointermove", (e) => { if (e.isTrusted) b.dataset.reached = "1"; }));
+    const seen = () => page.evaluate(() => window.__rc.map((e) => ({ type: e.type, id: e.id, connected: e.node.isConnected })));
+    let pressed = false;
+    for (let attempt = 1; attempt <= 3 && !pressed; attempt++) {
+      let nudge = 0;
+      await page.evaluate(() => { window.__rc.length = 0; delete document.querySelector("#pgs-addc").dataset.reached; });
+      await until(async () => {
+        await page.mouse.move(cx + (nudge ^= 1), cy);
+        return page.locator("#pgs-addc").evaluate((b) => b.dataset.reached === "1");
+      }, "a pointer move over Comment to reach it, not the Page's frame under it");
+      await page.mouse.down();
+      const down = (await seen()).find((e) => e.type === "pointerdown");
+      pressed = !!down && down.id === "pgs-addc";
+      if (!pressed) {
+        await page.mouse.up();
+        console.log(`     (press ${attempt} reached ${down ? down.id : "the Page's frame, not the app"}: once more)`);
+        await sleep(100);
+      }
+    }
+    if (!pressed) throw new Error("three presses over Comment never reached it: " + JSON.stringify(await seen()));
+    if (between) await between();
+    await page.mouse.up();
+  };
   const open = async (id) => {
     await page.evaluate(async () => { todos.loadedAt = 0; todos.openId = null; await loadTodos(); renderTodos(true); });
     await page.waitForSelector(`${LIST} .td-item[data-id="${id}"] .td-row`, { state: "visible" });
@@ -180,7 +231,8 @@ for (const width of [1280, 390]) {
       let fr; for (let i = 0; i < 60 && !fr; i++) { fr = page.frames().find((x) => x.url().includes("/p/" + withPic + "/")); if (!fr) await page.waitForTimeout(100); }
       if (!fr) throw new Error("no frame");
       await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows a picture", before: "", after: " of its page." }, "*"));
-      await page.locator("#pgs-addc").click();
+      await pressComment();
+      await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async () => { throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, events: (window.__rc || []).map((e) => e.type + ":" + e.id + (e.node.isConnected ? "" : "(gone)")) })))); });
       await page.locator("#pgs-note").fill("Make the picture bigger");
       await page.locator("#pgs-noteadd").click();
       await page.waitForSelector("#pgs-tray .pgs-cmt", { state: "attached" });
@@ -220,52 +272,7 @@ for (const width of [1280, 390]) {
         await fr.evaluate(() => parent.postMessage({ type: "comebye-selection", v: 1, quote: "Each card shows", before: "", after: " a picture" }, "*"));
         // A redraw between the press and the release (the Page's sent comments arriving) must not lose the tap: it used
         // to put a new Comment button under the release, and no click fired.
-        await page.locator("#pgs-addc").waitFor();
-        const cb = await page.locator("#pgs-addc").boundingBox(), cx = cb.x + cb.width / 2, cy = cb.y + cb.height / 2;
-        // The strip lies over the Page's frame, which runs in its own process (the pages origin). The browser sends pointer
-        // input to a process by where the last drawn frame put things, so a press sent before a frame with the new strip is
-        // drawn goes to the Page, and Comment never sees it (#pgs-note never appears, composing false). Press only once a
-        // move at that spot has reached the button itself. :hover is no proof: the app's document sets it on its own after
-        // a layout, from where the pointer last was (the check above pressed Comment at this very spot). A 1px nudge makes
-        // each poll a real move.
-        //
-        // Even then the press itself can go to the frame: Chrome routes each event by its own hit test against the frames
-        // it has drawn, and on a loaded runner a press right after the move was still sent to the Page (traced in CI: focus
-        // on the IFRAME, no pointerdown on Comment, composing false). That is the browser's routing, not the app's redraw,
-        // so the press is checked: the app's document must have had the trusted pointerdown, on Comment. When it did not, the
-        // button goes up over the frame (nothing happens there: the Page has no selection), and the move and the press are
-        // tried again. What
-        // is under test comes after a press that reached Comment: the redraw before the release must not lose the tap.
-        //
-        // What reached the app's document: each trusted pointerdown, pointerup and click, with its target and whether that
-        // target is still in the page. Events the browser sent to the Page's frame never get here.
-        await page.evaluate(() => {
-          const rec = (ev) => { if (!ev.isTrusted) return; const t = ev.target; window.__rc.push({ type: ev.type, id: t.id || t.tagName, node: t }); };
-          window.__rc = [];
-          for (const type of ["pointerdown", "pointerup", "click"]) document.addEventListener(type, rec, true);
-        });
-        await page.locator("#pgs-addc").evaluate((b) => b.addEventListener("pointermove", (e) => { if (e.isTrusted) b.dataset.reached = "1"; }));
-        const seen = () => page.evaluate(() => window.__rc.map((e) => ({ type: e.type, id: e.id, connected: e.node.isConnected })));
-        let pressed = false;
-        for (let attempt = 1; attempt <= 3 && !pressed; attempt++) {
-          let nudge = 0;
-          await page.evaluate(() => { window.__rc.length = 0; delete document.querySelector("#pgs-addc").dataset.reached; });
-          await until(async () => {
-            await page.mouse.move(cx + (nudge ^= 1), cy);
-            return page.locator("#pgs-addc").evaluate((b) => b.dataset.reached === "1");
-          }, "a pointer move over Comment to reach it, not the Page's frame under it");
-          await page.mouse.down();
-          const down = (await seen()).find((e) => e.type === "pointerdown");
-          pressed = !!down && down.id === "pgs-addc";
-          if (!pressed) {
-            await page.mouse.up();
-            console.log(`     (press ${attempt} reached ${down ? down.id : "the Page's frame, not the app"}: once more)`);
-            await sleep(100);
-          }
-        }
-        if (!pressed) throw new Error("three presses over Comment never reached it: " + JSON.stringify(await seen()));
-        await page.evaluate(() => pgcRender());
-        await page.mouse.up();
+        await pressComment(() => page.evaluate(() => pgcRender()));
         await page.locator("#pgs-note").waitFor({ timeout: 5000 }).catch(async (e) => {
           await page.screenshot({ path: `${out}/split-set-FAIL-${width}-${dark ? "dark" : "light"}.png` }).catch(() => {});
           throw new Error("no #pgs-note: " + JSON.stringify(await page.evaluate(() => ({ rsHidden: !document.querySelector("#rs:not([hidden])"), hist: history.state, sel: pgc.sel && pgc.sel.quote, composing: pgc.composing, key: pgc.id + "/" + pgc.ver, frames: document.querySelectorAll("iframe.pgs-frame").length, focus: document.activeElement && (document.activeElement.id || document.activeElement.tagName), events: (window.__rc || []).map((e) => e.type + ":" + e.id + (e.node.isConnected ? "" : "(gone)")) }))));
