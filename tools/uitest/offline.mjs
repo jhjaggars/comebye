@@ -255,6 +255,7 @@ async function cut(page) { await reset(page); await page.evaluate(() => connectE
 
 async function phase2(width) {
   const desk = width > 500, tag = desk ? "desktop" : "phone";
+  // The noun is the screen in front's: "list" (an agent, or the list), or "status" when a desktop opens to Status.
   const open = async (clock) => {
     const { browser, page } = await launch({ width, height: desk ? 800 : 844, dark });
     if (clock) await page.clock.install();
@@ -272,7 +273,7 @@ async function phase2(width) {
       await page.context().setOffline(true);
       await page.waitForFunction(() => !document.getElementById("hub-strip")?.hidden && document.getElementById("hub-strip")?.dataset.kind === "offline", null, { timeout: 3000 });
       const t = await stripText(page);
-      if (!/^Offline · list from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
+      if (!/^Offline · (list|status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
       // It sits right under the header of the screen in front.
       const under = await page.evaluate(() => { const e = document.getElementById("hub-strip"); return e.previousElementSibling && e.previousElementSibling.tagName; });
       if (under !== "HEADER") throw new Error("the strip is not under a header: after " + under);
@@ -283,9 +284,9 @@ async function phase2(width) {
       await page.screenshot({ path: `${out}/offline-strip-${tag}.png` });
       // The age counts.
       await page.clock.fastForward("12:00");
-      await page.waitForFunction(() => /list from 12 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
+      await page.waitForFunction(() => /(list|status) from 12 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.clock.fastForward("02:00");
-      await page.waitForFunction(() => /list from 14 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
+      await page.waitForFunction(() => /(list|status) from 14 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.screenshot({ path: `${out}/offline-strip-12min-${tag}.png` });
       // Back online: "Updated", then no strip and no old marking.
       await page.context().setOffline(false);
@@ -310,7 +311,7 @@ async function phase2(width) {
       if ((await rowState(page)).stale) throw new Error("rows marked old during a blip");
       await page.waitForFunction(() => document.getElementById("hub-strip")?.dataset.kind === "down", null, { timeout: 7000 });
       const t = await stripText(page);
-      if (!/^Can.t reach the hub · list from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
+      if (!/^Can.t reach the hub · (list|status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
       if (!(await rowState(page)).stale) throw new Error("rows not marked old");
       // Retry while the hub is still out: it tries, and the strip stays.
       await page.click("#hub-strip .hs-retry");

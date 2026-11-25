@@ -1399,7 +1399,6 @@ function hubLost() { return !hub.up && (navigator.onLine === false || Date.now()
 // answer predates the last loss and no fresh one has come since.
 function srcStale(s) { return !!s && s.at > 0 && (!!s.err || hubLost() || s.at < hub.lostAt); }
 function hubUp() {
-  if (navigator.onLine === false) return; // the device says it is offline: a late event from an old stream does not count
   if (hub.up) return;
   hub.up = true;
   hub.tryUntil = 0;
@@ -1410,7 +1409,7 @@ function hubUp() {
   stripSync();
 }
 function hubDown() {
-  hub.tryUntil = 0;
+  // A Retry that fails at once still shows "Trying…" for its 2 s, so the tap is seen to have done something.
   if (hub.up) { hub.up = false; hub.downAt = Date.now(); }
   clearTimeout(hub.timer);
   hub.timer = setTimeout(stripSync, Math.max(0, hub.downAt + STRIP_BLIP_MS - Date.now()) + 20);
