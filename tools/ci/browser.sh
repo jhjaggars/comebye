@@ -8,19 +8,15 @@
 #        changed (what a pull request's pre-submit tier runs for this branch's changes against BASE, default origin/main:
 #        tools/ci/select.sh's smoke set plus the scripts for the touched paths, nothing for docs, full when it says all)
 #        EXTRA="peers sidepanel" adds scripts to smoke.
-# SHARD: I/N runs the I-th of N parts of the suite (rest only; CI runs rest as 4 jobs). The parts are balanced by each script's
+# SHARD: I/N runs the I-th of N parts of the suite (rest or visual; CI runs rest as 6 jobs and each scheme's visual as 2). The parts are balanced by each script's
 #        time in tools/ci/browser-times.txt (name, seconds; a script not listed counts 30 s), biggest first into the lightest part,
 #        so every script is in exactly one part and a new script needs no list edited. Refresh the file from a run's
-#        "== script NAME: N s" lines when the parts drift apart.
+#        "== script NAME: N s" lines when the parts drift apart. `tools/ci/browser.sh parts rest 6` prints the parts.
 # PARALLEL=N: rest only, its N parts at once on this machine (see below). SCHEME: dark (default) or light. Chrome comes from $CHROME or the first google-chrome or chromium on PATH.
 #
 # Any failed check fails the suite; there is no list of checks allowed to fail.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# On the test VM when one is configured and answers (tools/ci/prefer-vm.sh; TEST_VM=local keeps it here).
-. "$here/prefer-vm.sh"; prefer_vm browser "$@"
-[ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
-suite="${1:?suite: smoke|drive|rest|visual|full|changed}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"; shard="${4:-}"
 
 VISUAL="shapes appearance starters depth gradients landscape"
 # Every script run.sh knows (its "want NAME" lines), so a script added there is in "rest" and "full" without editing this file.
@@ -29,6 +25,34 @@ rest=""
 for s in $ALL; do
   case " drive $VISUAL " in *" $s "*) ;; *) rest="$rest $s";; esac
 done
+
+# part I N SCRIPTS...: the scripts of part I of N, balanced by browser-times.txt (longest first into the lightest part,
+# ties by name), the same answer for every part's job.
+part() {
+  local i="$1" n="$2"; shift 2
+  for s in "$@"; do
+    echo "$s $(awk -v n="$s" '$1 == n {t = $2} END {print t ? t : 30}' "$here/browser-times.txt")"
+  done | sort -k2,2nr -k1,1 | awk -v i="$i" -v n="$n" '
+    { m = 1; for (b = 2; b <= n; b++) if (load[b] < load[m]) m = b
+      load[m] += $2; if (m == i) printf "%s ", $1 }' | sed 's/ $//'
+}
+
+# tools/ci/browser.sh parts SUITE N: print each part's scripts and estimated seconds, run nothing (rest or visual).
+if [ "${1:-}" = parts ]; then
+  case "${2:-}" in rest) list="$rest" ;; visual) list="$VISUAL" ;; *) echo "parts: rest or visual" >&2; exit 2 ;; esac
+  n="${3:?parts SUITE N}"
+  for i in $(seq 1 "$n"); do
+    p="$(part "$i" "$n" $list)"
+    t="$(for s in $p; do awk -v n="$s" '$1 == n {t = $2} END {print t ? t : 30}' "$here/browser-times.txt"; done | awk '{s += $1} END {print s + 0}')"
+    echo "$i/$n ${t}s: $p"
+  done
+  exit 0
+fi
+
+# On the test VM when one is configured and answers (tools/ci/prefer-vm.sh; TEST_VM=local keeps it here).
+. "$here/prefer-vm.sh"; prefer_vm browser "$@"
+[ -n "${COMEBYE_CAPPED:-}" ] || exec "$here/capped.sh" "${BASH_SOURCE[0]}" "$@"
+suite="${1:?suite: smoke|drive|rest|visual|full|changed}"; scheme="${2:-dark}"; out="${3:-${RUNNER_TEMP:-/tmp}/uitest-$suite-$scheme}"; shard="${4:-}"
 
 if [ "$suite" = changed ]; then
   base="$(git -C "$here/../.." merge-base "${BASE:-origin/main}" HEAD)" || { echo "no merge base with ${BASE:-origin/main}" >&2; exit 2; }
@@ -71,15 +95,10 @@ if [ "$suite" = rest ] && [ -z "$shard" ] && [ "${PARALLEL:-1}" -gt 1 ]; then
 fi
 
 if [ -n "$shard" ]; then
-  [ "$suite" = rest ] || { echo "a shard is for the rest suite only" >&2; exit 2; }
+  case "$suite" in rest|visual) ;; *) echo "a shard is for the rest and visual suites only" >&2; exit 2;; esac
   case "$shard" in [1-9]/[1-9]) ;; *) echo "shard must look like 2/4" >&2; exit 2;; esac
-  # Greedy balancing (longest script first into the lightest part), the same answer for every part's job.
-  scripts="$(for s in $scripts; do
-      echo "$s $(awk -v n="$s" '$1 == n {t = $2} END {print t ? t : 30}' "$here/browser-times.txt")"
-    done | sort -k2,2nr -k1,1 | awk -v i="${shard%/*}" -v n="${shard#*/}" '
-      { m = 1; for (b = 2; b <= n; b++) if (load[b] < load[m]) m = b
-        load[m] += $2; if (m == i) printf "%s ", $1 }')"
-  scripts="${scripts% }"
+  # shellcheck disable=SC2086
+  scripts="$(part "${shard%/*}" "${shard#*/}" $scripts)"
   # An empty SCRIPTS means "everything" to run.sh: never let a part with nothing in it fall through to that.
   [ -n "$scripts" ] || { echo "shard $shard has no scripts" >&2; exit 1; }
   echo "shard $shard: $scripts"

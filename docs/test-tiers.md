@@ -5,8 +5,8 @@ time. The plan, with the measurements behind it, is the Page "Test tiers plan" i
 
 | Tier | Trigger | What runs | Target | A failure blocks |
 |---|---|---|---|---|
-| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched (a change that needs every script, such as one to CI or the driver, runs the merge tier's parallel browser jobs instead) | 3.5 min (5 when `internal/server` changed) | merging the pull request |
-| Merge | a push to main | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and the `rest` scripts in 4 parallel parts; the visual pass in dark and light | 4 min | the next release of that commit (and the landing queue reads it) |
+| Pre-submit | a pull request | lint; `go test -race` of the packages the change touches and their importers; the browser smoke set (dark, ~160 checks, about 2 min); the scripts for the paths touched (a change that needs every script, such as one to CI or the driver, or whose smoke set plus extra scripts is estimated over 5 min from `tools/ci/browser-times.txt`, runs the merge tier's parallel browser jobs instead); `go test` in 2 jobs when `internal/server` is among the packages | 3.5 min (4 when `internal/server` changed) | merging the pull request |
+| Merge | a push to main (or `gh workflow run CI --ref BRANCH`) | lint; all Go in 2 shards; every browser script once (dark), as a `drive` job and the `rest` scripts in 6 parallel parts; the visual pass in dark and light, 2 parts each | 4 min | the next release of that commit (and the landing queue reads it) |
 | Release | a `v*` tag | the gate (below), govulncheck, the 4 builds, then the publish | 2 min | nothing: it publishes |
 
 The **day in the life** (`tools/smoke/run.sh`, about 15 seconds after the build) is one more job in the pre-submit tier
@@ -28,6 +28,8 @@ runs the browser too; a path it does not know runs everything. Try it:
 git diff --name-only origin/main... | tools/ci/select.sh
 ```
 
+`tools/ci/select_test.sh` (in the lint job) checks a few of its answers, and that the browser parts hold every script once.
+
 The merge tier is full except for docs-only and leaf-Go-only changes. The pre-submit tier uses the whole table
 (`tools/ci/select.sh` has it, one rule per path pattern). A rule never runs fewer checks than the table says, and
 the merge tier runs everything, so a wrong rule is caught on the next push to main.
@@ -38,7 +40,8 @@ the merge tier runs everything, so a wrong rule is caught on the next push to ma
 tools/ci/browser.sh changed      # what a pull request would run for your changes (committed or not) against origin/main
 tools/ci/browser.sh smoke        # ~160 checks covering every screen, about 2 min
 tools/ci/browser.sh drive light  # drive.mjs in the light scheme
-tools/ci/browser.sh rest dark "" 2/4  # part 2 of 4 of the rest scripts (what one CI job runs)
+tools/ci/browser.sh rest dark "" 2/6  # part 2 of 6 of the rest scripts (what one CI job runs)
+tools/ci/browser.sh parts rest 6      # which scripts each of those parts runs (runs nothing)
 tools/ci/browser.sh full         # everything, one scheme (tools/uitest/run.sh runs both)
 tools/ci/gotest.sh --shard 1/2   # half of the Go work
 SCRIPTS="sidepanel peers" tools/uitest/run.sh   # just these scripts
