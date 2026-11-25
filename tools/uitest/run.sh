@@ -76,10 +76,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-(cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent)
-
-(cd "$root" && go build -o "$tmp/fake-herdr" ./tools/devserver)
+# The driver's modules and the two binaries at once: on a CI runner, one after the other, they were most of the
+# 15 s before the first check.
+(cd "$here" && [ -d node_modules/playwright-core ] || npm ci --no-audit --no-fund --silent) & npm_pid=$!
+(cd "$root" && go build -o "$tmp/fake-herdr" ./tools/devserver) & herdr_pid=$!
 (cd "$app" && go build -o "$tmp/comebye" .)
+wait "$herdr_pid"; wait "$npm_pid"
 
 # shellcheck disable=SC2086
 "$tmp/fake-herdr" -sock "$tmp/h.sock" -dir "$tmp" ${FAKE_ARGS--trust-prompt} >"$out/fake-herdr.log" 2>&1 &
