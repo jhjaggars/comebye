@@ -186,6 +186,18 @@ await check("agents: a row scrolled away while open is scrolled into view; one o
   await clears();
 });
 
+await check("agents: back from a blocked row, the mark is drawn over its edge glow, which stays", async () => {
+  const id = await page.$eval("#agents .agent.blocked[data-id]", (e) => e.dataset.id);
+  const glow = () => page.evaluate((sel) => getComputedStyle(document.querySelector(sel)).backgroundImage, rowSel(id));
+  const rest = await glow();
+  if (!rest.includes("linear-gradient(90deg")) { console.log("     (no edge glow on a blocked row in this surface style: skipped)"); return; }
+  await openAndBack(id, () => tap("#back"));
+  const m = await marked(id);
+  assert(m.img.includes("linear-gradient(90deg"), "the glow went under the mark: " + m.img);
+  await clears();
+  assert((await glow()) === rest, "the row did not come back as it was");
+});
+
 await check("agents, reduced motion: the mark shows without a fade and still clears", async () => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openAndBack(pick, () => tap("#back"));
