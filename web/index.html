@@ -397,9 +397,10 @@
     html[data-col="wide"] { --col: 1120px; }
     html[data-col="wider"] { --col: 1480px; }
     html[data-col="full"] { --col: 100%; }
-    /* A phone in landscape (short and touch): the default column is the whole pane. Its widest usable width is under
-       ~900px, so a column there only adds gutters; a reading width the user picked still applies. */
-    @media (pointer: coarse) and (max-height: 500px) { html:not([data-col]) { --col: 100%; } }
+    /* A phone in landscape (touch, short, wider than the phone rules): the default column is a centred ~72% of the
+       screen, as phone chat apps do on their side, not the desktop's 820px with wide gutters; a width the user picked
+       in Appearance still applies. The rest of the landscape rules are after the header's (search "phone landscape"). */
+    @media (pointer: coarse) and (max-height: 500px) and (min-width: 601px) { html:not([data-col]) { --col: 72vw; } }
     /* The text size: Settings > Appearance sets <html data-rs>. It scales the conversation only (#chat, #sv-chat, the
        composer's text, the Appearance preview): those redefine --fs-11..18 from --rs, so every font-size in them
        follows with no per-rule work. The header, the list and the menus keep the root tokens and their tap targets. */
@@ -1289,6 +1290,18 @@
     #detail header .d-term[hidden] { display: none; }
     #detail header .d-term svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     #detail header .more:focus-visible { outline-offset: 0; }
+    /* Phone landscape: height is scarce (~390px), so the agent's header is one 44px row (title and subtitle side by side,
+       the buttons at full tap height with no bar padding around them) and the conversation starts right under it. */
+    @media (pointer: coarse) and (max-height: 500px) and (min-width: 601px) {
+      #detail > header { padding-top: env(safe-area-inset-top, 0px); padding-bottom: 0; min-height: var(--hit-44); }
+      #detail > header .back, #detail > header .more, #detail > header .d-term { margin-top: 0; margin-bottom: 0; }
+      #detail > header .meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--sp-8); padding: var(--sp-4) 0; }
+      #detail > header .meta .title { flex: 0 1 auto; min-width: 0; max-width: 60%; }
+      #detail > header .meta .subtitle { flex: 1 1 0; min-width: 0; }
+      #detail > header .meta > :not(.title, .subtitle) { flex: 0 0 100%; }
+      #detail main { padding-top: 0; }
+      #detail main > #chat { margin-top: 0; }
+    }
     .d-menu { position: fixed; z-index: var(--z-menu); left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 80vw; }
     .d-menu .mark-state { padding: var(--sp-8) var(--sp-14); font-size: var(--fs-13); color: var(--orange); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
     .d-menu .mark-state[hidden] { display: none; }
