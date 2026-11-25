@@ -1,21 +1,20 @@
 # Seconds each script takes on a CI runner: the median of its "== script NAME: N s" lines over the 5 green pushes to main
-# of Nov 25 2026 (runs 45528201712 to 45545896651; landscape from the 3 runs since its new checks). tools/ci/browser.sh
-# balances the rest and visual parts from these, and tools/ci/select.sh estimates a pull request's smoke job from them;
-# a script not listed counts 30. Refresh from a CI run's lines when the parts drift apart. returnmark (new) is its
-# author's estimate.
-offline 166
+# of Nov 25 2026 (runs 45528201712 to 45545896651; landscape from the 3 runs since its new checks), and for the scripts
+# changed since (offline, saved, press, reviewcard, sidepanel, shell, returnmark) their time in run 45557706922.
+# tools/ci/browser.sh balances the rest and visual parts from these, and tools/ci/select.sh estimates a pull
+# request's smoke job from them; a script not listed counts 30. Refresh from a CI run's lines when the parts drift apart.
+offline 118
 landscape 114
-saved 64
-shell 15
 statussplit 58
 pages 46
 appearance 43
-sidepanel 41
+press 42
+saved 42
 groupby 40
-returnmark 40
+sidepanel 39
 hostpicker 38
-press 38
 pagetheme 30
+returnmark 28
 wakeuse 25
 todonav 23
 pageback 22
@@ -37,14 +36,15 @@ leftnav 15
 wake 15
 chatstrip 14
 pagecomments 14
-reviewcard 14
 rolloutlive 14
+shell 14
 coordnav 13
 ctxchip 13
 pagechat 13
 pagefixed 13
 provhosts 13
 starters 13
+reviewcard 12
 todoopen 12
 gpgunlock 11
 shapes 11
