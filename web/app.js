@@ -416,6 +416,86 @@ function setUnauthorized(on) {
 // refreshOutput() pins the terminal view and a hung prompt POST leaves
 // state.sending set, so the send button stays dead until the app is killed.
 const API_TIMEOUT_MS = 30000;
+
+// The "settled" signal, for the browser tests only (#139 slice 5). tools/uitest/lib.mjs sets window.__cbSettle before
+// the app loads (an init script); without it this is null and nothing below runs, so a user's app is unchanged.
+// The app is settled when no fetch is in flight (its body read too), no redraw is pending (no DOM change for two
+// frames, no hold from a deferred render), and no finite animation or view transition is running. Infinite ones (a
+// spinner) do not count. While it is not settled one animation frame at a time checks again; once settled nothing
+// runs until the next fetch, DOM change or animation. It shows as:
+//   <html data-settled="1|0">;  window.__cb.settles, a count of the times it became settled;
+//   a "cb:settled" event on window each time;  window.__cb.settled(timeout): a promise that resolves (true) at once
+//   when settled, else at the next settle, or (false) after timeout ms.
+// settleHold() returns a release function: a render deferred by a timer holds the signal off until it ran.
+const settle = (() => {
+  if (!window.__cbSettle) return null;
+  const root = document.documentElement;
+  const s = { holds: 0, settled: false, settles: 0, quiet: 0, raf: 0, dirty: true };
+  const finite = () => document.getAnimations().some((a) => {
+    if (a.playState !== "running") return false;
+    const end = a.effect && a.effect.getComputedTiming().endTime;
+    return Number.isFinite(end);
+  });
+  const tick = () => {
+    s.raf = 0;
+    if (s.holds || s.dirty || finite()) { s.quiet = 0; s.dirty = false; s.raf = requestAnimationFrame(tick); return; }
+    if (++s.quiet < 2) { s.raf = requestAnimationFrame(tick); return; }
+    s.settled = true; s.settles++;
+    root.dataset.settled = "1";
+    dispatchEvent(new Event("cb:settled"));
+  };
+  const mark = () => {
+    s.dirty = true; s.quiet = 0;
+    if (s.settled) { s.settled = false; root.dataset.settled = "0"; }
+    if (!s.raf) s.raf = requestAnimationFrame(tick);
+  };
+  const hold = () => { s.holds++; mark(); let done = false; return () => { if (done) return; done = true; s.holds--; mark(); }; };
+  // a fetch counts until its promise settles, and the body read after it until that settles too
+  const ofetch = window.fetch;
+  window.fetch = function (...a) {
+    const release = hold();
+    const p = ofetch.apply(this, a);
+    p.then(release, release);
+    return p;
+  };
+  for (const m of ["json", "text", "blob", "arrayBuffer", "formData"]) {
+    const orig = Response.prototype[m];
+    Response.prototype[m] = function (...a) { const release = hold(); const p = orig.apply(this, a); p.then(release, release); return p; };
+  }
+  // Element.animate and a view transition start without a DOM change the observer would see
+  const oanim = Element.prototype.animate;
+  Element.prototype.animate = function (...a) { mark(); return oanim.apply(this, a); };
+  if (document.startViewTransition) {
+    const ovt = document.startViewTransition;
+    document.startViewTransition = function (...a) {
+      const release = hold(), vt = ovt.apply(this, a);
+      vt.finished.then(release, release);
+      return vt;
+    };
+  }
+  new MutationObserver((recs) => {
+    if (recs.some((r) => !(r.target === root && r.attributeName === "data-settled"))) mark();
+  }).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+  addEventListener("transitionrun", mark, true);
+  addEventListener("animationstart", mark, true);
+  root.dataset.settled = "0";
+  mark();
+  window.__cb = {
+    get settles() { return s.settles; },
+    get pending() { return s.holds; },
+    get isSettled() { return s.settled; },
+    state: () => ({ settled: s.settled, pending: s.holds, quiet: s.quiet, animating: finite() }),
+    settled: (timeout = 5000) => s.settled ? Promise.resolve(true) : new Promise((res) => {
+      const t = setTimeout(() => { removeEventListener("cb:settled", on); res(false); }, timeout);
+      const on = () => { clearTimeout(t); res(true); };
+      addEventListener("cb:settled", on, { once: true });
+    }),
+    hold,
+  };
+  return s;
+})();
+const settleHold = () => (settle ? window.__cb.hold() : () => {});
+
 // Test mode (hub flag -test-mode, browser tests and the dev server): poll every 300 ms instead of
 // every 3 to 20 s. A normal hub answers {} and nothing changes. pollMs(n) is n unless test mode says otherwise.
 let TEST_POLL_MS = 0;
@@ -12739,13 +12819,13 @@ function initUsage() {
   $("us-view").addEventListener("toggle", (ev) => { if (ev.target.id === "us-pricedet" && ev.target.open && !us.prices) usageLoadPrices(); else if (ev.target.id === "us-pricedet" && ev.target.open) renderUsagePrices(); }, true);
   // The charts are drawn to the width they have, and that is the pane's now, not the window's: the list collapsing or the
   // window resizing both change it.
-  let t = null, w = 0;
+  let t = null, w = 0, usHeld = () => {};
   new ResizeObserver(() => {
     const nw = $("us-body").clientWidth;
     if (nw === w) return;
     w = nw;
     if (!us.route || us.status !== "ok") return;
-    clearTimeout(t); t = setTimeout(renderUsage, 150);
+    clearTimeout(t); usHeld(); usHeld = settleHold(); t = setTimeout(() => { renderUsage(); usHeld(); }, 150);
   }).observe($("us-body"));
 }
 

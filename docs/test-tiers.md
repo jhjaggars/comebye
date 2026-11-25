@@ -65,6 +65,11 @@ Where the time went, and the rules that keep it from coming back:
   (`if (await loc.count())`), or let the wait throw.
 - **One Chrome per script.** `launch()` in `tools/uitest/lib.mjs` starts Chrome once per process and gives each call a
   fresh context (its own cookies, storage and permissions); `browser.close()` closes that context.
+- **Wait for the app, not the clock.** `settled(page)` in `tools/uitest/lib.mjs` waits until the app says it is
+  settled: no fetch in flight, no redraw pending, no finite animation running. It is a test-only signal in
+  `web/app.js` (`window.__cb`, `<html data-settled>`), on only when lib.mjs's `launch()` sets its flag, so a user's
+  app is unchanged. `clickStable` and `readInPage` wait for it first. A fixed sleep is only for a wait that is the
+  point of the check (nothing may happen in that time, an undo window, a rate limit), and says so in a comment.
 - **Slow down only what is under test.** pagetheme throttles the network after the app has loaded, and its heavy Page
   is as heavy as the check needs (its load comes seconds after the first paint), not more.
 - **`-test-mode` shortens waits that only exist for real fleets:** the app polls every 300 ms, and a peer that is down

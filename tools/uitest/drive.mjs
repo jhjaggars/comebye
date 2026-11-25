@@ -2,7 +2,7 @@
 // herdr: after a prompt is sent, the reply must show without re-selecting
 // the agent, in the chat view and in the raw terminal view, and switching
 // agents must not show the previous agent's view.
-import { launch, mockLaunchRoutes, dumpFailure, stamped, shotOf } from "./lib.mjs";
+import { launch, mockLaunchRoutes, dumpFailure, stamped, shotOf, settled } from "./lib.mjs";
 import { releaseView } from "./relfix.mjs";
 import { boardView } from "./boardfix.mjs";
 import fs from "node:fs";
@@ -640,8 +640,10 @@ const stScreenState = () => page.evaluate(() => ({
 }));
 // idle: two frames, then no CSS transition or animation still running (a slide-in done, a pull sprung back), not a timer.
 // waitUntil: idle until a node-side condition holds (what the page has posted), up to 5 s.
-async function idle(pg = page) { await pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await pg.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); }
-async function waitUntil(fn) { const end = Date.now() + 5000; while (!fn() && Date.now() < end) await idle(); }
+// idle: the app is settled (lib.mjs settled: no fetch in flight, no redraw pending, no finite animation running).
+async function idle(pg = page) { await settled(pg); }
+// waitUntil(fn): fn is a condition on this script's side (a request a route caught): the app settled, then fn, a few times a frame.
+async function waitUntil(fn) { const end = Date.now() + 5000; while (!fn() && Date.now() < end) { await idle(); if (!fn()) await new Promise((r) => setTimeout(r, 20)); } }
 const settle = idle;
 async function freshList() {
   await page.goto(base + "/", { waitUntil: "load" });
@@ -991,7 +993,7 @@ await check("desktop: up/down in the list moves through the agents and opens eac
   // a re-render of the rows (the fleet menu's Refresh) must keep the focus on the same row
   const cur = await page.evaluate(() => document.activeElement.dataset.id);
   await page.evaluate(() => document.querySelector("#f-refresh").click());
-  await new Promise((r) => setTimeout(r, 800));
+  await idle(); // the refresh's fetches answered and drawn
   const id = await page.evaluate(() => document.activeElement?.dataset?.id);
   if (id !== cur) throw new Error("focus lost on re-render: " + id + " vs " + cur);
 });
@@ -4532,7 +4534,9 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
   });
   try {
     const fleet = "#pr-releases [data-fleet]";
-    const reload = async (st) => { state = st; await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
+    // reload(st): the hub's answer becomes st. A poll already in flight was answered with the old state: wait for it to
+    // land (settled) before asking again, so the old answer cannot be drawn over the new one.
+    const reload = async (st) => { state = st; await idle(); await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
     await openReleases(width);
     await reload("ro-before");
     // before: the button sits with the per-host Upgrade buttons, which stay usable

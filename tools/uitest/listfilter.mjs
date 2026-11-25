@@ -5,7 +5,7 @@
 // "+N outside this filter" is a button that clears the host filter; light and dark at 390, 1280 and 3440.
 //
 //   node listfilter.mjs BASE OUT_DIR
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const results = [];
@@ -47,7 +47,7 @@ async function open(width, dark, { hash = "", store = {} } = {}) {
     if (hash) location.hash = ""; // a clean slate, then the link
     if (hash) { history.replaceState(null, "", hash); route(); } else { renderList(); route(); }
   }, [f, store, hash]);
-  await page.waitForTimeout(150);
+  await settled(page);
   return { browser, page, errs, f };
 }
 const shown = (page) => page.evaluate(() => [...document.querySelectorAll("#agents .agent[data-id]")].filter((e) => !e.classList.contains("host-down")).map((e) => e.dataset.id));
@@ -84,7 +84,7 @@ for (const dark of [false, true]) {
         const hs = await page.evaluate(() => [...document.querySelectorAll("#lf-q, .lf-tab")].map((e) => Math.round(e.getBoundingClientRect().height)));
         if (hs.some((h) => h < 36)) throw new Error("targets " + hs);
         await page.click('#lf-tabs [data-tab="working"]');
-        await page.waitForTimeout(150);
+        await settled(page);
         await page.screenshot({ path: `${out}/listfilter-tabs-${w}-${scheme}.png` });
         if (errs.length) throw new Error(errs.join("; "));
       } finally { await browser.close(); }
@@ -218,7 +218,7 @@ for (const dark of [false, true]) {
       await page.waitForFunction(() => location.hash.startsWith("#/agent/"));
       await page.evaluate(() => history.back());
       await page.waitForFunction(() => !location.hash.startsWith("#/agent/"));
-      await page.waitForTimeout(150);
+      await settled(page);
       if (await hash(page) !== h0) throw new Error("hash after back " + await hash(page));
       if (await page.inputValue("#lf-q") !== q) throw new Error("box lost");
     } finally { await browser.close(); }
@@ -236,7 +236,7 @@ for (const dark of [false, true]) {
       // The tabs still read: they count what the host and the box leave (none).
       const t = await tabs(page);
       if (t.all.n !== 0) throw new Error("count " + t.all.n);
-      await page.waitForTimeout(100);
+      await settled(page);
       await page.screenshot({ path: `${out}/listfilter-empty-${scheme}.png` });
       await page.click("#agents .empty-act");
       const rows = await shown(page);

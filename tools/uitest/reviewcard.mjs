@@ -5,7 +5,7 @@
 // verdict; keys 1 and 2 and Escape on desktop. Pages are published with the real CLI.
 //
 //   node reviewcard.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
-import { launch, makeCheck } from "./lib.mjs";
+import { launch, makeCheck, settled } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -194,7 +194,9 @@ for (const width of [1280, 390]) {
       if (!page.url().startsWith(base)) throw new Error("Back left the app: " + page.url());
       if (await page.locator(LIST).isHidden()) throw new Error("the To do list is gone after Back");
       for (let i = 0; i < 3; i++) { await open(r1.id); await page.locator("#rs .rs-back").click(); await page.waitForSelector("#rs", { state: "hidden" }); }
-      await sleep(300);
+      // the last close's history.back() pops one task later: wait for it, then for its redraw
+      await page.waitForFunction(() => !(history.state && history.state.rs));
+      await settled(page);
       const n1 = await page.evaluate(() => history.length);
       if (n1 > n0) throw new Error(`history grew from ${n0} to ${n1}`);
     });

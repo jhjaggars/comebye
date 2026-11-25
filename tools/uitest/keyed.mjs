@@ -6,9 +6,11 @@
 //     the new status moves it to another group, as the desktop's Needs you or a group-by-status list does);
 //   - the keyboard focus and the list's scroll position ride through polls;
 //   - a press whose release comes after a redraw of the list still opens the row, and the press layer stays on it.
+// And the test-only "settled" signal (#139 slice 5): it comes, a held fetch and a finite animation hold it off, an
+// infinite animation does not, and without lib.mjs's flag the app has none.
 //
 //   node keyed.mjs BASE OUT_DIR      (env: SCHEME)
-import { launch, makeCheck } from "./lib.mjs";
+import { launch, makeCheck, settled } from "./lib.mjs";
 import fs from "node:fs";
 
 const [base, out] = process.argv.slice(2);
@@ -120,6 +122,60 @@ for (const width of [390, 1280]) {
     assert(mid.pressed, "the press layer left the held row in the redraw");
     await page.waitForFunction((id) => state.selected === id, box.id, { timeout: 4000 }).catch(() => { throw new Error(`the click did not open ${box.id} (selected: ${"?"})`); });
   });
+
+  // The test-only "settled" signal (#139 slice 5, app.js settle), once, at 390 px.
+  if (width === 390) {
+    await open();
+    await check(`${at} settled: the app says when it is settled, and counts it`, async () => {
+      assert(await settled(page), "never settled in 5 s");
+      const r = await page.evaluate(() => ({ attr: document.documentElement.dataset.settled, n: window.__cb.settles, is: window.__cb.isSettled }));
+      assert(r.attr === "1" && r.is && r.n >= 1, `settled: ${JSON.stringify(r)}`);
+    });
+    await check(`${at} settled: a fetch in flight holds it off until its answer is drawn`, async () => {
+      let let_go;
+      const held = new Promise((r) => { let_go = r; });
+      await page.route(/\/api\/agents$/, async (rt) => { await held; await rt.continue(); });
+      await settled(page);
+      const n0 = await page.evaluate(() => window.__cb.settles);
+      await page.evaluate(() => { window.__polled = refreshAgents(); });
+      await page.waitForTimeout(400); // the held fetch, over many frames: never settled meanwhile
+      const mid = await page.evaluate(() => ({ attr: document.documentElement.dataset.settled, n: window.__cb.settles }));
+      let_go();
+      await page.evaluate(() => window.__polled);
+      assert(await settled(page), "never settled after the answer");
+      await page.unroute(/\/api\/agents$/);
+      assert(mid.attr === "0" && mid.n === n0, `settled while the fetch was held: ${JSON.stringify(mid)} (count before ${n0})`);
+    });
+    await check(`${at} settled: a finite animation holds it off; an infinite one does not`, async () => {
+      await settled(page);
+      const r = await page.evaluate(async () => {
+        const el = document.querySelector("#agents .agent[data-id]");
+        const spin = el.animate([{ opacity: 1 }, { opacity: 0.9 }], { duration: 500, iterations: Infinity });
+        await new Promise((res) => setTimeout(res, 100));
+        const withSpin = await window.__cb.settled(2000);
+        const a = el.animate([{ opacity: 1 }, { opacity: 0.5 }], { duration: 400 });
+        await new Promise((res) => requestAnimationFrame(res));
+        const during = window.__cb.isSettled;
+        const t0 = performance.now();
+        await window.__cb.settled(3000);
+        const after = performance.now() - t0, done = a.playState;
+        spin.cancel();
+        return { withSpin, during, after, done };
+      });
+      assert(r.withSpin, "an infinite animation kept it from settling");
+      assert(!r.during && r.done === "finished", `settled during a 400 ms animation: ${JSON.stringify(r)}`);
+    });
+    await check(`${at} settled: without the uitest's flag there is no signal (a user's app)`, async () => {
+      const c = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await c.addInitScript(() => { delete window.__cbSettle; });
+      const p = await c.newPage();
+      await p.goto(base + "/", { waitUntil: "load" });
+      await p.waitForSelector(ROW, { state: "visible" });
+      const r = await p.evaluate(() => ({ cb: typeof window.__cb, attr: document.documentElement.getAttribute("data-settled"), fetch: /native code/.test(String(window.fetch)) }));
+      await c.close();
+      assert(r.cb === "undefined" && r.attr === null && r.fetch, `the signal is on without the flag: ${JSON.stringify(r)}`);
+    });
+  }
 
   if (errors.length) await check(`${at} no page errors`, async () => { throw new Error(errors.join("\n")); });
   await browser.close();

@@ -8,7 +8,7 @@
 //   node sidepanel.mjs BASE OUT_DIR      (env: PANEL_HOME, COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
 //
 // Each check runs at 1440 (a split beside the chat) and at 390 (a bottom sheet).
-import { clickStable, launch } from "./lib.mjs";
+import { clickStable, launch, settled } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -272,7 +272,7 @@ for (const width of [1440, 390]) {
     const reread = page.waitForResponse((r) => /\/diff(\?|$)/.test(new URL(r.url()).pathname + new URL(r.url()).search), { timeout: 8000 });
     await page.evaluate(() => { SP.toggle(false); SP.toggle(true); });
     await (await reread).finished();
-    await page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(r), 0))); // its redraw has run
+    await settled(page); // its redraw has run
     const reopened = await page.evaluate(() => document.querySelectorAll("#sp-body details.df[open]").length);
     if (reopened) throw new Error(`a redraw opened ${reopened} file(s) that were closed`);
     // The bar is redrawn by its parts: reopening flips "live" twice (the push stream is cut, then up again) and, beside
@@ -380,7 +380,7 @@ for (const width of [1440, 390]) {
     let reads = 0;
     const count = (req) => { if (/\/(diff|file)(\?|$)/.test(req.url())) reads++; };
     page.on("request", count);
-    await sleep(1500); // the panel polls every 300 ms in test mode: a dozen reads would show if the stream did not hold them back
+    await sleep(1500); // an intended wait: the panel polls every 300 ms in test mode: a dozen reads would show if the stream did not hold them back
     page.off("request", count);
     if (reads > 0) throw new Error(`${reads} reads while nothing changed and the push stream was up`);
     const t0 = Date.now();
@@ -436,8 +436,7 @@ for (const width of [1440, 390]) {
       await noOverflow("split diff");
       await page.screenshot({ path: `${out}/sidepanel-split-${tag}.png` });
       await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "30%"); });
-      await sleep(400);
-      if (await page.locator("#sp-body .code.split").count()) throw new Error("two columns in a narrow panel");
+      await page.waitForFunction(() => !document.querySelector("#sp-body .code.split"), null, { timeout: 4000 }).catch(() => { throw new Error("two columns in a narrow panel"); });
       await page.evaluate(() => { document.querySelector("#detail").style.setProperty("--sp-w", "70%"); });
       await page.waitForSelector("#sp-body .code.split", { timeout: 4000 });
       await page.locator("#sp-split").click(); // back to unified

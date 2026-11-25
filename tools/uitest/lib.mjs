@@ -12,7 +12,8 @@
 //   - read what you assert (text, attributes, box, computed style) in one evaluate inside the page (readInPage), not
 //     in several round trips that a redraw can land between;
 //   - click with clickStable, which waits until the element is attached, still and on top before it clicks;
-//   - wait on a condition (waitForFunction, until), never on a fixed sleep sized for a fast laptop.
+//   - wait on a condition (waitForFunction, until), or for the app to be settled (settled()), never on a fixed sleep
+//     sized for a fast laptop.
 // When a check is about a redraw under the user's finger, force the redraw (call the app's render function between
 // the press and the release, as reviewcard.mjs does) instead of hoping a poll lands there.
 import { chromium } from "playwright-core";
@@ -67,6 +68,7 @@ export async function launch({ width = 390, height = 844, dark, bypassCSP = true
       ...(dark === undefined ? {} : { colorScheme: dark ? "dark" : "light" }),
     });
   } catch (e) { release(); throw e; }
+  await ctx.addInitScript(settleFlag);
   if (serviceWorkers === "block") {
     await ctx.addInitScript(() => {
       try {
@@ -86,12 +88,30 @@ export async function launch({ width = 390, height = 844, dark, bypassCSP = true
   const browser = new Proxy(real, {
     get(t, k) {
       if (k === "close") return close;
-      if (k === "newContext") return async (...a) => { const c = await t.newContext(...a); extra.push(c); return c; };
+      if (k === "newContext") return async (...a) => { const c = await t.newContext(...a); extra.push(c); await c.addInitScript(settleFlag); return c; };
       const v = Reflect.get(t, k);
       return typeof v === "function" ? v.bind(t) : v;
     },
   });
   return { browser, ctx, page: await ctx.newPage() };
+}
+
+// The flag that turns on the app's "settled" signal (web/app.js, settle): set in every page before its scripts run.
+// Only the app's own page reads it; a Page's frame and a plain site ignore it.
+const settleFlag = () => { window.__cbSettle = 1; };
+
+// settled waits until the app says it is settled: no fetch in flight, no redraw pending, no finite animation running
+// (web/app.js, window.__cb). It resolves true then, at once when it already is; false after timeout ms (a screen that
+// never stops, an offline retry loop), so a caller can still go on and let its own assert say what is wrong. On a page
+// without the signal (not the app, or a context made outside launch()) it waits two animation frames and resolves
+// true. A navigation during the wait is waited out once. Use it in place of a sleep before a read or a click; for a
+// value that only changes with the next poll, wait on that value (waitForFunction), not on settled.
+export async function settled(page, { timeout = 5000 } = {}) {
+  const wait = () => page.evaluate((timeout) => window.__cb
+    ? window.__cb.settled(timeout)
+    : new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))), timeout);
+  try { return await wait(); }
+  catch { await page.waitForLoadState("domcontentloaded").catch(() => {}); return wait().catch(() => false); }
 }
 
 export const CATALOGS = {
@@ -179,7 +199,8 @@ export async function shotOf(page, selector, path) {
 }
 
 // readInPage finds the first element that matches selector and reads it in one evaluate inside the page, so a redraw
-// cannot land between finding it and reading it. It waits (one animation frame at a time, up to timeout ms) for the
+// cannot land between finding it and reading it. It first waits for the app to be settled (see settled(); a page that
+// does not settle in timeout ms is read anyway), then (one animation frame at a time, up to timeout ms) for the
 // element to exist. Returns null when there is none by then, else { text, attrs, box, style, connected } with:
 //   text   innerText, trimmed;
 //   attrs  { name: value or null } for each name in opts.attrs, plus "class" when asked for;
@@ -199,6 +220,8 @@ export async function readInPage(page, selector, { attrs = [], style = [], all =
       };
     };
     const end = performance.now() + timeout;
+    // settled first (within the same timeout), so what is read is not a frame from the middle of a redraw
+    if (window.__cb) await window.__cb.settled(timeout);
     for (;;) {
       const els = [...document.querySelectorAll(selector)];
       if (els.length) return all ? els.map(read) : read(els[0]);
@@ -208,7 +231,8 @@ export async function readInPage(page, selector, { attrs = [], style = [], all =
   }, { selector, attrs, style, all, timeout });
 }
 
-// clickStable clicks the first visible element that matches selector once it is attached, has kept the same node and
+// clickStable clicks the first visible element that matches selector once the app is settled (settled(), up to 3 s a
+// try), and the element is attached, has kept the same node and
 // the same box for two animation frames, and is what the browser hits at its centre (not covered, not mid-redraw).
 // The element is found again by selector on every try, never kept as a handle across a redraw. It waits up to timeout
 // ms for that, then clicks with Playwright's own locator click (which re-resolves the selector again). opts.position
@@ -217,6 +241,7 @@ export async function clickStable(page, selector, { timeout = 8000, position, bu
   const end = Date.now() + timeout;
   let last = "";
   for (;;) {
+    await settled(page, { timeout: Math.max(100, Math.min(3000, end - Date.now())) });
     const r = await page.evaluate(async (selector) => {
       const frame = () => new Promise((res) => requestAnimationFrame(() => res()));
       const pick = () => [...document.querySelectorAll(selector)].find((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");

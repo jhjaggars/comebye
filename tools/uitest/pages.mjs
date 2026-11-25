@@ -9,7 +9,7 @@
 // the attacks are broken.
 //
 //   node pages.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR)
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -144,8 +144,8 @@ let popups = 0;
 desktop.ctx.on("page", () => { popups++; });
 const frameOf = (id) => page.frames().find((f) => f.url().includes("/p/" + id));
 // waitFrame: the frame of page `id` in pg, once its iframe exists and has navigated to the page (a condition, not a poll loop with sleeps).
-// settle: two animation frames in pg, then no finite CSS transition or animation still running (not a timer).
-const settle = async (pg) => { await pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await pg.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); };
+// settle: the app settled in pg (lib.mjs: no fetch in flight, no redraw pending, no finite animation running).
+const settle = (pg) => settled(pg); // lib.mjs
 const waitFrame = async (id, pg = page) => {
   const h = await pg.waitForSelector(`iframe[src*="/p/${id}"]`, { state: "attached", timeout: 8000 }).catch(() => null);
   const f = h && (await h.contentFrame());

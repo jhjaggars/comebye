@@ -4,12 +4,12 @@
 // mode; the menu is keyboard reachable and a bottom sheet on a phone; nothing overflows at 390, 1280 and 3440, light and dark.
 //
 //   node groupby.mjs BASE OUT_DIR
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 
 const [base, out] = process.argv.slice(2);
 const results = [];
 // idle: two frames, then no CSS transition or animation still running (a sheet has slid in, a pull has sprung back), not a timer.
-const idle = async (page) => { await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))); await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity), null, { timeout: 5000 }).catch(() => {}); };
+const idle = (page) => settled(page); // lib.mjs: no fetch in flight, no redraw pending, no finite animation running
 async function check(name, fn) {
   try { await fn(); results.push(true); console.log("ok   " + name); }
   catch (e) { results.push(false); console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     ")); }

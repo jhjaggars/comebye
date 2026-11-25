@@ -4,7 +4,7 @@
 // check is what the app sends, shows and opens.
 //
 //   node pagechat.mjs BASE OUT_DIR       (env: COMEBYE_BIN, COMEBYE_STATE_DIR, SCHEME)
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -58,7 +58,7 @@ for (const width of [1280, 390]) {
   const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
   // until(fn, arg): poll fn in the page (page.evaluate: this page's CSP refuses the string eval that page.waitForFunction does), a frame apart, up to 5 s.
   const until = async (fn, arg) => { const end = Date.now() + 5000; while (Date.now() < end) { if (await page.evaluate(fn, arg)) return true; await frames(); } return false; };
-  const settle = async () => { await frames(); await until(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity)); };
+  const settle = () => settled(page); // lib.mjs: no fetch in flight, no redraw pending, no finite animation running
   // Conditions on what the page has sent and said, not a pause: the tap's POST has been seen / the toast reads as wanted.
   const waitPosts = async (n) => { const end = Date.now() + 5000; while (posts.length < n && Date.now() < end) await frames(); };
   const waitToast = (re) => until((src) => new RegExp(src[0], src[1]).test((document.querySelector("#toast")?.textContent || "").trim()), [re.source, re.flags]);

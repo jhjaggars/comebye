@@ -8,7 +8,7 @@
 //   - at 1280 px, where the list and the detail stand side by side, no row is marked.
 //
 //   node returnmark.mjs BASE OUT_DIR      (env: SCHEME; COMEBYE_BIN + COMEBYE_STATE_DIR to publish a page for Pages)
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,6 +55,7 @@ const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touch
 // find it. Found, scrolled and measured in one evaluate: the agent list redraws its rows on its polls, and a handle taken
 // in one call can be detached by the next.
 async function tap(sel) {
+  await settled(page); // not while the list is redrawn or moving: the finger would land on its neighbour
   const b = await page.evaluate(async (sel) => {
     for (let i = 0; i < 300; i++) {
       const el = [...document.querySelectorAll(sel)].find((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");
@@ -126,7 +127,7 @@ async function openAndBack(id, back) {
   for (let i = 0; ; i++) {
     await tap(rowSel(id));
     await page.waitForSelector("#detail", { state: "visible" });
-    await page.waitForTimeout(250);
+    await settled(page);
     // The list can move between finding the row and the touch (a redraw when the hub answers), so the finger lands on
     // its neighbour. That opens the neighbour (and marks it on the way back, rightly): go back and touch again.
     if (await page.evaluate((id) => state.selected === id, id)) break;
@@ -134,7 +135,7 @@ async function openAndBack(id, back) {
     console.log("     (the list moved under the touch: once more)");
     await page.goBack();
     await page.waitForSelector(rowSel(id), { state: "visible" });
-    await page.waitForTimeout(1200); // let that mark run out
+    await clears().catch(() => {}); await settled(page); // let that mark run out
   }
   assert(!(await marks()).length, "a row is marked while the detail is open");
   await watch();
@@ -153,6 +154,7 @@ for (const [how, back] of [["the app's Back", () => tap("#back")], ["the browser
   await check(`agents, ${how}: the row you opened is marked, the scroll position kept, then the mark clears`, async () => {
     await page.evaluate(() => { scrollTo(0, 0); });
     await page.evaluate((sel) => { const el = document.querySelector(sel); const r = el.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: "center" }); }, rowSel(pick));
+    await settled(page); // measured once nothing is redrawing or scrolling
     const y0 = await scrollY(), top0 = await rowTop(pick);
     await openAndBack(pick, back);
     const m = await marked(pick);
@@ -189,7 +191,7 @@ await check("agents: a re-render or a poll during the mark keeps one mark, and o
   await clears();
   await watch();
   await page.evaluate(() => { document.getElementById("agents").innerHTML = ""; renderList(); });
-  await page.waitForTimeout(2200); // a real poll or two
+  await page.waitForTimeout(2200); // an intended wait: a real poll or two, and nothing may mark
   assert(!(await seen()).length, "marked again after a re-render: " + JSON.stringify(await seen()));
 });
 
@@ -232,8 +234,8 @@ await check("agents: a tap that never leaves the list marks nothing (a group hea
   await watch();
   const h = await page.$("#agents button.proj-head");
   assert(h, "no group header");
-  await tap("#agents button.proj-head"); await page.waitForTimeout(300); await tap("#agents button.proj-head");
-  await page.waitForTimeout(1200);
+  await tap("#agents button.proj-head"); await tap("#agents button.proj-head"); // tap() waits for the list to settle
+  await page.waitForTimeout(1200); // an intended wait: a mark would show by now
   assert(!(await seen()).length, "marked: " + JSON.stringify(await seen()));
 });
 
@@ -245,7 +247,7 @@ await check("palette: back from a step marks the command you came from", async (
   await page.waitForSelector("#palette:not([hidden]) .pal-it[data-key='k:a-int']", { state: "visible" });
   await tap("#pal-list .pal-it[data-key='k:a-int']");
   await page.waitForSelector("#pal-list .pal-it[data-key='c:Cancel']", { state: "visible" });
-  await page.waitForTimeout(200);
+  await settled(page);
   await watch();
   await tap("#pal-list .pal-it[data-key='c:Cancel']");
   await page.waitForSelector("#pal-list .pal-it[data-key='k:a-int']", { state: "visible" });
@@ -257,17 +259,17 @@ await check("palette: back from a step marks the command you came from", async (
   // Closing the palette from a step forgets the command: opening the palette again marks nothing.
   await tap("#pal-list .pal-it[data-key='k:a-int']");
   await page.waitForSelector("#pal-list .pal-it[data-key='c:Cancel']", { state: "visible" });
-  await page.waitForTimeout(200);
+  await settled(page);
   await page.keyboard.press("Escape"); // back a step with the keyboard: marked as well
   await markAppears();
   assert((await marks()).map((x) => x.id).join() === "k:a-int", "Esc back: marked " + JSON.stringify(await marks()));
   await page.keyboard.press("Escape"); // closed during the mark
   await page.waitForSelector("#palette", { state: "hidden" });
-  await page.waitForTimeout(100);
+  await settled(page);
   await watch();
   await page.keyboard.press("Control+k");
   await page.waitForSelector("#pal-list .pal-it[data-key='k:a-int']", { state: "attached" });
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1200); // an intended wait: a mark would show by now
   assert(!(await seen()).length, "reopening the palette marked: " + JSON.stringify(await seen()));
   await page.keyboard.press("Escape");
 });
@@ -282,11 +284,11 @@ if (haveCli) {
     await watch();
     await tap(row);
     await page.waitForSelector(`#todo .td-item[data-id="${id}"].open .td-open:not([aria-disabled])`, { state: "visible" });
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1200); // an intended wait: a mark would show by now
     assert(!(await seen()).length, "opening in place marked: " + JSON.stringify(await seen()));
     await tap(`#todo .td-item[data-id="${id}"] .td-open`);
     await page.waitForSelector("#detail", { state: "visible" });
-    await page.waitForTimeout(300);
+    await settled(page);
     await tap("#back");
     await page.waitForSelector(row, { state: "visible" });
     await markAppears();
@@ -304,7 +306,7 @@ await check("Peers: back from a host marks its card", async () => {
   if (!name) { console.log("     (no peer cards here: skipped)"); return; }
   await tap(`.pr-card[data-name="${name}"]`);
   await page.waitForSelector("#pr-back", { state: "visible" });
-  await page.waitForTimeout(400);
+  await settled(page);
   assert(!(await marks()).length, "marked while the host is open");
   await tap("#pr-back");
   await page.waitForSelector(`.pr-card[data-name="${name}"]`, { state: "visible" });
@@ -323,7 +325,7 @@ if (haveCli) {
     await tap(`.pgs-card[data-id="${id}"]`);
     const back = page.locator("#pgs-back, #pgs-vback").locator("visible=true").first();
     await back.waitFor();
-    await page.waitForTimeout(400);
+    await settled(page);
     await watch();
     await tap("#pgs-back, #pgs-vback");
     await page.waitForSelector(`.pgs-card[data-id="${id}"]`, { state: "visible" });
@@ -343,7 +345,7 @@ await check("1280 px: opening a row beside the list and going back marks nothing
   await page.waitForSelector(rowSel(ids[1]) + ".selected");
   await watch();
   await page.goBack();
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1200); // an intended wait: a mark would show by now
   assert(!(await seen()).length, "marked: " + JSON.stringify(await seen()));
 });
 

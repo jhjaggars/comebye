@@ -6,7 +6,7 @@
 // and badges read on --nav-bg in all 15 themes.
 //
 //   node leftnav.mjs BASE OUT_DIR
-import { launch } from "./lib.mjs";
+import { launch, settled } from "./lib.mjs";
 import fs from "node:fs"; import vm from "node:vm"; import path from "node:path"; import { fileURLToPath } from "node:url";
 
 const [base, out] = process.argv.slice(2);
@@ -52,7 +52,7 @@ async function open(width, dark) {
     todos.on = true; todos.open = 3; ledger.on = true;
     ledger.marked = new Set(["a", "b", "c", "d", "e"]); renderList(); renderNav(); renderFleetMenu();
   }, fleet());
-  await page.waitForTimeout(200);
+  await settled(page);
   return { browser, page, errs };
 }
 

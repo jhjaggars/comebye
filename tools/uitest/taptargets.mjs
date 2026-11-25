@@ -13,7 +13,7 @@
 //
 //   node taptargets.mjs BASE OUT_DIR      (env: SCHEME; COMEBYE_BIN + COMEBYE_STATE_DIR to publish pages for the
 //                                          Pages screen; TAPTARGETS_DUMP=FILE writes what was measured as JSON)
-import { launch, clickStable } from "./lib.mjs";
+import { launch, clickStable, settled as settledApp } from "./lib.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -148,8 +148,8 @@ function verdict(ms, vw, vh) {
   return why;
 }
 
-// settled: every finite animation (a sheet sliding in, a fade) has ended; spinners and skeletons that loop don't count.
-const settled = (page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().endTime === Infinity), null, { timeout: 5000 });
+// settled: every finite animation (a sheet sliding in, a fade) has ended, and no fetch or redraw is pending.
+const settled = (page) => settledApp(page); // lib.mjs: no fetch in flight, no redraw pending, no finite animation running
 
 // ---- screens ----
 // Each: [name, hash, ready selector, setup?, scope?]. setup runs after the screen is ready (a sheet opened, a tab
