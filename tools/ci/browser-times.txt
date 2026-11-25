@@ -31,6 +31,7 @@ tododeeplink 17
 provision 16
 restart 16
 signin 16
+taptargets 15
 depth 15
 leftnav 15
 wake 15

@@ -1237,7 +1237,7 @@
     .proj-counts .run { color: var(--blue); }
     .proj-body[hidden] { display: none; }
     .agent.worker { margin-left: 18px; position: relative; }
-    .agent.worker::before { content: ""; position: absolute; left: -12px; top: -11px; bottom: 50%; width: 8px;
+    .agent.worker::before { content: ""; position: absolute; pointer-events: none; left: -12px; top: -11px; bottom: 50%; width: 8px;
       border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); border-bottom-left-radius: var(--r-6); }
     .lg-chip { flex: none; }
     .lg-chip.finished { background: var(--chip-finished); color: var(--purple); }
@@ -3192,6 +3192,37 @@
       :root:not([data-depth="flat"]) :is(.pr-tabs button, #sp .sp-tab)[aria-selected="true"] { border-bottom-color: var(--blue); }
       :root:not([data-depth="flat"]) :is(.agent.blocked, .rl-card.rl-attn, .hub-strip) { --grad: none; }
       :root:not([data-depth="flat"]) :is(.dot.working, .dot.blocked) { background-image: none; }
+    }
+
+    /* Tap targets (issue 135, slice 4). On a touch screen every tappable thing answers to at least 44 x 44 (Apple's 44 pt).
+       Where the drawn control must keep its size (the list's filter rows, chips, Copy, Retry), an invisible ::before
+       hit box grows it to 44: up and down evenly (top/bottom min(0, 50% - 22px), against the button's own height), and
+       to the left (left min(0, 100% - 44px)), never past its right edge, which would scroll sideways. So a 36-tall chip
+       reaches 4px up and down, a 30 x 30 button 7px up and down and 14px left, and one 44 or bigger gets nothing. The press
+       layer and the return mark are backgrounds of the button, so they still cover only what is drawn. Where nothing
+       crowds (palette rows, the side panel's bar, sheet buttons), the control itself is 44. A mouse matches none of
+       this: the desktop is unchanged. tools/uitest/taptargets.mjs measures every visible tappable thing on the main
+       screens by hit-testing, and checks that no two hit boxes overlap. */
+    @media (pointer: coarse) {
+      :root { --tap-hit: var(--hit-44); }
+      :is(.hp-btn, .gb-btn, .lf-tab, .proj-head, .cpb, .rel-refresh, .hub-strip .hs-retry, .ar-seg button, .pgs-chip, .tr-log, .prompt :is(.attach, .send, .stt-mic), .td-acts button) { position: relative; }
+      :is(.hp-btn, .gb-btn, .lf-tab, .proj-head, .cpb, .rel-refresh, .hub-strip .hs-retry, .ar-seg button, .pgs-chip, .tr-log, .prompt :is(.attach, .send, .stt-mic), .td-acts button)::before {
+        content: ""; position: absolute; top: min(0px, calc(50% - var(--tap-hit) / 2)); bottom: min(0px, calc(50% - var(--tap-hit) / 2));
+        /* Sideways it grows to the left only: past the right edge it would make the control (and its row) scroll sideways. */
+        right: 0; left: min(0px, calc(100% - var(--tap-hit)));
+      }
+      /* The list header's icons: 44 wide, side by side. The count beside the name gives way first (the filter tabs say
+         the same). Six need 390px: on a narrower phone (375, 360) the quick theme switch goes, and is Theme in the ⋮ menu. */
+      @media (max-width: 480px) { #list header .bell:not(#btn-fleet) { min-width: var(--tap-hit); } }
+      @media (max-width: 389px) { #list header #btn-theme-q { display: none; } }
+      .pal-it, #sp .sp-bar :is(select, button), .pgs-seg button, .empty button.empty-act, .tds-none button, .st details > summary, .hf-chip { min-height: var(--tap-hit); }
+      .pgs-seg button, .pop .pop-x, .hf-chip { min-width: var(--tap-hit); min-height: var(--tap-hit); }
+      /* A text field can't have a ::before, so the list's filter and the palette's search are 44 tall themselves. */
+      .lf-q, #pal-q { min-height: var(--tap-hit); }
+      .lf-q { padding-right: var(--tap-hit); }
+      .lf-x { width: var(--tap-hit); height: var(--tap-hit); }
+      /* The offline strip is as tall as its Retry's hit box, so that doesn't reach into the header's icons. */
+      .hub-strip { min-height: var(--tap-hit); padding-top: 0; padding-bottom: 0; }
     }
   </style>
 </head>

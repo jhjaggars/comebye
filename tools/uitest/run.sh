@@ -193,6 +193,11 @@ if want returnmark; then
   fixture_hub retmark 281
   COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-retmark" node returnmark.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
 fi
+# Tap targets (#135): on a touch screen every tappable thing has a 44x44 hit box and none overlap; a mouse sees no change.
+if want taptargets; then
+  fixture_hub taptgt 282
+  COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-taptgt" node taptargets.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
+fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
