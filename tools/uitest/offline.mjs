@@ -3,6 +3,7 @@
 // "Nothing is waiting on you"; after 10 s, or at once when the connection is reset, "Can't reach the hub" with Try again;
 // Try again recovers when the hub is back; a failed poll keeps a list already loaded; no raw "Failed to fetch"; and the
 // real empty states still show when the hub truly answers "none". Phone (390) and desktop (1280).
+// Slice 3 (phase3): actions while offline are disabled with the reason, drafts stay, the actions come back, To do ages freeze.
 // Slice 2 (phase2): the offline strip ("Offline · list from 12 min ago · Retry"), its age, Retry, its folding away when
 // the link is back, old rows marked (and live ones not), the side panel bar, and Usage's waiting and failed states.
 //
@@ -273,7 +274,7 @@ async function phase2(width) {
       await page.context().setOffline(true);
       await page.waitForFunction(() => !document.getElementById("hub-strip")?.hidden && document.getElementById("hub-strip")?.dataset.kind === "offline", null, { timeout: 3000 });
       const t = await stripText(page);
-      if (!/^Offline · (list|status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
+      if (!/^Offline · (list|status|list and status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
       // It sits right under the header of the screen in front.
       const under = await page.evaluate(() => { const e = document.getElementById("hub-strip"); return e.previousElementSibling && e.previousElementSibling.tagName; });
       if (under !== "HEADER") throw new Error("the strip is not under a header: after " + under);
@@ -284,9 +285,9 @@ async function phase2(width) {
       await page.screenshot({ path: `${out}/offline-strip-${tag}.png` });
       // The age counts.
       await page.clock.fastForward("12:00");
-      await page.waitForFunction(() => /(list|status) from 12 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
+      await page.waitForFunction(() => /(list|status|list and status) from 12 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.clock.fastForward("02:00");
-      await page.waitForFunction(() => /(list|status) from 14 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
+      await page.waitForFunction(() => /(list|status|list and status) from 14 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.screenshot({ path: `${out}/offline-strip-12min-${tag}.png` });
       // Back online: "Updated", then no strip and no old marking.
       await page.context().setOffline(false);
@@ -311,7 +312,7 @@ async function phase2(width) {
       if ((await rowState(page)).stale) throw new Error("rows marked old during a blip");
       await page.waitForFunction(() => document.getElementById("hub-strip")?.dataset.kind === "down", null, { timeout: 7000 });
       const t = await stripText(page);
-      if (!/^Can.t reach the hub · (list|status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
+      if (!/^Can.t reach the hub · (list|status|list and status) from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
       if (!(await rowState(page)).stale) throw new Error("rows not marked old");
       // Retry while the hub is still out: it tries, and the strip stays.
       await page.click("#hub-strip .hs-retry");
@@ -406,8 +407,234 @@ async function phase2(width) {
   });
 }
 
-for (const w of [390, 1280]) await phase(w);
-for (const w of [390, 1280]) await phase2(w);
+// Slice 3 (phase3): actions while offline. Every write to the hub is shown as unavailable with the reason (not left
+// to fail), what was typed stays (the composer, a to-do's answer box), and the actions come back without a reload.
+// The To do ages freeze while its list is old, and count again with a fresh answer.
+const J = { "Content-Type": "application/json" };
+async function fileTodo(q) {
+  const r = await fetch(base + "/api/todos", { method: "POST", headers: J, body: JSON.stringify({ question: q, kind: "decision", no_wait: true, options: [{ label: "Yes" }, { label: "No" }] }) });
+  const d = await r.json();
+  if (!d.todo || !d.todo.id) throw new Error("could not file a to-do: " + JSON.stringify(d));
+  return d.todo.id;
+}
+const todoState = async (id) => (await fetch(base + "/api/todos/" + id).then((r) => r.json())).todo;
+// gated: every write action in the document (hidden menus too) carries the reason; and how many there are.
+const gated = (page) => page.evaluate(() => {
+  const all = [...document.querySelectorAll(HUB_WRITE_SEL)];
+  const bad = all.filter((e) => e.getAttribute("aria-disabled") !== "true" || !e.title || e.dataset.hubOff !== e.title).map((e) => e.id || e.className || e.outerHTML.slice(0, 60));
+  return { n: all.length, bad, left: document.querySelectorAll("[data-hub-off]").length };
+});
+const ungated = (page) => page.waitForFunction(() => !document.querySelector("[data-hub-off], .hub-off-note") && !document.documentElement.classList.contains("hub-off"), null, { timeout: 8000 });
+// offline / online: the device goes offline, as a real drop does: Chrome's emulation leaves an open event stream
+// running (a live event counts as the hub being there), so the stream is cut too, and comes back with the link.
+async function offline(page) { await reset(page); await page.context().setOffline(true); await page.evaluate(() => connectEvents()); }
+async function online(page) { await page.unroute(API); await page.context().setOffline(false); }
+const goOff = (page) => page.waitForFunction(() => document.documentElement.classList.contains("hub-off") && document.querySelector("[data-hub-off]"), null, { timeout: 5000 });
+
+async function phase3(width) {
+  const desk = width > 500, tag = desk ? "desktop" : "phone";
+  const open = async (clock) => {
+    const { browser, page } = await launch({ width, height: desk ? 800 : 844, dark });
+    if (clock) await page.clock.install();
+    return { browser, page };
+  };
+  const listSel = desk ? "#pt-body" : "#todo";
+  // openTodo: the item's panel is open (the phone's card under its toggle, the desktop's To do page).
+  async function openTodo(page, id) {
+    await page.goto(base + (desk ? "/#/todo" : "/"));
+    await waitLive(page);
+    if (!desk) {
+      await page.waitForSelector("#todo .td-toggle", { state: "visible", timeout: 10000 });
+      if ((await page.locator("#todo .td-toggle").getAttribute("aria-expanded")) === "false") await page.locator("#todo .td-toggle").click();
+    }
+    await page.waitForSelector(`${listSel} .td-item[data-id="${id}"] .td-row`, { state: "visible", timeout: 10000 });
+    if (!(await page.locator(`${listSel} .td-item.open[data-id="${id}"]`).count())) await page.locator(`${listSel} .td-item[data-id="${id}"] .td-row`).click();
+    await page.waitForSelector(`${listSel} .td-item.open[data-id="${id}"] .td-text`, { state: "visible", timeout: 5000 });
+  }
+
+  await check(`${tag}: offline, the composer's Send and the agent's actions are disabled with the reason; the draft stays and Send comes back`, async () => {
+    const { browser, page } = await open();
+    try {
+      const posts = [];
+      page.on("request", (r) => { if (r.method() !== "GET" && /\/(prompt|keys)(\?|$)/.test(r.url())) posts.push(r.url()); });
+      await page.goto(base + "/");
+      await waitLive(page);
+      const id = await page.evaluate(() => { const a = state.agents.find((x) => x.agent_status !== "working") || state.agents[0]; return agentId(a); });
+      await page.evaluate((x) => openDetail(x), id);
+      await page.waitForSelector("#prompt-text", { state: "visible", timeout: 8000 });
+      await page.click("#prompt-text");
+      await page.keyboard.type("composer draft");
+      if ((await page.evaluate(() => promptValue())) !== "composer draft") throw new Error("could not type in the composer");
+      if ((await gated(page)).left) throw new Error("actions marked while live");
+      await offline(page);
+      await goOff(page);
+      const g = await gated(page);
+      if (g.bad.length) throw new Error(`${g.bad.length} of ${g.n} write actions are not disabled with a reason: ${g.bad.slice(0, 6).join(" | ")}`);
+      const send = await page.evaluate(() => { const b = $("btn-send"); return [b.getAttribute("aria-disabled"), b.title]; });
+      if (send[0] !== "true" || !/^Offline: this needs the hub/.test(send[1])) throw new Error("Send: " + JSON.stringify(send));
+      // The agent's dialog card (the fixture's first agent is blocked at one) sends keys: its choices are disabled too.
+      const card = await page.evaluate(() => [...document.querySelectorAll("#answer button.opt, #answer .pad button")].map((b) => b.getAttribute("aria-disabled")));
+      if (card.some((x) => x !== "true")) throw new Error("dialog card buttons not disabled: " + JSON.stringify(card));
+      for (const sel of ["#d-mark", "#d-role", "#attach-pick", "#attach-keys"]) {
+        if ((await page.getAttribute(sel, "aria-disabled")) !== "true") throw new Error(sel + " is not disabled");
+      }
+      const note = await textOf(page, "main .hub-off-note");
+      if (!/Offline: this needs the hub\. Your message stays here/.test(note)) throw new Error("no note under the composer: " + JSON.stringify(note));
+      await page.screenshot({ path: `${out}/offline-actions-composer-${tag}.png` });
+      // Neither a tap nor Enter sends: the text stays, and the tap says why. (Playwright itself will not click an
+      // aria-disabled button: force is the tap a person can still make.)
+      await page.click("#btn-send", { force: true });
+      if (!/Offline: this needs the hub/.test(await page.evaluate(() => $("toast").textContent))) throw new Error("a tap on Send does not say why");
+      // (The toast saying why sits over the composer; focus it directly, the caret at the end.)
+      await page.evaluate(() => { const e = $("prompt-text"); e.focus(); const r = document.createRange(); r.selectNodeContents(e); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r); });
+      await page.keyboard.press("Enter");
+      await sleep(300);
+      if ((await page.evaluate(() => promptValue())) !== "composer draft") throw new Error("the draft is gone: " + JSON.stringify(await page.evaluate(() => promptValue())));
+      if (posts.length) throw new Error("sent while offline: " + posts.join(", "));
+      // Back: the actions come back by themselves (no reload), the draft is still there, and Send sends it.
+      await online(page);
+      await ungated(page);
+      if ((await page.evaluate(() => promptValue())) !== "composer draft") throw new Error("the draft is gone after the drop");
+      const back = await page.evaluate(() => { const b = $("btn-send"); return [b.getAttribute("aria-disabled"), b.title]; });
+      if (back[0] || back[1]) throw new Error("Send keeps its offline marking: " + JSON.stringify(back));
+      await page.click("#btn-send");
+      await page.waitForFunction(() => !promptValue(), null, { timeout: 5000 });
+      for (const end = Date.now() + 5000; !posts.length && Date.now() < end; ) await sleep(100);
+      if (!posts.length) throw new Error("Send did not send once the hub was back");
+    } finally { await browser.close(); }
+  });
+
+  await check(`${tag}: can't reach the hub: Send says so too, and comes back with Retry`, async () => {
+    const { browser, page } = await open();
+    try {
+      await page.goto(base + "/");
+      await waitLive(page);
+      await page.evaluate(() => openDetail(agentId(state.agents[0])));
+      await page.waitForSelector("#prompt-text", { state: "visible", timeout: 8000 });
+      await cut(page);
+      await sleep(3000);
+      if (await page.evaluate(() => $("btn-send").dataset.hubOff)) throw new Error("Send disabled during a blip");
+      await page.waitForFunction(() => document.getElementById("hub-strip")?.dataset.kind === "down", null, { timeout: 7000 });
+      await goOff(page);
+      const t = await page.getAttribute("#btn-send", "title");
+      if (!/^Can.t reach the hub: this needs it/.test(t || "")) throw new Error("Send's reason: " + JSON.stringify(t));
+      await page.unroute(API);
+      await page.click("#hub-strip .hs-retry");
+      await ungated(page);
+    } finally { await browser.close(); }
+  });
+
+  await check(`${tag}: offline, a to-do's Answer, choices, Done and Drop are disabled with the reason; the typed answer stays and is sent once back`, async () => {
+    const id = await fileTodo(`Offline answer ${tag} ${Date.now()}`);
+    const { browser, page } = await open();
+    try {
+      await openTodo(page, id);
+      const box = `${listSel} .td-item.open[data-id="${id}"] .td-text`;
+      await page.fill(box, "todo draft");
+      await offline(page);
+      await goOff(page);
+      const it = `${listSel} .td-item.open[data-id="${id}"]`;
+      for (const sel of [".td-answer-btn", '.td-opt[data-n="1"]', ".td-done", ".td-drop"]) {
+        const a = await page.evaluate((s) => { const e = document.querySelector(s); return e && [e.getAttribute("aria-disabled"), e.title]; }, `${it} ${sel}`);
+        if (!a || a[0] !== "true" || !/^Offline: this needs the hub/.test(a[1])) throw new Error(`${sel}: ${JSON.stringify(a)}`);
+      }
+      const g = await gated(page);
+      if (g.bad.length) throw new Error(`${g.bad.length} of ${g.n} write actions are not disabled: ${g.bad.slice(0, 6).join(" | ")}`);
+      if (!/Your answer stays here/.test(await textOf(page, `${it} .hub-off-note`))) throw new Error("no note under the to-do's buttons");
+      // The box still takes typing; a choice, Answer and Enter send nothing.
+      await page.click(box);
+      await page.keyboard.press("End");
+      await page.keyboard.type(" more");
+      // The list is not redrawn while the box has focus, but its ages still stop counting.
+      const counting = await page.evaluate((s) => [...document.querySelectorAll(s + " .td-age[data-at]")].filter((e) => !/^at /.test(e.textContent)).length, listSel);
+      if (counting) throw new Error(counting + " To do ages still count while an answer is typed");
+      await page.click(`${it} .td-opt[data-n="1"]`, { force: true });
+      await page.click(`${it} .td-answer-btn`, { force: true });
+      await page.click(`${it} .td-done`, { force: true });
+      await sleep(500);
+      if ((await todoState(id)).state !== "open") throw new Error("the item was closed while offline");
+      if ((await page.inputValue(box)) !== "todo draft more") throw new Error("the typed answer is gone: " + JSON.stringify(await page.inputValue(box)));
+      await page.screenshot({ path: `${out}/offline-actions-todo-${tag}.png` });
+      // A redraw while offline (a new answer from elsewhere would do one) keeps the draft and the marking.
+      await page.evaluate(() => { document.activeElement && document.activeElement.blur(); renderTodos(true); });
+      await sleep(100);
+      if ((await page.inputValue(box)) !== "todo draft more") throw new Error("a redraw lost the typed answer");
+      if ((await page.getAttribute(`${it} .td-answer-btn`, "aria-disabled")) !== "true") throw new Error("a redraw lost the marking");
+      await online(page);
+      await ungated(page);
+      if ((await page.inputValue(box)) !== "todo draft more") throw new Error("the typed answer is gone after the drop");
+      await page.click(`${it} .td-answer-btn`);
+      for (const end = Date.now() + 8000; Date.now() < end && (await todoState(id)).state === "open"; ) await sleep(200);
+      const t = await todoState(id);
+      if (t.state === "open" || !t.answer || t.answer.text !== "todo draft more") throw new Error("not answered once back: " + JSON.stringify({ state: t.state, answer: t.answer }));
+    } finally { await browser.close(); }
+  });
+
+  await check(`${tag}: other screens: Releases, Pages and Status writes are disabled offline and come back`, async () => {
+    const { browser, page } = await open();
+    try {
+      await page.goto(base + "/");
+      await waitLive(page);
+      for (const hash of ["#/peers/~releases", "#/pages", "#/status"]) {
+        await page.evaluate((h) => { location.hash = h; }, hash);
+        await sleep(1200);
+        await offline(page);
+        await goOff(page);
+        await sleep(200);
+        const g = await gated(page);
+        if (g.bad.length) throw new Error(`${hash}: ${g.bad.length} of ${g.n} write actions not disabled: ${g.bad.slice(0, 6).join(" | ")}`);
+        await online(page);
+        await ungated(page);
+      }
+    } finally { await browser.close(); }
+  });
+
+  await check(`${tag}: the To do ages freeze while its list is old, and count again when it is fresh`, async () => {
+    const id = await fileTodo(`Offline ages ${tag} ${Date.now()}`);
+    const { browser, page } = await open(true);
+    try {
+      await openTodo(page, id);
+      const age = () => page.evaluate((s) => document.querySelector(s)?.textContent || "", `${listSel} .td-item[data-id="${id}"] .td-age`);
+      const live = await age();
+      if (!/^\d+[smh]$/.test(live)) throw new Error("live age: " + JSON.stringify(live));
+      await offline(page);
+      await page.waitForFunction((s) => /^at /.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 5000 });
+      const frozen = await age();
+      const asked = await textOf(page, `${listSel} .td-item.open[data-id="${id}"] .td-strip`);
+      if (desk && !/Asked\s*at /i.test(asked)) throw new Error("the panel's Asked still counts: " + JSON.stringify(asked));
+      if (/\d+[smh] ago/.test(await textOf(page, `${listSel} .td-item.open[data-id="${id}"]`))) throw new Error("an age in the open item still counts");
+      await page.clock.fastForward("12:00");
+      await page.evaluate(() => renderTodos(true));
+      if ((await age()) !== frozen) throw new Error(`the age moved while old: ${frozen} -> ${await age()}`);
+      await page.screenshot({ path: `${out}/offline-actions-ages-${tag}.png` });
+      await online(page);
+      await page.waitForFunction((s) => /^1[23]m$/.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 8000 })
+        .catch(async () => { throw new Error("the age does not count again: " + JSON.stringify(await age())); });
+      await page.clock.fastForward("02:00");
+      await page.evaluate(() => renderTodos(true));
+      if (!/^1[45]m$/.test(await age())) throw new Error("the age does not tick: " + JSON.stringify(await age()));
+    } finally { await browser.close(); }
+  });
+
+  if (desk) {
+    await check(`${tag}: the strip names the agents list beside the screen when it is old too`, async () => {
+      const { browser, page } = await open();
+      try {
+        await page.goto(base + "/#/status");
+        await waitLive(page);
+        await page.waitForFunction(() => ledgerSrc.at > 0, null, { timeout: 8000 });
+        await offline(page);
+        await page.waitForFunction(() => document.getElementById("hub-strip")?.dataset.kind === "offline", null, { timeout: 3000 });
+        const t = await stripText(page);
+        if (!/^Offline · list and status from just now Retry$/.test(t)) throw new Error("strip: " + JSON.stringify(t));
+      } finally { await browser.close(); }
+    });
+  }
+}
+
+// PHASES="3" (or "2 3") runs only those phases, for a quick look; unset runs all.
+const phases = (process.env.PHASES || "1 2 3").split(/\s+/);
+for (const [n, fn] of [["1", phase], ["2", phase2], ["3", phase3]]) if (phases.includes(n)) for (const w of [390, 1280]) await fn(w);
 const bad = results.filter((r) => !r.ok).length;
 console.log(`offline: ${results.length - bad} passed, ${bad} failed`);
 process.exit(bad ? 1 : 0);

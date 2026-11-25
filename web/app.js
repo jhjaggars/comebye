@@ -126,6 +126,13 @@ function anySignal(signals) {
 
 async function api(path, opts = {}) {
   const { timeout = API_TIMEOUT_MS, ...init } = opts;
+  // A write while the hub can't be reached is not sent (the buttons say so; this catches keys and timers too).
+  if (init.method && init.method !== "GET" && init.method !== "HEAD" && typeof hubOff === "function" && hubOff()) {
+    const n = new Error(hubOffWhy().replace(/\.$/, "") + " — not sent");
+    n.network = true;
+    n.hubOff = true;
+    throw n;
+  }
   let res;
   try {
     res = await fetch(path, {
@@ -1445,6 +1452,23 @@ function stripView() {
   const hit = best && STRIP_SRC.find(([sel]) => best.closest(sel));
   return { header: best, src: (hit && srcs.get(hit[1])) || agentsSrc, noun: hit ? hit[2] : "list" };
 }
+// todoAgesSync sets the To do ages in place, frozen or counting: a list that is not redrawn (an answer being typed
+// in it) still stops counting when it goes old.
+function todoAgesSync() {
+  const old = srcStale(todosSrc);
+  for (const e of document.querySelectorAll(".td-age[data-at], .td-asked[data-at]")) {
+    const at = Number(e.dataset.at), a = old ? frozenAt(at) : fmtAgo(at);
+    const t = e.classList.contains("td-asked") && !old ? a + " ago" : a;
+    if (e.textContent !== t) e.textContent = t;
+  }
+}
+// stripListShown: the agents list is on screen beside another (a desktop's left column, not collapsed).
+function stripListShown() {
+  const el = $("agents");
+  if (!el || el.offsetParent === null) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 1 && r.height > 1 && r.right > 0 && r.left < innerWidth;
+}
 function stripSoon() {
   if (hub.soon) return;
   hub.soon = true;
@@ -1457,6 +1481,7 @@ function stripSync() {
   if (typeof agentsSrc === "undefined") return;
   const now = Date.now();
   if (hubLost() && hub.lostAt !== hub.downAt) hub.lostAt = hub.downAt;
+  hubGateSync();
   // Old rows: plain colours, frozen times. The agents list is drawn again when that changes (its times are in the markup).
   for (const [id, name] of STALE_VIEWS) {
     const el = $(id), on = srcStale(srcs.get(name));
@@ -1464,6 +1489,9 @@ function stripSync() {
   }
   const listOld = srcStale(agentsSrc);
   if (hub.stale.get("agents") !== listOld) { hub.stale.set("agents", listOld); renderList(); }
+  // The To do list's ages ("7m") freeze while it is old, and count again with a fresh answer.
+  const todoOld = srcStale(todosSrc);
+  if (hub.stale.get("todos") !== todoOld) { hub.stale.set("todos", todoOld); if (typeof renderTodos === "function" && todos.on === true) { renderTodos(); todoAgesSync(); } }
   if (window.SP && window.SP.hubChanged) window.SP.hubChanged();
   const v = stripView(), s = v.src;
   let kind = "";
@@ -1490,7 +1518,10 @@ function stripSync() {
   } else {
     const trying = hub.tryUntil > now;
     const what = { offline: "Offline", down: "Can’t reach the hub", stuck: "Not updating", updating: "Updating…", back: "Updated" }[kind];
-    const age = kind === "back" ? "" : ` · <span class="hs-age">${esc(v.noun)} from ${esc(stripAgo(s.at))}</span>`;
+    // When the whole link is out, the agents list beside this screen (a desktop's left column) is old too: say both.
+    let noun = v.noun, from = s.at;
+    if ((kind === "offline" || kind === "down") && s !== agentsSrc && agentsSrc.at && isDesktop() && stripListShown()) { noun = "list and " + noun; from = Math.min(from, agentsSrc.at); }
+    const age = kind === "back" ? "" : ` · <span class="hs-age">${esc(noun)} from ${esc(stripAgo(from))}</span>`;
     const btn = kind === "back" || kind === "updating" ? "" : `<button type="button" class="hs-retry"${trying ? " disabled" : ""}>${trying ? "Trying…" : "Retry"}</button>`;
     const html = `<span class="hs-dot" aria-hidden="true"></span><span class="hs-text"><b>${what}</b>${age}</span>${btn}`;
     if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
@@ -1517,6 +1548,108 @@ function stripRetry() {
   refreshAgents().catch(agentsFailed);
   if (s !== agentsSrc && s.retry) s.retry();
   stripSync();
+}
+
+// ---- Actions while offline (#136 slice 3) ----
+//
+// While the strip says "Offline" or "Can't reach the hub" (hubLost), every action that writes to the hub is shown as
+// unavailable, with the reason, instead of being left to fail: its buttons get aria-disabled and a title, a tap says why,
+// and the composer and an open to-do say it in words. Nothing is queued. What is typed stays where it is (the composer,
+// a to-do's answer box), and the actions come back by themselves when the connection does. The app's own disabled
+// states are left alone: this only adds aria-disabled, and takes away only what it added.
+const HUB_WRITE_SEL = [
+  // the composer: send (and Stop), the dialog card's choices and keys, images, keys, a queued prompt's cancel
+  "#btn-send", "#answer button.opt", "#answer .pad button[data-key]", "#attach-paste", "#attach-pick", "#attach-keys", "#keypad button[data-key]", ".q-cancel",
+  // To do: answer, choices, done, drop, keep, dismiss; decision sets; reviews; approvals
+  ".td-answer-btn", ".td-opt", ".td-done", ".td-drop", ".td-keep", ".td-dismiss",
+  ".ds-opt", ".ds-use", ".ds-all", ".ds-confirm", ".ds-fix", ".rv-good", ".rv-send", ".rv-chat", ".rv-chatpick", ".ap-go", ".ap-no",
+  // Releases: Upgrade, Roll out, Deploy, Approve, Dismiss and their confirmations (Refresh and Cancel only read or close)
+  "[data-rel]:not([data-rel='refresh']):not([data-rel='cancel'])",
+  // hosts: Start, Stop, destroy, provisioning
+  "[data-wk-start]", "[data-wk-yes]", "[data-sp-stop]", "[data-sp-yes]", "[data-ph-destroy]", "[data-az-act]",
+  // an agent: mark, park, restart, fresh start, switch model, coordinator; new agents and chats
+  "#row-mark", "#row-park", "#row-restart", "#d-mark", "#d-role", "#d-fresh", "#d-model",
+  "#mk-go", "#pk-go", "#pk-rm", "#pk-pin", "#ps-go", "#rt-go", "#fs-go", "#sw-go", "#ln-go", "#cp-go",
+  // marks and removals, the sweep, the archive
+  "[data-act='unmark']", "[data-mb='unmark']", "[data-act='remove']", "[data-act='discard']", "[data-act='bulk-yes']",
+  "[data-act='reask']", "[data-act='cleanup']", "[data-act='autoundo']", "[data-act='sw-delivered']", "[data-ar]", "#rv-sweep",
+  // Pages: comments sent to the publisher, chats about a page, delete
+  "#pgs-sendc", ".pgs-cmt.sent .pgs-cmtx", "#pgs-chatmi", "#pgs-chatnew", "#pgs-chatpick", "#pgs-del",
+  // settings that the hub keeps: peers, prices, notifications
+  "#pr-save", "[data-sx='remove-go']", "form[data-sx-form] button[type='submit']", "#us-saveprices", "#us-resetprices",
+  "#notify-enable", "#notify-test", "#notify-disable",
+].join(", ");
+// Where the reason shows in words, besides the buttons: under the composer, and under an open to-do's buttons.
+const HUB_NOTE_AT = [[".prompt", "Your message stays here. Send it when the hub is back."], ["#answer .ans-opts", "Choose when the hub is back."], [".td-panel .td-acts", "Your answer stays here. Send it when the hub is back."]];
+const hubGate = { off: false, obs: null, queued: false };
+function hubOff() { return typeof agentsSrc !== "undefined" && hubLost(); }
+function hubOffWhy() {
+  return navigator.onLine === false ? "Offline: this needs the hub." : "Can’t reach the hub: this needs it.";
+}
+// hubBlocked: a write tried while the hub can't be reached is not sent; it says why instead. True when it was stopped.
+function hubBlocked() {
+  if (!hubOff()) return false;
+  toast(hubOffWhy() + " It comes back when the connection does.", true);
+  return true;
+}
+function hubGateSweep() {
+  hubGate.queued = false;
+  const off = hubGate.off, why = hubOffWhy();
+  if (off) {
+    for (const el of document.querySelectorAll(HUB_WRITE_SEL)) {
+      if (el.dataset.hubOff === why) continue;
+      if (!("hubOff" in el.dataset)) {
+        if (el.getAttribute("aria-disabled") === "true") continue; // the app's own: not ours to take back
+        el.dataset.hubTitle = el.getAttribute("title") || "";
+      }
+      el.dataset.hubOff = why;
+      el.setAttribute("aria-disabled", "true");
+      el.title = why;
+    }
+    for (const [sel, say] of HUB_NOTE_AT) {
+      for (const at of document.querySelectorAll(sel)) {
+        const n = at.nextElementSibling;
+        if (n && n.classList.contains("hub-off-note")) { if (n.textContent !== why + " " + say) n.textContent = why + " " + say; continue; }
+        const d = document.createElement("div");
+        d.className = "hub-off-note";
+        d.setAttribute("role", "note");
+        d.textContent = why + " " + say;
+        at.after(d);
+      }
+    }
+  } else {
+    for (const el of document.querySelectorAll("[data-hub-off]")) {
+      el.removeAttribute("aria-disabled");
+      if (el.dataset.hubTitle) el.title = el.dataset.hubTitle; else el.removeAttribute("title");
+      delete el.dataset.hubOff;
+      delete el.dataset.hubTitle;
+    }
+    for (const n of document.querySelectorAll(".hub-off-note")) n.remove();
+  }
+}
+// hubGateSync follows the strip: on while the hub can't be reached, off (at once, no reload) when it is back.
+function hubGateSync() {
+  const off = hubOff();
+  document.documentElement.classList.toggle("hub-off", off);
+  if (off === hubGate.off && !off) return;
+  hubGate.off = off;
+  if (off && !hubGate.obs) {
+    // Screens redrawn while offline (a to-do opened, a poll's answer) get the same marking before they are painted.
+    hubGate.obs = new MutationObserver(() => { if (!hubGate.queued) { hubGate.queued = true; queueMicrotask(hubGateSweep); } });
+    hubGate.obs.observe(document.body, { childList: true, subtree: true });
+  } else if (!off && hubGate.obs) { hubGate.obs.disconnect(); hubGate.obs = null; }
+  hubGateSweep();
+}
+// A tap on a write action while offline does nothing but say why (before the action's own handler can run).
+for (const type of ["click", "submit"]) {
+  window.addEventListener(type, (ev) => {
+    if (!hubGate.off || !ev.target || !ev.target.closest) return;
+    const el = type === "submit" ? ev.submitter : ev.target.closest(HUB_WRITE_SEL);
+    if (!el || !el.matches || !el.matches(HUB_WRITE_SEL)) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    hubBlocked();
+  }, true);
 }
 
 // srcWaitHtml is what a screen shows while it has nothing from s: skeleton rows, or, once the wait is over, why and Try again.
@@ -2467,6 +2600,7 @@ function reviewBarHtml(t) {
 async function reviewVerdict(id, verdict, item) {
   const t = todos.items.find((x) => x.id === id);
   if (!t || t.state !== "open" || todos.rvBusy.has(id)) return;
+  if (hubBlocked()) return;
   const box = item && item.querySelector(".rv-text");
   const st = todos.rv.get(id);
   const note = rsJoin(t, box ? box.value.trim() : todoDraft(id).trim(), RS_LIMIT.note);
@@ -2751,7 +2885,9 @@ function todoRelayNote(t) {
 // asPanel: only the panel, for the split review mode's side (the Page is beside it, so no row and no thumbnail).
 function todoItemHtml(t, pfx, asPanel) {
   const at = Date.parse(t.created_at);
-  const age = Number.isNaN(at) ? "" : fmtAgo(at);
+  // While the list is old its ages stop counting: "at 14:02", not a "7m" that moves on an answer that is not live.
+  const old = srcStale(todosSrc);
+  const age = Number.isNaN(at) ? "" : old ? frozenAt(at) : fmtAgo(at);
   const who = t.waiting ? t.waiting.name || t.waiting.id : "";
   const open = asPanel || todos.openId === t.id;
   const inSplit = !asPanel && rsWants(t); // the panel is in the split view, not under the row
@@ -2788,14 +2924,14 @@ function todoItemHtml(t, pfx, asPanel) {
     const a = t.answer;
     const aAt = a ? Date.parse(a.at) : NaN;
     const answered = a
-      ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : esc(fmtAgo(aAt)) + " ago"}</div>
+      ? `<div class="td-answer"><div class="td-answer-h">${esc(a.via === "relay" ? "Answer, relayed by " : "Your answer, ")}${a.via === "relay" ? esc(a.by) + " " : ""}${Number.isNaN(aAt) ? "" : old ? esc(frozenAt(aAt)) : esc(fmtAgo(aAt)) + " ago"}</div>
           <div class="td-answer-t">${renderInline(a.text)}</div>
           <div class="td-wait">${esc(todoRelayNote(t) || (t.state === "answered" && a.via === "app" ? "Waiting for the coordinator to pass it on." : ""))}</div></div>` : "";
     const nx = todos.nxt && todos.nxt !== t.id ? todos.items.find((x) => x.id === todos.nxt) : null;
     const agentId = t.waiting && t.waiting.id;
     const strip = `<div class="td-strip">
         ${who ? `<div><span class="td-sl">Waiting</span><span class="td-sv"><span class="td-adot"></span>${agentId && agentById(agentId) ? `<button type="button" class="td-agent" data-agent="${escAttr(agentId)}" title="Open ${escAttr(who)}">${esc(who)} ↗</button>` : esc(who)}${t.waiting && t.waiting.parked ? ' <span class="chip teal" title="Its pane is closed. Whatever is sent to it waits and is delivered when it is resumed.">parked</span>' : ""}</span></div>` : ""}
-        ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv">${esc(age)} ago</span></div>` : ""}
+        ${age ? `<div><span class="td-sl">Asked</span><span class="td-sv td-asked" data-at="${at}">${esc(old ? age : age + " ago")}</span></div>` : ""}
         ${links.length ? `<div><span class="td-sl">Links</span><span class="td-sv td-dlinks">${links.join("")}</span></div>` : ""}</div>`;
     const dhead = `<div class="td-dh"><div class="td-dtop"><span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span>${todoSrcChip(t)}${ans ? todoStateChip(t) : `<span class="td-chip st-open">open</span>`}</div>
         <h3 class="td-dtitle">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</h3>${strip}</div>`;
@@ -2839,7 +2975,7 @@ function todoItemHtml(t, pfx, asPanel) {
   return `<div class="td-item td-${esc(t.kind)}${ans ? " answered" : ""}${open ? " open" : ""}${todos.pend.busy(t.id) ? " sending" : ""}" data-id="${escAttr(t.id)}">
       <button type="button" class="td-row" id="${escAttr(rid)}" aria-expanded="${open}"${open && !inSplit ? ` aria-controls="${escAttr(pid)}"` : ""}>
         <span class="td-kind">${esc(TODO_KIND[t.kind] || t.kind)}</span><span class="td-q">${renderInline(t.question.replace(/\s*\n\s*/g, " "), false)}</span>${!open && !ans && todos.nxt === t.id ? `<span class="td-nx">Next up</span>` : ""}
-        <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age">${esc(age)}</span><span class="td-chips">${chips}</span></span>
+        <span class="td-rm"><span class="td-who">${esc(who)}</span><span class="td-age"${age ? ` data-at="${at}"` : ""}>${esc(age)}</span><span class="td-chips">${chips}</span></span>
         <span class="td-chev" aria-hidden="true"></span>
       </button>${panel}
     </div>`;
@@ -2996,6 +3132,7 @@ function setAcceptAll(t) {
 
 async function setSubmit(t) {
   if (todos.setBusy.has(t.id)) return;
+  if (hubBlocked()) return;
   todos.setBusy.add(t.id);
   try {
     await (todos.setQ.get(t.id) || Promise.resolve());
@@ -3161,7 +3298,7 @@ function renderTodos(force) {
     }
   } else if (!show && main) { main.innerHTML = ""; delete main.dataset.sig; }
   const folded = lsGet(TODO_FOLDED_KEY) === "1";
-  const sig = JSON.stringify([folded, todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
+  const sig = JSON.stringify([folded, srcStale(todosSrc), todos.openId, todos.ansOpen, todos.pend.busyKeys(), [...todos.drafts.keys()], [...gu].map(([k, v]) => [k, v.st, v.msg, apBusy.has(k)]),
     todos.items.map((t) => [t.id, t.state, t.updated_at, t.question, t.approval && t.approval.state, t.approval && t.approval.id, t.review && t.review.stale, t.review && t.review.route && t.review.route.state, t.page && (t.page.thumbs || []).length]), [...todos.rv], [...todos.rvBusy], pgsScheme(), rls.loadedAt]);
   // The age moves between renders; a typed answer must not be lost to one.
   const typing = (el) => el && ((el.contains(document.activeElement) && (document.activeElement.classList.contains("td-text") || document.activeElement.classList.contains("ds-text"))) || [...el.querySelectorAll(".ap-pass")].some((p) => p.value));
@@ -3258,6 +3395,7 @@ function todoReapply() {
 // behind it. On failure it comes back, open, with the draft in its box.
 async function todoAct(id, what, body, opts = {}) {
   if (todos.pend.busy(id)) return; // already on its way
+  if (hubBlocked()) return; // the typed answer stays
   const t = todos.items.find((x) => x.id === id);
   if (!t) return;
   if (opts.undoMs) flushChoiceUndo(); // one undo window at a time: an earlier one ends now
@@ -13795,6 +13933,7 @@ let sendChain = Promise.resolve();
 function sendPrompt() {
   const text = promptValue().trim();
   if (!text) return;
+  if (hubBlocked()) return; // the text stays in the box
   const cur = agentById(state.selected);
   if (state.ask && cur && cur.agent_status === "working") {
     // herdr only refuses prompts while `blocked`; an open questionnaire
@@ -14129,6 +14268,7 @@ async function attachImages(files) {
 }
 
 async function sendKeys(keys, label, btn) {
+  if (hubBlocked()) return;
   flash(btn);
   toast(label + "…"); // the tap is taken now; the confirmation replaces this
   try {
