@@ -67,6 +67,10 @@ expect "pages kit, SMOKE_MAX=100" "$o" browser_parallel true
 expect "pages kit, SMOKE_MAX=100" "$o" visual true
 expect "pages kit, SMOKE_MAX=100" "$o" scripts "pages starters"
 
+# run.sh's fixture hubs each have a port of their own (keyed and pullrefresh once shared 283).
+dup="$(grep -o 'fixture_hub [a-z]* [0-9]*' tools/uitest/run.sh | awk '{print $3}' | sort | uniq -d | tr '\n' ' ')"
+if [ -z "$dup" ]; then ok "run.sh: every fixture hub has its own port"; else bad "run.sh: fixture hubs share the port offset(s) $dup"; fi
+
 # The parts: every rest and visual script in exactly one part, for the counts CI uses and a few others.
 all="$(grep -o 'want [a-z]*;' tools/uitest/run.sh | awk '{print $2}' | tr -d ';' | sort)"
 visual="appearance depth gradients landscape shapes starters"

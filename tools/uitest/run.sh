@@ -217,7 +217,7 @@ if want vibrate; then
 fi
 # Keyed redraws (#139 slice 4): a poll patches the agent list, so a row stays the same element; focus, scroll and a press across a redraw hold.
 if want keyed; then
-  fixture_hub keyed 283
+  fixture_hub keyed 284
   node keyed.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
 fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
