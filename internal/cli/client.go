@@ -118,7 +118,12 @@ func newClient(e *Env) (*client, error) {
 			// The local server never redirects; a redirect would carry the
 			// token somewhere else.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-			Transport:     &http.Transport{Proxy: nil},
+			// A fresh connection per call: a kept-alive one to a server that
+			// has since restarted takes the next request and then fails
+			// after it was written, which do may not resend for a POST.
+			// Dialled afresh, a restart is a refused connection, always safe
+			// to retry. Calls are few and local, so the dial costs nothing.
+			Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
 		}
 	}
 	return c, nil
