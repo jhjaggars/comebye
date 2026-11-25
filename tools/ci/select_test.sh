@@ -39,7 +39,7 @@ expect "one script" "$o" go_shards 1
 
 # The side panel's five scripts (offline and saved alone are nearly 4 minutes): the parallel jobs.
 o="$(sel web/sidepanel.js)"
-expect "side panel" "$o" scripts "sidepanel statussplit pagessplit offline saved"
+expect "side panel" "$o" scripts "sidepanel statussplit pagessplit offline saved shell"
 expect "side panel" "$o" browser_parallel true
 expect "side panel" "$o" visual false
 
