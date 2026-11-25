@@ -28,6 +28,8 @@ async function check(name, fn) {
   catch (e) {
     failed++; console.log("FAIL " + name + "\n     " + String(e.message).split("\n").join("\n     "));
     await page.screenshot({ path: path.join(out, `returnmark-fail-${tag}-${failed}.png`) }).catch(() => {});
+    // Start the next check on a fresh list, so one failure cannot leave a detail open under the ones after it.
+    await page.goto("about:blank").then(() => page.goto(base + "/", { waitUntil: "load" })).then(() => page.waitForSelector("#agents .agent[data-id]")).catch(() => {});
   }
 }
 const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
@@ -120,9 +122,19 @@ const scrollY = () => page.evaluate(() => Math.round(document.scrollingElement.s
 
 // openAndBack: tap the row, wait for the detail, come back with back(); return the scroll position before and after.
 async function openAndBack(id, back) {
-  await tap(rowSel(id));
-  await page.waitForSelector("#detail", { state: "visible" });
-  await page.waitForTimeout(250);
+  for (let i = 0; ; i++) {
+    await tap(rowSel(id));
+    await page.waitForSelector("#detail", { state: "visible" });
+    await page.waitForTimeout(250);
+    // The list can move between finding the row and the touch (a redraw when the hub answers), so the finger lands on
+    // its neighbour. That opens the neighbour (and marks it on the way back, rightly): go back and touch again.
+    if (await page.evaluate((id) => state.selected === id, id)) break;
+    if (i) throw new Error(`the tap opened ${await page.evaluate(() => state.selected)}, not ${id}`);
+    console.log("     (the list moved under the touch: once more)");
+    await page.goBack();
+    await page.waitForSelector(rowSel(id), { state: "visible" });
+    await page.waitForTimeout(1200); // let that mark run out
+  }
   assert(!(await marks()).length, "a row is marked while the detail is open");
   await watch();
   await back();
