@@ -17129,6 +17129,16 @@ window.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pageshow", (ev) => { if (ev.persisted) checkVersion(); });
 });
 
+// iOS's blur at the top of the screen (index.html, "#detail header"): the agent's header is the solid bar iOS takes the
+// status bar's colour from, so the blur stays off the header. With the keyboard out, iOS pans the page and the header
+// leaves the screen: then html.vv-panned drops the header as that bar, and the blur lies over the messages as before.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const pan = () => document.documentElement.classList.toggle("vv-panned", vv.offsetTop > 0.5);
+  vv.addEventListener("scroll", pan);
+  vv.addEventListener("resize", pan);
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   renderList();
   renderTodos(); // the phone's To do card says it is waiting, rather than nothing

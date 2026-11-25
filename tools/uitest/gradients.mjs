@@ -9,7 +9,9 @@
 // rules are back. The top fade (pixels, at 390x844 and 844x390, light and dark): on the list, To do, Pages, Status,
 // Peers and Settings the band under the top bars is the same with every pseudo-element hidden (nothing is drawn over
 // the screen's real colours); in a conversation a message at rest is the same too, and one scrolled under the header
-// is faded.
+// is faded. The top edge (same sizes and themes): on each of those screens and in a conversation, WebKit's rule for
+// iOS's status-bar blur (topEdge, below) finds a solid bar to take its colour from, and the conversation's header
+// (its name, subtitle, ← and ⋮) is the same with every pseudo-element and view-transition name off.
 //
 //   node gradients.mjs BASE OUT_DIR
 import { launch } from "./lib.mjs";
@@ -216,10 +218,59 @@ const barBottom = (page) => page.evaluate(() => {
   }
   return Math.ceil(y);
 });
+// iOS 26's top edge (the Liquid Glass scroll edge effect) in an installed web app: it blurs the status bar and about
+// 40pt under it, over whatever is there (a chat header's agent name, v0.5.59), unless WebKit finds a "fixed container"
+// at the top edge to take a solid colour from (WebCore LocalFrameView::fixedContainerEdges). Only a real iPhone draws
+// the blur, so this replays WebKit's rule in the page:
+//   - hit-test 4px under the middle of the top edge (pointer-events ignored, as WebKit's first pass does);
+//   - walk up from the hit element; the container is the first position: fixed or sticky box at least 90% of the
+//     viewport's width and not more than 5% taller than the viewport (a taller one is skipped, as WebKit does);
+//   - on the way, a backdrop-filter makes the edge glass (blurred), and the colour is the first visible background
+//     colour on a box over 10px each way and at least 90% wide.
+// No container, no colour, or glass: iOS draws its blur.
+const topEdge = (page) => page.evaluate(() => {
+  const vw = innerWidth, vh = innerHeight;
+  const tag = document.createElement("style");
+  tag.textContent = "*, *::before, *::after { pointer-events: auto !important; }";
+  document.head.append(tag);
+  let hit;
+  try { hit = document.elementFromPoint(vw / 2, 4); } finally { tag.remove(); }
+  const name = (e) => e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (e.classList.length ? "." + [...e.classList].join(".") : "");
+  let color = null, glass = false;
+  for (let e = hit; e && e.nodeType === 1; e = e.parentElement) {
+    const s = getComputedStyle(e), r = e.getBoundingClientRect();
+    const hidden = s.visibility === "hidden" || +s.opacity < 0.1;
+    if (!hidden) {
+      if (s.backdropFilter && s.backdropFilter !== "none") glass = true;
+      else if (!color && r.width > 10 && r.height > 10 && r.width >= vw * 0.9) {
+        const m = s.backgroundColor.match(/rgba?\(([^)]+)\)/), a = m ? (m[1].split(/[ ,/]+/)[3] ?? "1") : "0";
+        if (+a > 0) color = s.backgroundColor;
+      }
+    }
+    if ((s.position === "fixed" || s.position === "sticky") && !hidden && r.width >= vw * 0.9 && r.height <= vh * 1.05)
+      return { hit: name(hit), container: name(e), color, glass };
+  }
+  return { hit: hit ? name(hit) : null, container: null, color, glass };
+});
+const solidTop = async (page, where) => {
+  const t = await topEdge(page);
+  if (!t.container || !t.color || t.glass) throw new Error(`${where}: iOS would blur the top edge (no solid fixed or sticky bar there): ` + JSON.stringify(t));
+};
+// Nothing drawn over the header's own text and icons: the header (above its 2px busy bar) is the same with every
+// pseudo-element and view-transition name off.
+const PLAIN = NOPSEUDO + " * { view-transition-name: none !important; }";
+const headerPlain = async (page) => {
+  const h = await page.evaluate(() => { const r = document.querySelector("#detail > header").getBoundingClientRect(); return { x: 0, y: Math.max(0, Math.floor(r.top)), width: innerWidth, height: Math.floor(r.bottom - Math.max(0, r.top)) - 3 }; });
+  const a = await page.screenshot({ clip: h, animations: "disabled" });
+  const tag = await page.addStyleTag({ content: PLAIN });
+  const b = await page.screenshot({ clip: h, animations: "disabled" });
+  await tag.evaluate((e) => e.remove());
+  return (await differing(page, a, b)) === 0;
+};
 const SCREENS = [["list", "/"], ["To do", "/#/todo"], ["Pages", "/#/pages"], ["Status", "/#/status"], ["Peers", "/#/peers"], ["Settings", "/#/settings"]];
 for (const [width, height] of [[390, 844], [844, 390]]) {
   for (const [theme, dark] of [["light", false], ["dark", true]]) {
-    await check(`${width}x${height} ${theme}: the top fade is only over messages scrolled under the conversation's header`, async () => {
+    await check(`${width}x${height} ${theme}: the top fade is only over messages scrolled under the conversation's header, and iOS's top edge has a solid bar`, async () => {
       // A phone either way round: touch and a coarse pointer, so 844x390 takes the landscape layout (44 px bars).
       const { browser: owner } = await launch({ dark });
       const browser = await owner.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: dark ? "dark" : "light",
@@ -237,9 +288,24 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
           await page.waitForTimeout(500);
           const y = await barBottom(page);
           if (!(await sameWithout(page, y))) throw new Error(`${name}: something is drawn over the 24 px under its top bar (y ${y})`);
+          await solidTop(page, name);
         }
         await chat(page);
         await page.waitForTimeout(300);
+        await solidTop(page, "the conversation");
+        if (!(await headerPlain(page))) throw new Error("something is drawn over the conversation's header (its name, subtitle or icons)");
+        // The keyboard out: iOS pans the visual viewport and the header leaves the screen. Then the header is no longer
+        // the top edge's bar, so iOS's blur lies over the messages there, as the user likes it; back, it is again.
+        const kbd = (top) => page.evaluate((top) => {
+          Object.defineProperty(visualViewport, "offsetTop", { configurable: true, get: () => top });
+          visualViewport.dispatchEvent(new Event("scroll"));
+        }, top);
+        await kbd(300);
+        const k = await topEdge(page);
+        if (k.container) throw new Error("with the keyboard out the header still takes iOS's top edge (the blur would not lie over the messages): " + JSON.stringify(k));
+        await kbd(0);
+        await solidTop(page, "the conversation after the keyboard");
+        await page.screenshot({ path: `${out}/topedge-${width}x${height}-${theme}-chat.png`, clip: { x: 0, y: 0, width, height: 120 } });
         // Enough messages to scroll, made with the app's own classes; then the band at rest from the first message down,
         // and the band under the header once a message has scrolled under it.
         await page.evaluate(() => {

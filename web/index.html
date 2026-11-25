@@ -809,7 +809,14 @@
     .activity.idle .dot { background: var(--purple); }
     /* ...and a moving bar under the header, visible while scrolled up. It
        moves by transform, which the compositor animates without repainting. */
-    #detail header { position: relative; overflow: hidden; }
+    /* The header is sticky (not relative), though nothing scrolls it: since iOS 26 an installed web app gets a blur over
+       the status bar and ~40pt under it, unless WebKit finds a full-width fixed or sticky box with a solid background at
+       the top edge to take its colour from (LocalFrameView::fixedContainerEdges). As position: relative the agent's name
+       sat in that blur. Sticky also contains the busy bar, as relative did. tools/uitest/gradients.mjs (topEdge) replays the rule.
+       With the keyboard out iOS pans the header off the screen (app.js sets html.vv-panned): then it is relative again, so
+       iOS's blur lies over the messages at the top of the screen, as the user likes it. */
+    #detail header { position: sticky; top: 0; overflow: hidden; }
+    html.vv-panned #detail header { position: relative; }
     #detail header.busy::after {
       content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 40%;
       background: linear-gradient(90deg, transparent, var(--blue), transparent);
