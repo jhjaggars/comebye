@@ -3247,6 +3247,25 @@
       /* The offline strip is as tall as its Retry's hit box, so that doesn't reach into the header's icons. */
       .hub-strip { min-height: var(--tap-hit); padding-top: 0; padding-bottom: 0; }
     }
+    /* Screen changes (issue 135, slice 5). app.js runs a screen change inside document.startViewTransition and sets
+       html[data-vt]: fwd slides the new screen in from the right over the old one, which drifts left; back slides the
+       old one off to the right over the new one; fade (the desktop, where the list stays beside the pane) cross-fades.
+       The overlay takes no pointer events, so a tap during a transition lands on the live page under it. Reduced
+       motion never starts one (app.js); the rule below is a second guard. */
+    ::view-transition { pointer-events: none; background: var(--bg); }
+    html[data-vt]::view-transition-group(root) { animation-duration: 200ms; animation-timing-function: cubic-bezier(.2, 0, 0, 1); }
+    html[data-vt="fwd"]::view-transition-old(root) { animation: vt-drift-left 200ms cubic-bezier(.2, 0, 0, 1) both; }
+    html[data-vt="fwd"]::view-transition-new(root) { animation: vt-in-right 200ms cubic-bezier(.2, 0, 0, 1) both; }
+    html[data-vt="back"]::view-transition-old(root) { animation: vt-out-right 200ms cubic-bezier(.2, 0, 0, 1) both; z-index: 1; }
+    html[data-vt="back"]::view-transition-new(root) { animation: vt-drift-in 200ms cubic-bezier(.2, 0, 0, 1) both; }
+    html[data-vt="fade"]::view-transition-old(root), html[data-vt="fade"]::view-transition-new(root) { animation-duration: 120ms; }
+    @keyframes vt-in-right { from { transform: translateX(100%); } }
+    @keyframes vt-out-right { to { transform: translateX(100%); } }
+    @keyframes vt-drift-left { to { transform: translateX(-25%); opacity: .6; } }
+    @keyframes vt-drift-in { from { transform: translateX(-25%); opacity: .6; } }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+    }
   </style>
 </head>
 <body>
