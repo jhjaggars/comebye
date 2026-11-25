@@ -4,6 +4,7 @@
 //   - Status, Pages, Peers, Releases, Usage and Archived pull too, each asking the hub for its own list;
 //   - each of those screens has ⋮ › Refresh, which does the same;
 //   - the chat and Settings never pull, and html.ptr-on (the browser's own bounce off) is set only on the screens that do;
+//   - with Settings › Vibrate on, arming buzzes once (8 ms); off (the default), never;
 //   - offline, a pull says it could not refresh and why, the saved rows stay, and the strip says Offline with Retry;
 //   - at 1280 px nothing changes: no ⋮ on the screens, no ring, no ptr-on, and the list's ⋮ › Refresh is still there.
 //
@@ -39,6 +40,11 @@ await page.addInitScript(() => {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+});
+// navigator.vibrate stubbed (headless Chrome has none): each call is recorded, for the Settings › Vibrate check.
+await page.addInitScript(() => {
+  window.__vib = [];
+  Object.defineProperty(Navigator.prototype, "vibrate", { configurable: true, writable: true, value(p) { window.__vib.push(p); return true; } });
 });
 const spins = () => page.evaluate(() => {
   const s = window.__spin, r = [];
@@ -240,6 +246,23 @@ await check("offline: a pull says it could not refresh, and the saved rows stay"
   await ctx.setOffline(false);
   await page.evaluate(() => stripRetry());
   await page.waitForFunction(() => !document.getElementById("agents").classList.contains("stale"), null, { timeout: 15000 });
+});
+
+await check("Vibrate: arming buzzes once (8 ms) only with Settings › Vibrate on", async () => {
+  await page.evaluate(() => { scrollTo(0, 0); localStorage.removeItem("comebye-vibrate"); window.__vib = []; });
+  let n = await runs();
+  await pull(195, 320, 200);
+  await idle(n + 1);
+  assert((await page.evaluate(() => window.__vib.length)) === 0, "buzzed with the setting off");
+  await page.evaluate(() => { localStorage.setItem("comebye-vibrate", "on"); window.__vib = []; });
+  await pull(195, 320, 80); // short of the arm point: no buzz
+  assert((await page.evaluate(() => window.__vib.length)) === 0, "buzzed short of the arm point");
+  n = await runs();
+  await pull(195, 320, 200);
+  await idle(n + 1);
+  const v = await page.evaluate(() => window.__vib);
+  assert(JSON.stringify(v) === "[8]", "one 8 ms buzz: " + JSON.stringify(v));
+  await page.evaluate(() => localStorage.removeItem("comebye-vibrate"));
 });
 
 // A still of the ring mid-pull and spinning, for the demo.

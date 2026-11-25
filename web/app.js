@@ -2107,7 +2107,7 @@ function hubRefresh(list) {
 //   html.ptr-on (set only while one of these screens is in front, ptrSync) turns off the browser's own bounce and
 //   its own pull to refresh, so this ring is the only thing that moves.
 // - The pull gets heavier as it goes: the ring's offset is PTR_MAX·(1−e^(−d/PTR_MAX)) for d px of finger travel.
-// - Android's vibrate waits for the haptics setting (#135 slice 6); none is made here yet.
+// - Arming also buzzes (haptic(8)) on Android when Settings › Vibrate is on (#135 slice 6); otherwise nothing.
 const PTR_MAX = 140, PTR_ARM = 64, PTR_HOLD = 48, PTR_SPIN = 500, PTR_SLOP = 10, PTR_SIZE = 36;
 // Each screen that pulls: the element that scrolls (the list's is the document), and the lists it shows beside the
 // agents (which every refresh reads). The To do list, Status's ledger and Archived come only from a hub with a ledger.
@@ -2256,6 +2256,7 @@ function ptrMove(ev) {
     ptr.armed = armed;
     ptr.el.classList.toggle("armed", armed); // the pulse: letting go now refreshes
     ptr.el.dataset.state = armed ? "armed" : "pull";
+    if (armed) haptic(8); // and on Android, with Settings › Vibrate on, a short buzz (inside the touch, as vibrate needs)
   }
 }
 function ptrEnd(ev) { if (ptr.at && ![...ev.touches].some((x) => x.identifier === ptr.id)) ptrLetGo(true); }
