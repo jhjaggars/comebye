@@ -108,7 +108,11 @@ try {
     await check(`${tag}: the VM's row in Peers › Hosts shows its busy slots, with the starting agent linked`, async () => {
       await page.goto(base + "/#/peers", { waitUntil: "load" });
       await runsOf().waitFor({ timeout: 5000 });
-      const items = await runsOf().locator(".tr-run").allInnerTexts();
+      // The finished runs arrive in the same or a later event, and each event may re-render the list: wait for them,
+      // then read the rows in one go in the page (a row replaced between a locator's find and its read reads as
+      // textContent, with no separators).
+      await page.locator('details.tr-hist[data-tr-hist="kv-a"]').waitFor({ timeout: 5000 });
+      const items = await page.$$eval('.pr-card[data-name="kv-a"] + .tr-runs .tr-run', (els) => els.map((e) => e.innerText));
       if (items.length !== 2) throw new Error("runs: " + JSON.stringify(items));
       if (!/^browser · slot 2\/4 · 3 min 1\d s\b/.test(items[0]) || !items[0].includes(agent.name) || !items[0].includes("feat/test-runs-live")) throw new Error("first: " + items[0]);
       if (!/^go · slot 4\/4 · 1 min \d+ s/.test(items[1]) || !items[1].includes("from laptop")) throw new Error("second: " + items[1]);
@@ -134,7 +138,7 @@ try {
         await sum.tap();
         await page.waitForFunction(() => document.querySelector('details.tr-hist[data-tr-hist="kv-a"]').open, null, { timeout: 2000 });
       }
-      const items = await histOf().locator(".tr-done").allInnerTexts();
+      const items = await page.$$eval('details.tr-hist[data-tr-hist="kv-a"] .tr-done', (els) => els.map((e) => e.innerText));
       const flat = items.map((t) => t.replace(/\s+/g, " ").trim());
       if (flat.length !== 3) throw new Error(JSON.stringify(flat));
       if (!/^fail browser · 4 min 12 s · 2m ago\b/i.test(flat[0]) || !flat[0].includes(agent.name) || !flat[0].includes("CPU 61→88 °C · NVMe 60→71 °C") || !flat[0].includes("Log")) throw new Error("first: " + flat[0]);
