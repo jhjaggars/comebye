@@ -9,6 +9,12 @@
 #   visual=true|false       the two-theme visual pass is needed
 #   merge_go=true|false     merge: all Go tests
 #   merge_browser=true|false  merge: all browser checks
+#   go_shards=1|2           pre-submit: go-changed in 2 jobs when internal/server is among the packages (or go=all)
+#   browser_parallel=true|false  pre-submit: run the browser checks as the merge tier's parallel jobs (drive and the rest
+#                           parts), not the one serial smoke job: when scripts=all, or when the smoke set plus the extra
+#                           scripts is estimated over SMOKE_MAX seconds (300) from tools/ci/browser-times.txt. The
+#                           parallel jobs run every script, so nothing the smoke job would have run is left out
+#                           (a visual script in the extras turns visual on, since the rest parts leave those out).
 #
 # The rule table is docs/test-tiers.md. A path that matches no rule means "everything", so a new directory
 # costs a full run until it is added here. This script never runs fewer checks than the table says.
@@ -90,7 +96,24 @@ done <<< "$files"
 
 if $everything; then
   echo "lint=true"; echo "go=all"; echo "scripts=all"; echo "smoke=true"; echo "visual=true"
-  echo "merge_go=true"; echo "merge_browser=true"; exit 0
+  echo "merge_go=true"; echo "merge_browser=true"; echo "go_shards=2"; echo "browser_parallel=true"; exit 0
+fi
+
+# The smoke job's estimated script time: its own set (drive's smoke groups, pages, usage, peers: about 130 s on a
+# runner) plus each extra script's time in browser-times.txt (30 s when not listed). Over SMOKE_MAX, the parallel
+# jobs finish sooner (about 4 min), so a pull request with many extras no longer waits 20 minutes on one job.
+SMOKE_BASE=130; SMOKE_MAX="${SMOKE_MAX:-300}"
+browser_parallel=false
+if [ -n "$scripts" ]; then
+  est="$(for s in $scripts; do echo "$s"; done | awk -v base="$SMOKE_BASE" '
+    NR == FNR { if ($1 !~ /^#/ && NF >= 2) t[$1] = $2; next }
+    $1 == "drive" || $1 == "pages" || $1 == "usage" || $1 == "peers" { next }
+    { base += ($1 in t) ? t[$1] : 30 }
+    END { print base }' tools/ci/browser-times.txt -)"
+  if [ "$est" -gt "$SMOKE_MAX" ]; then
+    browser_parallel=true
+    for s in $scripts; do case " shapes appearance starters depth gradients landscape " in *" $s "*) visual=true;; esac; done
+  fi
 fi
 
 # Importers: a changed package's tests are not enough, so add every package that imports it.
@@ -117,3 +140,5 @@ echo "smoke=$smoke"
 echo "visual=$visual"
 echo "merge_go=$merge_go"
 echo "merge_browser=$merge_browser"
+case " $go_out " in *" ./internal/server "*) echo "go_shards=2" ;; *) echo "go_shards=1" ;; esac
+echo "browser_parallel=$browser_parallel"
