@@ -119,6 +119,7 @@ const ids = await page.$$eval("#agents .agent[data-id]", (els) => els.map((e) =>
 // A row low enough down that the list scrolled to reach it (its position must survive the round trip).
 const pick = ids[Math.min(ids.length - 1, Math.max(2, Math.floor(ids.length * 0.6)))];
 const scrollY = () => page.evaluate(() => Math.round(document.scrollingElement.scrollTop));
+const rowTop = (id) => page.evaluate((sel) => Math.round(document.querySelector(sel).getBoundingClientRect().top), rowSel(id));
 
 // openAndBack: tap the row, wait for the detail, come back with back(); return the scroll position before and after.
 async function openAndBack(id, back) {
@@ -152,11 +153,16 @@ for (const [how, back] of [["the app's Back", () => tap("#back")], ["the browser
   await check(`agents, ${how}: the row you opened is marked, the scroll position kept, then the mark clears`, async () => {
     await page.evaluate(() => { scrollTo(0, 0); });
     await page.evaluate((sel) => { const el = document.querySelector(sel); const r = el.getBoundingClientRect(); if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: "center" }); }, rowSel(pick));
-    const y0 = await scrollY();
+    const y0 = await scrollY(), top0 = await rowTop(pick);
     await openAndBack(pick, back);
     const m = await marked(pick);
     assert(m.anim === "was-open" && m.dur === "1s", "no fade: " + m.anim + " " + m.dur);
-    assert(await scrollY() === y0, `scroll moved: ${y0} -> ${await scrollY()}`);
+    // The list keeps its place: the same scroll, or the row where it was on the screen. The rows are patched, not rebuilt
+    // (#139 slice 4), so when something above the rows changes height meanwhile (a row comes or grows) the browser's
+    // scroll anchoring moves the scroll by as much and the rows stay still.
+    const y1 = await scrollY(), top1 = await rowTop(pick);
+    assert(y1 === y0 || Math.abs(top1 - top0) <= 1, `the list moved: scroll ${y0} -> ${y1}, the row's top on the screen ${top0} -> ${top1}`);
+    if (y1 !== y0) console.log(`     (scroll ${y0} -> ${y1} with the row still at ${top1}: anchored)`);
     await page.screenshot({ path: path.join(out, `returnmark-agents-${how.includes("app") ? "app" : "browser"}-${tag}.png`) });
     await clears();
     // A poll during the fade carries the mark over to the new row element; nothing may start a mark after it ends.
