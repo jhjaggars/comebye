@@ -14,6 +14,7 @@
 // journey exits 1 when any part ended with a non-zero code.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { settleStats } from "./lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,7 +47,7 @@ export async function journey(name, parts) {
     if (only.length && !only.includes(part)) continue;
     const t0 = Date.now(), p = partProcess(part, argv, env);
     let code = 0;
-    current = part; rejected = false;
+    current = part; rejected = false; globalThis.__uitestPart = part;
     try {
       const m = await import(pathToFileURL(path.join(here, part + ".part.mjs")).href);
       await m.run(p);
@@ -56,6 +57,7 @@ export async function journey(name, parts) {
       else { code = 1; console.log(`FAIL ${part}: the part threw\n     ` + String((e && e.stack) || e).split("\n").join("\n     ")); }
     }
     current = "";
+    for (const l of settleStats()) console.log(l);
     if (rejected && !code) code = 1;
     console.log(`== part ${part}: ${Math.round((Date.now() - t0) / 1000)} s${code ? " (exit " + code + ")" : ""}`);
     if (code) rc = 1;

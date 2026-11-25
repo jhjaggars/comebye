@@ -430,7 +430,9 @@ const API_TIMEOUT_MS = 30000;
 const settle = (() => {
   if (!window.__cbSettle) return null;
   const root = document.documentElement;
-  const s = { holds: 0, settled: false, settles: 0, quiet: 0, raf: 0, dirty: true };
+  const s = { holds: 0, settled: false, settles: 0, quiet: 0, raf: 0, dirty: true, held: new Map(), last: "" };
+  // what last kept it from settling, for a test's report when settled() times out: a DOM change's target, a held fetch
+  const desc = (n) => { const e = n && n.nodeType === 1 ? n : n && n.parentElement; return e ? e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (typeof e.className === "string" && e.className ? "." + e.className.trim().split(/\s+/)[0] : "") : "?"; };
   const finite = () => document.getAnimations().some((a) => {
     if (a.playState !== "running") return false;
     const end = a.effect && a.effect.getComputedTiming().endTime;
@@ -449,42 +451,48 @@ const settle = (() => {
     if (s.settled) { s.settled = false; root.dataset.settled = "0"; }
     if (!s.raf) s.raf = requestAnimationFrame(tick);
   };
-  const hold = () => { s.holds++; mark(); let done = false; return () => { if (done) return; done = true; s.holds--; mark(); }; };
+  let hid = 0;
+  const hold = (what = "hold") => {
+    const id = ++hid; s.holds++; s.held.set(id, what); mark();
+    let done = false;
+    return () => { if (done) return; done = true; s.holds--; s.held.delete(id); mark(); };
+  };
   // a fetch counts until its promise settles, and the body read after it until that settles too
   const ofetch = window.fetch;
   window.fetch = function (...a) {
-    const release = hold();
+    const release = hold("fetch " + String(a[0] && a[0].url || a[0]).replace(location.origin, "").slice(0, 60));
     const p = ofetch.apply(this, a);
     p.then(release, release);
     return p;
   };
   for (const m of ["json", "text", "blob", "arrayBuffer", "formData"]) {
     const orig = Response.prototype[m];
-    Response.prototype[m] = function (...a) { const release = hold(); const p = orig.apply(this, a); p.then(release, release); return p; };
+    Response.prototype[m] = function (...a) { const release = hold("body " + (this.url || "").replace(location.origin, "").slice(0, 60)); const p = orig.apply(this, a); p.then(release, release); return p; };
   }
   // Element.animate and a view transition start without a DOM change the observer would see
   const oanim = Element.prototype.animate;
-  Element.prototype.animate = function (...a) { mark(); return oanim.apply(this, a); };
+  Element.prototype.animate = function (...a) { s.last = "animate " + desc(this); mark(); return oanim.apply(this, a); };
   if (document.startViewTransition) {
     const ovt = document.startViewTransition;
     document.startViewTransition = function (...a) {
-      const release = hold(), vt = ovt.apply(this, a);
+      const release = hold("view transition"), vt = ovt.apply(this, a);
       vt.finished.then(release, release);
       return vt;
     };
   }
   new MutationObserver((recs) => {
-    if (recs.some((r) => !(r.target === root && r.attributeName === "data-settled"))) mark();
+    const r = recs.find((r) => !(r.target === root && r.attributeName === "data-settled"));
+    if (r) { s.last = r.type + " " + desc(r.target) + (r.attributeName ? "[" + r.attributeName + "]" : ""); mark(); }
   }).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-  addEventListener("transitionrun", mark, true);
-  addEventListener("animationstart", mark, true);
+  addEventListener("transitionrun", (e) => { s.last = "transition " + e.propertyName + " " + desc(e.target); mark(); }, true);
+  addEventListener("animationstart", (e) => { s.last = "animation " + e.animationName + " " + desc(e.target); mark(); }, true);
   root.dataset.settled = "0";
   mark();
   window.__cb = {
     get settles() { return s.settles; },
     get pending() { return s.holds; },
     get isSettled() { return s.settled; },
-    state: () => ({ settled: s.settled, pending: s.holds, quiet: s.quiet, animating: finite() }),
+    state: () => ({ settled: s.settled, pending: s.holds, quiet: s.quiet, animating: document.getAnimations().filter((a) => a.playState === "running" && a.effect && Number.isFinite(a.effect.getComputedTiming().endTime)).map((a) => (a.animationName || a.transitionProperty || "anim") + " " + desc(a.effect.target)), held: [...s.held.values()], last: s.last }),
     settled: (timeout = 5000) => s.settled ? Promise.resolve(true) : new Promise((res) => {
       const t = setTimeout(() => { removeEventListener("cb:settled", on); res(false); }, timeout);
       const on = () => { clearTimeout(t); res(true); };

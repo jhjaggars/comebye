@@ -106,13 +106,47 @@ const settleFlag = () => { window.__cbSettle = 1; };
 // without the signal (not the app, or a context made outside launch()) it waits two animation frames and resolves
 // true. A navigation during the wait is waited out once. Use it in place of a sleep before a read or a click; for a
 // value that only changes with the next poll, wait on that value (waitForFunction), not on settled.
-export async function settled(page, { timeout = 5000 } = {}) {
+export async function settled(page, { timeout = 5000, why = "settled" } = {}) {
+  const t0 = Date.now();
   const wait = () => page.evaluate((timeout) => window.__cb
     ? window.__cb.settled(timeout)
     : new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))), timeout);
-  try { return await wait(); }
-  catch { await page.waitForLoadState("domcontentloaded").catch(() => {}); return wait().catch(() => false); }
+  let ok;
+  try { ok = await wait(); }
+  catch { await page.waitForLoadState("domcontentloaded").catch(() => {}); ok = await wait().catch(() => false); }
+  await noteSettle(page, why, Date.now() - t0, ok);
+  return ok;
 }
+
+// Every settled() wait is counted (settleStats): how many, how long in all, and each one that timed out, with the
+// screen (location.hash) and what kept the app from settling (window.__cb.state(): the fetches held, the last DOM
+// change, the finite animations running). The journey prints a part's summary when it ends, a script its own at exit,
+// so a CI log shows a screen that never settles instead of a script that is only slower.
+// UITEST_PROFILE=FILE also appends one line per wait ("settle PART WHY MS ok|TIMEOUT HASH [STATE]") to FILE.
+const PROFILE = process.env.UITEST_PROFILE;
+const stats = { n: 0, ms: 0, timeouts: [] };
+async function noteSettle(page, why, ms, ok) {
+  stats.n++; stats.ms += ms;
+  if (ok && !PROFILE) return;
+  let info = { hash: "?", st: null };
+  try { info = await page.evaluate(() => ({ hash: location.hash || "-", st: window.__cb ? window.__cb.state() : null })); } catch {}
+  if (!ok) stats.timeouts.push(`${why} ${ms} ms on ${info.hash} ${JSON.stringify(info.st)}`);
+  if (PROFILE) {
+    try {
+      const part = globalThis.__uitestPart || process.argv[1].split("/").pop().replace(/\.mjs$/, "");
+      (await import("node:fs")).appendFileSync(PROFILE, `settle ${part} ${why} ${ms} ${ok ? "ok" : "TIMEOUT"} ${info.hash.replace(/\s/g, "_")}${ok ? "" : " " + JSON.stringify(info.st)}\n`);
+    } catch {}
+  }
+}
+// settleStats: the summary lines since the last call (and starts counting again), or [] when nothing waited.
+export function settleStats() {
+  if (!stats.n) return [];
+  const lines = [`settled: ${stats.n} waits, ${(stats.ms / 1000).toFixed(1)} s in all, ${stats.timeouts.length} timed out`,
+    ...stats.timeouts.map((t) => `settled TIMEOUT ${t}`)];
+  stats.n = 0; stats.ms = 0; stats.timeouts = [];
+  return lines;
+}
+process.on("exit", () => { for (const l of settleStats()) console.log(l); });
 
 export const CATALOGS = {
   pi: { kind: "pi", source: "pi --list-models", exact: true, default: "homelab/thinking", default_thinking: "minimal",
@@ -208,6 +242,10 @@ export async function shotOf(page, selector, path) {
 //   style  { prop: computed value } for each name in opts.style (CSS property names or custom properties).
 // opts.all: read every match instead (an array, [] when there is none by timeout).
 export async function readInPage(page, selector, { attrs = [], style = [], all = false, timeout = 2000 } = {}) {
+  // settled first (within the same timeout), so what is read is not a frame from the middle of a redraw
+  const t0 = Date.now();
+  await settled(page, { timeout, why: "read" });
+  timeout = Math.max(0, timeout - (Date.now() - t0));
   return page.evaluate(async ({ selector, attrs, style, all, timeout }) => {
     const read = (el) => {
       const r = el.getBoundingClientRect(), cs = style.length ? getComputedStyle(el) : null;
@@ -220,8 +258,6 @@ export async function readInPage(page, selector, { attrs = [], style = [], all =
       };
     };
     const end = performance.now() + timeout;
-    // settled first (within the same timeout), so what is read is not a frame from the middle of a redraw
-    if (window.__cb) await window.__cb.settled(timeout);
     for (;;) {
       const els = [...document.querySelectorAll(selector)];
       if (els.length) return all ? els.map(read) : read(els[0]);
@@ -241,7 +277,7 @@ export async function clickStable(page, selector, { timeout = 8000, position, bu
   const end = Date.now() + timeout;
   let last = "";
   for (;;) {
-    await settled(page, { timeout: Math.max(100, Math.min(3000, end - Date.now())) });
+    await settled(page, { timeout: Math.max(100, Math.min(3000, end - Date.now())), why: "click" });
     const r = await page.evaluate(async (selector) => {
       const frame = () => new Promise((res) => requestAnimationFrame(() => res()));
       const pick = () => [...document.querySelectorAll(selector)].find((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden");
