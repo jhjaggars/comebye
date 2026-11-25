@@ -75,6 +75,9 @@ func TestRolloutWaitsWhileASignInIsInProgress(t *testing.T) {
 	r.f.finish("a", upgrade.RecOK, "v0.6.4")
 	r.tick()
 	r.want("running a=ok b=upgrading")
+	if st := r.step("a"); st.Detail != "waited 10m5s while it was busy" { // the finished row keeps it
+		t.Fatalf("done detail %q", st.Detail)
+	}
 }
 
 // A deploy running on the host (the release host's Bump hub) holds it too.
@@ -115,6 +118,12 @@ func TestRolloutGoesAheadAfterTheBusyLimit(t *testing.T) {
 	}
 	if len(r.f.starts) != 1 {
 		t.Fatalf("starts %v", r.f.starts)
+	}
+	r.f.finish("a", upgrade.RecOK, "v0.6.4")
+	r.tick()
+	r.want("done a=ok")
+	if st := r.step("a"); st.Detail != "went ahead after waiting 15m: still busy (claude sign-in, tagging)" {
+		t.Fatalf("done detail %q", st.Detail)
 	}
 }
 

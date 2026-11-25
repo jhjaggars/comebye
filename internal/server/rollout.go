@@ -104,6 +104,9 @@ type RolloutStep struct {
 	// BusySince is when the step first found its host busy (relHost.Busy);
 	// saved, so a hub restart does not start the wait again.
 	BusySince *time.Time `json:"busy_since,omitempty"`
+	// BusyNote is how long the step waited for its busy host, or that it
+	// went ahead at the limit; the finished step keeps it in its detail.
+	BusyNote string `json:"busy_note,omitempty"`
 	Attempt   int        `json:"attempt,omitempty"`
 	// Woke: the host was stopped and this rollout started it (issue #66).
 	Woke bool `json:"woke,omitempty"`
@@ -969,6 +972,7 @@ func (e *rolloutEngine) begin(ctx context.Context, j *Rollout, st *RolloutStep, 
 		return false
 	}
 	e.started(j, st, h, rec, now, how)
+	st.BusyNote = how
 	return false
 }
 
@@ -1226,6 +1230,12 @@ func (e *rolloutEngine) finishStep(j *Rollout, st *RolloutStep, h relHost, now t
 	if st.Woke && note == "" {
 		st.Detail = "woke it, then upgraded; it powers off again when idle"
 		note = "(woke it)"
+	}
+	if st.BusyNote != "" {
+		if st.Detail != "" {
+			st.Detail += " · "
+		}
+		st.Detail += st.BusyNote
 	}
 	e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("done version=%s took=%s %s", st.To, took(*st, now), note), "comebye")
 	if j.PauseRequested {

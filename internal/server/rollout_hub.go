@@ -261,6 +261,7 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		return false
 	}
 	e.hubStarted(j, st, parseDeployStart(started), now, how)
+	st.BusyNote = how
 	return false
 }
 
