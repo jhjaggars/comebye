@@ -359,6 +359,31 @@
     .todo.td-wait .src-wait { padding: 0 var(--sp-10) var(--sp-4); }
     .todo.td-wait .src-note { padding-bottom: var(--sp-8); }
     @media (prefers-reduced-motion: reduce) { .skel-row b { animation: none; } }
+    .src-quiet { padding: 0 var(--sp-10) var(--sp-8); }
+    .src-quiet.down .skel-row b { animation: none; }
+    .us-wait { padding: var(--sp-8) 0; }
+
+    /* The offline strip (app.js stripSync): one quiet line under the header of the screen in front, while its rows are old. */
+    .hub-strip { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: 30px; box-sizing: border-box;
+      padding: var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+      background: var(--panel); border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--fs-13); line-height: 1.3; }
+    .hub-strip[hidden] { display: none; }
+    .hub-strip.sticky { position: sticky; z-index: var(--z-bar); }
+    .hub-strip .hs-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--muted); }
+    .hub-strip[data-kind="updating"] .hs-dot { border-color: var(--blue); }
+    .hub-strip[data-kind="back"] .hs-dot { border: 0; background: var(--green); }
+    .hub-strip .hs-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hub-strip .hs-text b { color: var(--text); font-weight: 600; }
+    .hub-strip .hs-retry { flex: none; min-height: 26px; padding: 0 var(--sp-10); border: 1px solid var(--border); border-radius: var(--r-6);
+      background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+    .hub-strip .hs-retry:disabled { color: var(--muted); cursor: default; }
+
+    /* Old rows (.stale on the list that shows them): the text stays readable, the live colour goes. */
+    .stale .dot { background: transparent !important; box-shadow: none !important; animation: none !important; box-sizing: border-box; border: 2px solid var(--muted); }
+    .stale .agent .status, .stale .agent .status .ago { color: var(--muted) !important; }
+    .stale .agent.blocked { background: transparent; }
+    .stale .agent.blocked .name { color: inherit; }
+    .stale .ps-state { color: var(--muted); }
 
     /* Detail view */
     #detail { display: none; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }

@@ -61,4 +61,4 @@ releaseauto 1
 origins 1
 autoblock 1
 reportage 2
-offline 80
+offline 150

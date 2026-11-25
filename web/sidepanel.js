@@ -232,6 +232,13 @@
     st.diffSrc = srcNew("sp-diff", () => tick(true), redraw, true);
   }
   newSources();
+  // liveTag is the bar's "live": only while the body really is live. Not while the hub is out of reach (app.js's hubLost),
+  // the last read failed, or nothing has come yet.
+  function liveTag(src, err, okText) {
+    const lost = window.hubLost && hubLost();
+    const word = lost ? (navigator.onLine === false ? "offline" : "not updating") : err || srcDown(src) || srcStale(src) ? "not updating" : !src.at ? "waiting" : okText;
+    return `<span class="live${word === okText ? "" : " off"}" id="sp-live" data-push="${st.live ? 1 : 0}">${esc(word)}</span>`;
+  }
   // An answer from the hub (a 4xx is one) settles the wait; no answer, before any, fails it.
   function srcAfter(s, e) {
     if (e && e.status >= 400 && e.status < 500) srcOk(s);
@@ -468,11 +475,12 @@
           `<button type="button" id="sp-pgfull" title="Open this Page on the Pages screen">Full screen</button>`;
       } else {
         const n = pgs.loaded ? mine().length : 0;
-        html = `<span class="sp-tot">${n ? `<b>${n} page${n === 1 ? "" : "s"}</b> <span class="muted">this agent published</span>` : `<span class="muted">Pages this agent publishes</span>`}</span><span class="live${pgs.err || pgs.pollErr ? " off" : ""}" id="sp-live">${pgs.err || pgs.pollErr ? "not updating" : "live"}</span>`;
+        html = `<span class="sp-tot">${n ? `<b>${n} page${n === 1 ? "" : "s"}</b> <span class="muted">this agent published</span>` : `<span class="muted">Pages this agent publishes</span>`}</span>${liveTag(pagesSrc, pgs.err || pgs.pollErr, "live")}`;
       }
     } else if (st.tab === "status") {
       // Full screen is the desktop's Status page; on a phone the sheet is nearly that already.
-      html = `<span class="sp-tot muted">The hub's Status, live</span>` + (isDesktop() ? `<button type="button" id="sp-full" title="Open the Status page in the main pane (g s)">Full screen</button>` : "");
+      const lost = hubLost() || srcStale(ledgerSrc);
+      html = `<span class="sp-tot muted">The hub's Status${ledgerSrc.at && !lost ? ", live" : ""}</span>${lost || !ledgerSrc.at ? liveTag(ledgerSrc, "", "live") : ""}` + (isDesktop() ? `<button type="button" id="sp-full" title="Open the Status page in the main pane (g s)">Full screen</button>` : "");
     } else if (st.tab === "doc") {
       const opts = docOptions();
       const heads = headingEls().filter((h) => /^H[1-4]$/.test(h.tagName));
@@ -480,7 +488,7 @@
         <select id="sp-toc" aria-label="Jump to a section"${heads.length ? "" : " disabled"}><option value="">Sections…</option>${heads.map((h, i) => `<option value="${i}">${esc("\u00a0\u00a0".repeat(Math.max(0, +h.tagName[1] - 1)) + hText(h))}</option>`).join("")}</select>
         <form id="sp-path-form" class="sp-pathf"><input id="sp-path" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Open a file: docs/plan.md" aria-label="Path of a file in the worktree"><button type="submit">Open</button></form>
         <button type="button" id="sp-cpfile"${st.doc ? "" : " disabled"}>Copy file</button><button type="button" id="sp-cppath"${st.doc ? "" : " disabled"}>Copy path</button>
-        <span class="live${st.docErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.docErr ? "not updating" : st.doc ? "live · " + (Date.now() - st.docAt < 4000 ? "just updated" : "checked " + ago(st.docAt)) : "live"}</span>`;
+        ${liveTag(st.docSrc, st.docErr, st.doc ? "live · " + (Date.now() - st.docAt < 4000 ? "just updated" : "checked " + ago(st.docAt)) : "live")}`;
     } else {
       const d = st.diff;
       const flat = d ? d.sections.flatMap((s) => s.files.map((f) => ({ key: s.key + "|" + f.path, path: f.path }))) : [];
@@ -491,8 +499,8 @@
           <select id="sp-jump" aria-label="Jump to a file"${jump.length ? "" : " disabled"}><option value="">Files…</option>${jump.map((f) => `<option value="${escAttr(f.key)}">${esc(f.path)}</option>`).join("")}</select>
           <button type="button" id="sp-fold" ${jump.length ? "" : "disabled"}>${st.diff && allClosed() ? "Expand all" : "Collapse all"}</button>
           ${st.wide ? `<button type="button" id="sp-split" aria-pressed="${st.split}" title="Old and new text in two columns">Side by side</button>` : ""}
-          <span class="live${st.diffErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.diffErr ? "not updating" : "live"}</span>`
-        : `<span class="sp-tot muted">${st.diffErr ? esc(st.diffErr) : "Changes in this agent's checkout"}</span><span class="live${st.diffErr ? " off" : ""}" id="sp-live" data-push="${st.live ? 1 : 0}">${st.diffErr ? "not updating" : "live"}</span>`;
+          ${liveTag(st.diffSrc, st.diffErr, "live")}`
+        : `<span class="sp-tot muted">${st.diffErr ? esc(st.diffErr) : "Changes in this agent's checkout"}</span>${liveTag(st.diffSrc, st.diffErr, "live")}`;
     }
     const focus = document.activeElement && document.activeElement.closest("#sp-bar") ? document.activeElement.id : "";
     const pathVal = $("sp-path") ? $("sp-path").value : "";
@@ -956,6 +964,8 @@
     if (matchMedia("(max-width:1099px)").matches) toggle(false); // the sheet covers the prompt
   }
 
-  window.SP = { toggle, show, onAgent, isOpen: () => st.open, statusShown: () => st.open && !!st.id && st.tab === "status" && !!$("sp-st"), pagesChanged, pageRefocus };
+  // hubChanged: the live connection came or went (app.js's strip): the bar's "live" follows it.
+  const hubChanged = () => { if (st.open && st.id) renderBar(); };
+  window.SP = { toggle, show, onAgent, isOpen: () => st.open, statusShown: () => st.open && !!st.id && st.tab === "status" && !!$("sp-st"), pagesChanged, pageRefocus, hubChanged };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", inject); else inject();
 })();

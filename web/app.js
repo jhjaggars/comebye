@@ -465,7 +465,9 @@ function hostStatus(name) { return state.hosts.find((h) => h.name === name); }
 const AGENT_STATUSES = new Set(["idle", "working", "blocked", "done", "unknown"]);
 
 function setAgents(d) {
+  const first = !agentsSrc.at;
   srcOk(agentsSrc);
+  if (first && !isDesktop()) setTimeout(renderTodos, 0); // the phone's To do card stops leaning on the list's "Reaching the hub…"
   state.agents = Array.isArray(d.agents) ? d.agents : [];
   for (const a of state.agents) {
     if (!AGENT_STATUSES.has(a.agent_status)) a.agent_status = "unknown";
@@ -1349,8 +1351,9 @@ function srcArm(s) {
   if (s.timer || !s.started || s.at || !s.redraw) return;
   s.timer = setTimeout(() => { s.timer = null; if (!s.at) s.redraw(); }, Math.max(0, s.since + SRC_GIVEUP_MS - Date.now()) + 50);
 }
-function srcOk(s) { s.at = Date.now(); s.err = ""; clearTimeout(s.timer); s.timer = null; }
-function srcFail(s, e) { s.err = hubErrText(e); }
+function srcOk(s) { s.at = Date.now(); s.err = ""; clearTimeout(s.timer); s.timer = null; stripSoon(); }
+// srcFail notes why the last try failed. Before any answer the screen says so; after one it keeps its rows, marked as old.
+function srcFail(s, e) { s.err = hubErrText(e); stripSoon(); }
 // srcDown: nothing has come from the hub, and the last try failed or has taken too long.
 function srcDown(s) { return !s.at && (!!s.err || (s.started && Date.now() - s.since >= SRC_GIVEUP_MS)); }
 // srcAgain: Try again. The wait starts over, so the skeleton shows while the new try is out.
@@ -1359,6 +1362,7 @@ function srcAgain(s) {
   clearTimeout(s.timer); s.timer = null;
   if (s.redraw) s.redraw();
   if (s.retry) s.retry();
+  stripSoon();
 }
 
 // hubErrText is why a request to the hub failed, in words (never a bare "Failed to fetch").
@@ -1369,6 +1373,151 @@ function hubErrText(e) {
   if (e.timeout) return "The hub did not answer in time.";
   if (e.status >= 500) return `The hub answered ${e.status}${e.message && e.message !== String(e.status) ? ": " + e.message : ""}.`;
   return String((e && e.message) || e || "failed");
+}
+
+// ---- The offline strip and old rows (#136 slice 2) ----
+//
+// One quiet strip under the header of the screen you are on, while that screen shows rows from an answer that is not
+// live: "Offline · list from 12 min ago · Retry" (the device is offline), "Can't reach the hub · …" (the live connection
+// is lost), "Not updating · …" (this screen's own read failed), "Updating… · …" (the link is back, this screen's fresh
+// answer is not in yet), then "Updated" for a moment. A screen with nothing to show says so in its body (srcWaitHtml):
+// no strip. A drop shorter than STRIP_BLIP_MS shows nothing, so a normal reconnect never flickers. Old rows lose their
+// live colour and their times freeze (.stale), so nothing looks live that isn't.
+const STRIP_BLIP_MS = 8000, STRIP_BACK_MS = 1200, STRIP_TICK_MS = 30000;
+const hub = {
+  up: true,        // the live connection (the event stream, or a read of the hub) works, as far as we know
+  downAt: 0,       // when it was lost
+  lostAt: 0,       // when the last loss that counted (past the blip, or offline) began: answers older are old
+  kind: "",        // what the strip shows now ("" when hidden)
+  backUntil: 0,    // "Updated" shows until then
+  tryUntil: 0,     // Retry was pressed: "Trying…" until then, or until an answer
+  timer: null, tick: null, soon: false, stale: new Map(),
+};
+// hubLost: the live connection is gone, past a blip (or the device itself says it is offline).
+function hubLost() { return !hub.up && (navigator.onLine === false || Date.now() - hub.downAt >= STRIP_BLIP_MS); }
+// srcStale: s has rows from the hub, but they are not live: its last read failed, the connection is lost, or the
+// answer predates the last loss and no fresh one has come since.
+function srcStale(s) { return !!s && s.at > 0 && (!!s.err || hubLost() || s.at < hub.lostAt); }
+function hubUp() {
+  if (navigator.onLine === false) return; // the device says it is offline: a late event from an old stream does not count
+  if (hub.up) return;
+  hub.up = true;
+  hub.tryUntil = 0;
+  if (hub.lostAt) {
+    // Back after a real loss: ask again for what the screens show, so each one's old marking clears with its own answer.
+    for (const s of [ledgerSrc, todosSrc, stripView().src]) if (s !== agentsSrc && s.started && s.at && s.at < hub.lostAt && s.retry) s.retry();
+  }
+  stripSync();
+}
+function hubDown() {
+  hub.tryUntil = 0;
+  if (hub.up) { hub.up = false; hub.downAt = Date.now(); }
+  clearTimeout(hub.timer);
+  hub.timer = setTimeout(stripSync, Math.max(0, hub.downAt + STRIP_BLIP_MS - Date.now()) + 20);
+  stripSync();
+}
+// stripAgo: "just now", "12 min ago", "14:02" (today) or "Mon 14:02".
+function stripAgo(at) {
+  const s = (Date.now() - at) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  return clockAt(at);
+}
+function clockAt(ms) {
+  const d = new Date(ms), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString([], { weekday: "short" }) + " " + hm;
+}
+// frozenAt is a row's time while it is old: "at 14:02" instead of a count that keeps moving.
+function frozenAt(ms) { return "at " + clockAt(ms); }
+
+// stripView: the header of the screen in front (the widest header on top), and the source its rows come from.
+const STRIP_SRC = [["#st-screen, #p-status", "ledger", "status"], ["#p-todo", "todos", "to-dos"], ["#pages", "pages", "pages"],
+  ["#peers", "agents", "hosts"], ["#usage", "usage", "usage"], ["#archived", "archived", "archive"]];
+function stripView() {
+  let best = null, bw = 0;
+  for (const h of document.querySelectorAll("header")) {
+    if (h.closest("[hidden], [inert], .attach-menu, dialog")) continue;
+    const r = h.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1 || r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
+    const top = document.elementFromPoint(Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2)), Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2)));
+    if (!top || !h.contains(top)) continue;
+    if (r.width > bw) { best = h; bw = r.width; }
+  }
+  const hit = best && STRIP_SRC.find(([sel]) => best.closest(sel));
+  return { header: best, src: (hit && srcs.get(hit[1])) || agentsSrc, noun: hit ? hit[2] : "list" };
+}
+function stripSoon() {
+  if (hub.soon) return;
+  hub.soon = true;
+  setTimeout(() => { hub.soon = false; stripSync(); }, 0);
+}
+// STALE_VIEWS: the containers whose rows go plain while their source is old.
+const STALE_VIEWS = [["agents", "agents"], ["pr-items", "agents"], ["todo", "todos"], ["pt-body", "todos"], ["ss-body", "ledger"], ["ps-body", "ledger"],
+  ["pgs-items", "pages"], ["us-view", "usage"], ["ar-list", "archived"], ["pr-releases", "releases"]];
+function stripSync() {
+  if (typeof agentsSrc === "undefined") return;
+  const now = Date.now();
+  if (hubLost() && hub.lostAt !== hub.downAt) hub.lostAt = hub.downAt;
+  // Old rows: plain colours, frozen times. The agents list is drawn again when that changes (its times are in the markup).
+  for (const [id, name] of STALE_VIEWS) {
+    const el = $(id), on = srcStale(srcs.get(name));
+    if (el) el.classList.toggle("stale", on);
+  }
+  const listOld = srcStale(agentsSrc);
+  if (hub.stale.get("agents") !== listOld) { hub.stale.set("agents", listOld); renderList(); }
+  if (window.SP && window.SP.hubChanged) window.SP.hubChanged();
+  const v = stripView(), s = v.src;
+  let kind = "";
+  if (s.at) {
+    if (hubLost()) kind = navigator.onLine === false ? "offline" : "down";
+    else if (s.err) kind = "stuck";
+    else if (s.at < hub.lostAt) kind = "updating";
+  }
+  if (!kind && hub.kind && hub.kind !== "back") hub.backUntil = now + STRIP_BACK_MS;
+  if (!kind && hub.backUntil > now) kind = "back";
+  hub.kind = kind;
+  let el = $("hub-strip");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "hub-strip";
+    el.className = "hub-strip";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    el.addEventListener("click", (ev) => { if (ev.target.closest("button")) stripRetry(); });
+  }
+  if (!kind || !v.header) {
+    el.hidden = true;
+    el.dataset.kind = "";
+  } else {
+    const trying = hub.tryUntil > now;
+    const what = { offline: "Offline", down: "Can’t reach the hub", stuck: "Not updating", updating: "Updating…", back: "Updated" }[kind];
+    const age = kind === "back" ? "" : ` · <span class="hs-age">${esc(v.noun)} from ${esc(stripAgo(s.at))}</span>`;
+    const btn = kind === "back" || kind === "updating" ? "" : `<button type="button" class="hs-retry"${trying ? " disabled" : ""}>${trying ? "Trying…" : "Retry"}</button>`;
+    const html = `<span class="hs-dot" aria-hidden="true"></span><span class="hs-text"><b>${what}</b>${age}</span>${btn}`;
+    if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+    el.dataset.kind = kind;
+    el.title = kind === "stuck" || kind === "down" ? s.err || "" : "";
+    el.hidden = false;
+    // Under the header, in the flow: it pushes the rows down rather than covering them; under a sticky header it sticks too.
+    if (v.header.nextElementSibling !== el) v.header.after(el);
+    const sticky = getComputedStyle(v.header).position === "sticky";
+    el.style.top = sticky ? v.header.offsetHeight + "px" : "";
+    el.classList.toggle("sticky", sticky);
+  }
+  if (!el.isConnected) document.body.appendChild(el);
+  // The age counts while the strip shows; "Updated" folds away on its own.
+  clearTimeout(hub.tick);
+  hub.tick = kind ? setTimeout(stripSync, kind === "back" ? Math.max(0, hub.backUntil - now) + 20 : hub.tryUntil > now ? hub.tryUntil - now + 20 : STRIP_TICK_MS) : null;
+}
+// stripRetry: the strip's Retry asks again now, without the reconnect backoff: the live connection and this screen's list.
+function stripRetry() {
+  hub.tryUntil = Date.now() + 2000;
+  const s = stripView().src;
+  state.retryDelay = 1000;
+  connectEvents();
+  refreshAgents().catch(agentsFailed);
+  if (s !== agentsSrc && s.retry) s.retry();
+  stripSync();
 }
 
 // srcWaitHtml is what a screen shows while it has nothing from s: skeleton rows, or, once the wait is over, why and Try again.
@@ -1383,6 +1532,15 @@ function srcWaitHtml(s, title, rows = 3) {
   // It shows 300 ms into the wait (a quick answer never flashes it), however often the screen is redrawn meanwhile.
   const delay = Math.max(0, 300 - (Date.now() - s.since));
   return `<div class="src-wait" role="status" data-src-state="wait" style="animation-delay:${delay}ms">${title ? `<div class="src-title">${esc(title)}</div>` : ""}${row.repeat(rows)}<div class="src-note">Reaching the hub…</div></div>`;
+}
+
+// srcQuietHtml is srcWaitHtml without words: one skeleton row, for a card whose screen already says
+// "Reaching the hub…" or "Can't reach the hub" once (the phone's To do card above the agents list).
+function srcQuietHtml(s) {
+  const down = srcDown(s);
+  if (!down) srcArm(s);
+  const delay = Math.max(0, 300 - (Date.now() - s.since));
+  return `<div class="src-wait src-quiet${down ? " down" : ""}" role="status" aria-label="${down ? "Not loaded" : "Loading"}" data-src-state="${down ? "down" : "wait"}" style="animation-delay:${delay}ms"><div class="skel-row"><i></i><span><b></b><b></b></span></div></div>`;
 }
 
 document.addEventListener("click", (ev) => {
@@ -1592,6 +1750,7 @@ function agentRow(a, worker) {
   const id = agentId(a);
   const marked = ledger.on === true && ledger.marked.has(id);
   const nm = a.name || a.pane_id || id;
+  const old = srcStale(agentsSrc); // rows from an old answer: their times stop counting
   return `
     <div class="agent ${esc(a.agent_status)}${worker ? " worker" : ""}${marked ? " marked" : ""}" role="button" tabindex="0" data-id="${esc(id)}">
       <span class="dot ${esc(bgRunning(a) ? "waiting" : a.agent_status)}"></span>
@@ -1601,11 +1760,11 @@ function agentRow(a, worker) {
         ${subLine(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgWhy(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
       <span class="status ${esc(agentStatusCls(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
-        bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${fmtAgo(bgSinceMs(a))}</span>` : "")
+        bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${old ? frozenAt(bgSinceMs(a)) : fmtAgo(bgSinceMs(a))}</span>` : "")
         : activeMs(a) && (a.agent_status === "idle" || a.agent_status === "done")
-          ? `<br><span class="ago">${fmtAgo(activeMs(a))}</span>`
+          ? `<br><span class="ago">${old ? frozenAt(activeMs(a)) : fmtAgo(activeMs(a))}</span>`
           : a.agent_status === "working" && sinceMs(a)
-            ? `<br><span class="ago">for ${fmtAgo(sinceMs(a))}</span>` : ""}</span>${
+            ? `<br><span class="ago">${old ? frozenAt(sinceMs(a)) : "for " + fmtAgo(sinceMs(a))}</span>` : ""}</span>${
       ledger.on === true ? `<button type="button" class="row-more" data-menu="${esc(id)}" aria-haspopup="menu" aria-label="${esc((marked ? "Unmark " : "Mark ready to remove: ") + nm)}">&#8942;</button>` : ""}
     </div>`;
 }
@@ -1686,7 +1845,8 @@ async function loadLedger() {
     }
   } catch (e) {
     if (e.status === 503) { ledger.on = false; srcOk(ledgerSrc); srcOk(todosSrc); renderTodos(); } // no state directory: no handoffs or marks here
-    else if (ledger.on !== true) {
+    else if (ledger.on === true) srcFail(ledgerSrc, e); // a failed poll: Status keeps what it shows, marked as old
+    else {
       // Nothing read yet: Status, To do and Archived say they cannot reach the hub (a later failed poll keeps what they show).
       srcFail(ledgerSrc, e);
       if (todos.on !== true) { srcFail(todosSrc, e); renderTodos(); }
@@ -2117,7 +2277,7 @@ async function loadTodos() {
     todoReapply();
   } catch (e) {
     if (e.status === 503 || e.status === 404) { todos.on = false; srcOk(todosSrc); }
-    else if (todos.on !== true) srcFail(todosSrc, e);
+    else srcFail(todosSrc, e);
     // Otherwise keep what we had: a failed poll should not make the panel blink.
   } finally {
     todos.inflight = false;
@@ -2991,7 +3151,8 @@ function renderTodos(force) {
   const show = todos.on === true && (todos.items.length > 0 || todoOrphans().length > 0 || !!todos.notice);
   // Not read yet (todos.on unknown, and the hub keeps a ledger): the phone's card and the page say so, never "nothing".
   const wait = todos.on == null && ledger.on !== false;
-  const waitHtml = wait ? srcWaitHtml(todosSrc, "", isDesktop() ? 3 : 1) : "";
+  // On the phone the agents list under the card says it once for both, while it has nothing either.
+  const waitHtml = !wait ? "" : !isDesktop() && !agentsSrc.at ? srcQuietHtml(todosSrc) : srcWaitHtml(todosSrc, "", isDesktop() ? 3 : 1);
   if (main) { main.hidden = !show && !wait; main.classList.toggle("td-wait", wait); }
   if (wait && main) {
     const wsig = "wait:" + waitHtml;
@@ -3270,7 +3431,7 @@ async function loadReleases(refresh) {
   } catch (e) {
     rls.err = hubErrText(e);
     // The hub's own refusal (4xx) is an answer; no answer at all, before any, is "Can't reach the hub".
-    if (e.status >= 400 && e.status < 500) srcOk(rlsSrc); else if (!rls.data) srcFail(rlsSrc, e);
+    if (e.status >= 400 && e.status < 500) srcOk(rlsSrc); else srcFail(rlsSrc, e);
   } finally {
     rls.inflight = false;
     rls.loadedAt = Date.now();
@@ -5341,7 +5502,7 @@ async function loadArchived() {
     srcOk(archSrc);
   } catch (e) {
     arch.err = hubErrText(e);
-    if (!arch.data) srcFail(archSrc, e);
+    srcFail(archSrc, e);
   } finally { arch.inflight = false; }
   const sig = JSON.stringify([...archParkIds()]) + ":" + archCount();
   if (sig !== arch.sig) { arch.sig = sig; renderList(); renderNav(); }
@@ -7460,7 +7621,7 @@ async function pagesLoad() {
   } catch (e) {
     // 503 is the hub's answer (Pages are off). Anything else is no answer: a list already read stays on screen.
     if (e.status === 503) { pgs.err = "Pages are off on this hub."; pgs.loaded = true; srcOk(pagesSrc); }
-    else { pgs.pollErr = hubErrText(e); if (!pgs.loaded) srcFail(pagesSrc, e); }
+    else { pgs.pollErr = hubErrText(e); srcFail(pagesSrc, e); }
   }
   pgs.at = Date.now();
   if (pgs.route) renderPages();
@@ -10362,8 +10523,13 @@ function usQuery(extra) {
   return "/api/usage?" + q;
 }
 
+// Usage's source (srcNew): read when the screen opens. No answer yet: skeleton rows, then "Can't reach the hub" with
+// Try again. A failed read after an answer keeps the numbers shown (marked as old, with the strip).
+const usageSrc = srcNew("usage", () => usageLoad(), () => renderUsage(), true);
+
 async function usageLoad() {
   const seq = ++us.seq;
+  srcStart(usageSrc);
   const d = us.d === "token" && us.m === "cost" ? "kind" : us.d;
   const drill = us.h ? { by: "session", project: us.p, handoff: us.h } : us.p ? { by: "handoff", project: us.p } : { by: "project" };
   try {
@@ -10377,10 +10543,14 @@ async function usageLoad() {
     if (seq !== us.seq) return;
     if (us.h && !us.hLabel && dr.groups && dr.groups[0] && dr.groups[0].label) us.hLabel = dr.groups[0].label; // arrived by a link
     Object.assign(us, { main, prev, drill: dr, roles, models, hosts: main.hosts || [], asOf: main.as_of, status: "ok", err: "" });
+    srcOk(usageSrc);
   } catch (e) {
     if (seq !== us.seq) return;
-    us.status = e.status === 404 ? "off" : "err";
-    us.err = e.message;
+    us.err = hubErrText(e);
+    // 404 is the hub's answer (counting is off), and so is another 4xx (said in words). Otherwise no answer: what was shown stays.
+    if (e.status === 404) { us.status = "off"; srcOk(usageSrc); }
+    else if (e.status >= 400 && e.status < 500) { us.status = "err"; srcOk(usageSrc); }
+    else { srcFail(usageSrc, e); if (!us.main) us.status = "loading"; }
   }
   renderUsage();
 }
@@ -10592,7 +10762,8 @@ function renderUsage() {
   if (!us.route) return;
   const el = $("us-view");
   $("us-fresh").textContent = us.status === "ok" ? "as of " + new Date(us.asOf * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + (us.hosts.length > 1 ? ` · ${us.hosts.length} hosts` : "") : "";
-  if (us.status === "loading") { el.innerHTML = '<div class="us-empty">Loading…</div>'; return; }
+  if (us.status === "loading" || (us.status === "ok" && !us.main)) { const w = srcWaitHtml(usageSrc); if (el.dataset.wait !== w) { el.dataset.wait = w; el.innerHTML = `<div class="us-wait">${w}</div>`; } return; }
+  delete el.dataset.wait;
   if (us.status === "off") { el.innerHTML = '<div class="us-empty">Token counting is off on this instance (it needs the state directory and <code>-usage</code>).</div>'; return; }
   if (us.status === "err") { el.innerHTML = `<div class="us-empty">${esc(us.err)}</div>`; return; }
   const seg = (name, items, cur, attr, dis) => `<span class="us-seg" role="group" aria-label="${name}">${items.map(([v, l]) => `<button type="button" ${attr}="${v}" aria-pressed="${cur === v}"${dis && dis(v) ? " disabled" : ""}>${esc(l)}</button>`).join("")}</span>`;
@@ -10640,7 +10811,8 @@ function syncUsage() {
   if (!r) { clearInterval(us.timer); us.timer = null; return; }
   const moved = r.r !== us.r || r.d !== us.d || r.m !== us.m || r.p !== us.p || r.h !== us.h;
   Object.assign(us, r);
-  if (!was || moved) { if (!was) us.status = "loading"; us.picked = -1; usageLoad(); }
+  // Numbers already read stay while the new ones are fetched; with none, the screen waits (srcWaitHtml).
+  if (!was || moved) { if (!us.main) us.status = "loading"; us.picked = -1; usageLoad(); }
   // The Escape handler hears only keys pressed inside the screen, so focus goes in as the screen opens;
   // without it Escape worked only while focus happened to be left on Back from an earlier visit.
   if (!was) { us.timer = setInterval(usageLoad, 60000); ($("us-back").offsetParent ? $("us-back") : $("us-body")).focus({ preventScroll: true }); }
@@ -13979,7 +14151,11 @@ async function sendKeys(keys, label, btn) {
 const STALE_MS = 45000;
 
 function setConn(ok) {
-  $("conn-list").classList.toggle("ok", ok);
+  const dot = $("conn-list");
+  dot.classList.toggle("ok", ok);
+  dot.setAttribute("role", "status");
+  dot.setAttribute("aria-label", ok ? "Live" : navigator.onLine === false ? "Offline" : "Not connected to the hub");
+  if (ok) hubUp(); else hubDown();
 }
 
 function scheduleReconnect() {
@@ -15391,6 +15567,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (lsGet(LIST_COLLAPSED_KEY) === "1") setListCollapsed(true, false);
   desktopMQ.addEventListener("change", () => { setView(viewFromHash()); renderList(); markSelectedRow(); syncStatusScreen(); });
   window.addEventListener("offline", () => setConn(false));
+  window.addEventListener("resize", stripSoon);
+  // The strip follows the screen in front: look again once a screen has slid in.
+  window.addEventListener("hashchange", () => { stripSoon(); setTimeout(stripSoon, 400); });
 
   $("back").addEventListener("click", () => {
     // Pop our own history entry (popstate then closes the view); a deep
