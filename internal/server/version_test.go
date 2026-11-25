@@ -119,3 +119,42 @@ func TestComebyeVersionHeader(t *testing.T) {
 		t.Fatalf("200: %d %v", w.Code, w.Header())
 	}
 }
+
+// The served sw.js carries the build version, so each release is a new
+// worker with a cache of its own; its ETag is of the stamped bytes.
+func TestServiceWorkerStamped(t *testing.T) {
+	stamped := func(app string) (*staticHandler, string) {
+		fsys := assets(app)
+		fsys["sw.js"] = &fstest.MapFile{Data: []byte(`const VERSION = "__COMEBYE_VERSION__";`)}
+		h, err := newStaticHandler(fsys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/sw.js", nil))
+		if w.Code != 200 || w.Body.String() != `const VERSION = "`+h.version+`";` {
+			t.Fatalf("sw.js = %d %q, version %q", w.Code, w.Body, h.version)
+		}
+		return h, w.Header().Get("ETag")
+	}
+	h1, e1 := stamped("v1")
+	h2, e2 := stamped("v2")
+	if h1.version == h2.version || e1 == e2 {
+		t.Fatalf("a new release kept sw.js: %q %q / %q %q", h1.version, h2.version, e1, e2)
+	}
+	r := httptest.NewRequest("GET", "/sw.js", nil)
+	r.Header.Set("If-None-Match", e1)
+	w := httptest.NewRecorder()
+	h1.ServeHTTP(w, r)
+	if w.Code != 304 {
+		t.Fatalf("revalidating sw.js: %d", w.Code)
+	}
+	// The real embedded worker has the mark, and is stamped.
+	real, err := newStaticHandler(web.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := string(real.files["sw.js"].data); strings.Contains(b, swVersionMark) || !strings.Contains(b, `"`+real.version+`"`) {
+		t.Fatal("embedded sw.js is not stamped with the version")
+	}
+}

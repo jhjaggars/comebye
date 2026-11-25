@@ -208,7 +208,16 @@ for (const width of [390, 1280]) {
         if (!recs) found.push("indexedDB comebye-cache (unreadable)");
         else for (const r of recs) if (has(JSON.stringify(r))) found.push("indexedDB comebye-cache " + r.name);
       }
-      for (const k of await caches.keys()) found.push("cache " + k);
+      // The service worker keeps the app shell (comebye-shell-VERSION, #136 slice 5): static files only, read for the
+      // passphrase; anything under /api/ in it is a leak. Any other cache is a leak.
+      for (const k of await caches.keys()) {
+        if (!k.startsWith("comebye-shell-")) { found.push("cache " + k); continue; }
+        const c = await caches.open(k);
+        for (const rq of await c.keys()) {
+          if (new URL(rq.url).pathname.startsWith("/api/")) found.push("cache " + k + " " + rq.url);
+          else if (has(await (await c.match(rq)).text())) found.push("cache " + k + " " + rq.url);
+        }
+      }
       if (has(document.cookie)) found.push("cookie");
       return found;
     }, PASS);

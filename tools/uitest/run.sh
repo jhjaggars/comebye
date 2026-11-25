@@ -169,6 +169,8 @@ if want archived; then node archived.mjs "http://127.0.0.1:$port" "$out" || rc=1
 if want offline; then node offline.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # Saved state (issue #136, slice 4): the last lists kept in IndexedDB, shown at once and marked old; cleared on another viewer, a 401 or Forget; the caps; a broken IndexedDB.
 if want saved; then node saved.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Opening with no network (issue #136, slice 5): sw.js keeps the app shell (network first); offline reload, a new release, /api/* never cached.
+if want shell; then node shell.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want restart; then node restart.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want quietmark; then node quietmark.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # fixture_hub NAME OFFSET: its own fake herdr with the dev fixtures (blocked, working, marked rows; a list long enough to

@@ -107,7 +107,23 @@ func newStaticHandler(fsys fs.FS) (*staticHandler, error) {
 		return nil, err
 	}
 	h.version = assetVersion(h.files)
+	stampServiceWorker(h.files["sw.js"], h.version)
 	return h, nil
+}
+
+// swVersionMark is sw.js's placeholder for the build version. Stamping it
+// makes every release a byte-changed sw.js (so the browser installs the new
+// worker) with a cache of its own (so the old shell cache is deleted). The
+// version is hashed from the unstamped file, so this is not circular.
+const swVersionMark = "__COMEBYE_VERSION__"
+
+func stampServiceWorker(f *staticFile, version string) {
+	if f == nil {
+		return
+	}
+	f.data = []byte(strings.ReplaceAll(string(f.data), swVersionMark, version))
+	sum := sha256.Sum256(f.data)
+	f.etag = `"` + hex.EncodeToString(sum[:8]) + `"`
 }
 
 func (h *staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

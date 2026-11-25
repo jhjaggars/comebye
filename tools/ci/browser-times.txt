@@ -6,6 +6,7 @@
 offline 166
 landscape 114
 saved 64
+shell 15
 statussplit 58
 pages 46
 appearance 43
