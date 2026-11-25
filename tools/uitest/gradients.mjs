@@ -208,12 +208,15 @@ const differing = (page, a, b) => page.evaluate(async ([a, b]) => {
   for (let i = 0; i < p.length; i += 4) if (Math.max(Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2])) > 2) n++;
   return n;
 }, [a.toString("base64"), b.toString("base64")]);
-const sameWithout = async (page, y, h) => {
+// With dump (a path prefix), a band that differs is saved as -with.png and -without.png, to see what was drawn over it.
+const sameWithout = async (page, y, h, dump) => {
   const a = await band(page, y, h);
   const tag = await page.addStyleTag({ content: NOPSEUDO });
   const b = await band(page, y, h);
   await tag.evaluate((e) => e.remove());
-  return (await differing(page, a, b)) === 0;
+  const same = (await differing(page, a, b)) === 0;
+  if (!same && dump) { fs.writeFileSync(dump + "-with.png", a); fs.writeFileSync(dump + "-without.png", b); }
+  return same;
 };
 const barBottom = (page) => page.evaluate(() => {
   const scr = [...document.querySelectorAll(".screen:not([hidden]), #st-screen:not([inert]), #list")].find((e) => e.checkVisibility()) || document.body;
@@ -330,6 +333,8 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         await page.screenshot({ path: `${out}/topedge-${width}x${height}-${theme}-chat.png`, clip: { x: 0, y: 0, width, height: 140 } });
         // Enough messages to scroll, made with the app's own classes; then the band at rest from the first message down,
         // and the band over a message once it has scrolled under the capsules.
+        // A passing "Updating…" or "Updated" strip is a chip under the capsules, which moves where the chat starts: wait it out.
+        await page.waitForFunction(() => { const h = document.getElementById("hub-strip"); return !h || h.hidden; }, null, { timeout: 8000 });
         await page.evaluate(() => {
           const c = document.getElementById("chat");
           c.replaceChildren();
@@ -339,12 +344,12 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         await page.waitForTimeout(200);
         const g = await page.evaluate(() => {
           const c = document.getElementById("chat").getBoundingClientRect(), m = document.querySelector("#chat .msg").getBoundingClientRect();
-          return { top: Math.ceil(c.top), first: Math.ceil(m.top), caps: Math.ceil(document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom),
+          return { top: Math.ceil(c.top), first: Math.ceil(m.top), dtop: getComputedStyle(document.getElementById("detail")).getPropertyValue("--d-top"), chips: document.getElementById("d-chips").innerText.trim().slice(0, 60), caps: Math.ceil(document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom),
             strip: Math.ceil(document.querySelector("#detail > header").getBoundingClientRect().bottom) };
         });
         if (g.top > 0) throw new Error("the conversation does not run to the top of the screen, under the capsules: " + JSON.stringify(g));
         if (g.first < g.caps) throw new Error("at rest the first message starts under the capsules: " + JSON.stringify(g));
-        if (!(await sameWithout(page, g.first, 24))) throw new Error("the band covers the first message at rest: " + JSON.stringify(g));
+        if (!(await sameWithout(page, g.first, 24, `${out}/rest-${width}x${height}-${theme}`))) throw new Error("the band covers the first message at rest: " + JSON.stringify(g));
         await page.evaluate(() => { document.getElementById("chat").scrollTop = 200; });
         await page.waitForTimeout(200);
         if (await sameWithout(page, g.strip, 8)) throw new Error("no band over a message scrolled under the capsules: " + JSON.stringify(g));
