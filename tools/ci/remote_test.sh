@@ -117,6 +117,12 @@ export TEST_VM_CONFIG="$root/test-vm" # absent unless a check writes it: never t
 export TEST_POOL_CONFIG="$root/test-pool" # the same for the pool
 unset TEST_VM_NO_WAIT TEST_POOL_POLL
 for t in node npm google-chrome; do printf '#!/bin/sh\necho stub\n' >"$tools/$t"; done
+# The fake comebye, for `comebye whoami --json` (the run record's agent): $root/whoami.json, else no agent here.
+cat >"$bin/comebye" <<EOF
+#!/bin/bash
+[ "\$1 \$2" = "whoami --json" ] && [ -f "$root/whoami.json" ] && exec cat "$root/whoami.json"
+echo "comebye: not an agent" >&2; exit 1
+EOF
 command -v go >/dev/null || printf '#!/bin/sh\necho stub\n' >"$tools/go"
 chmod +x "$bin"/* "$tools"/*
 export PATH="$bin:$PATH:$tools"
@@ -230,6 +236,37 @@ echo 0 >rc.txt
 out="$("$r" kv1 browser smoke dark "$root/mine" 2>&1)"; rc=$?
 check "exit 0 passes through" [ $rc = 0 ]
 check "artifacts to the given OUT_DIR" [ -f "$root/mine/failures/check.png" ]
+
+# ---- the run's record on the VM (test-runs/ID.json): written once the suite has its slot, renewed with the hold,
+# removed at the end
+runs_dir="$vm/.local/state/comebye/test-runs"
+recf() { ls "$runs_dir"/*.json 2>/dev/null | head -1; }
+# field FILE KEY: one field of a record, through a real JSON parser (so the file must be valid JSON)
+field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("" if v is None else v)' "$1" "$2"; }
+printf '{\n  "agent": "deskhost/w8J:p1",\n  "by": "runs (deskhost/w8J:p1)",\n  "host": "deskhost"\n}\n' >"$root/whoami.json"
+git checkout -q -b "feat/q\"uo'te"
+echo 0 >rc.txt; touch wait.txt; rm -f "$root/started" "$root/release"
+REMOTE_RENEW_SECS=1 "$r" kv1 browser rest >"$root/rec.log" 2>&1 & a=$!
+for _ in $(seq 150); do [ -e "$root/started" ] && break; sleep 0.1; done
+f="$(recf)"; id="$(sed -n 's/^remote: kv1 \([a-z0-9-]*\): .*/\1/p' "$root/rec.log")"
+check "record: written on the VM while the suite runs, named for the run" [ -n "$id" -a "$f" = "$runs_dir/$id.json" ]
+check "...valid JSON with the run, slot, suite and HEAD" [ "$(field "$f" id) $(field "$f" slot)/$(field "$f" slots) $(field "$f" suite) $(field "$f" head)" = "$id 1/1 browser $(git rev-parse HEAD)" ]
+check "...the branch, however it is spelt" [ "$(field "$f" branch)" = "feat/q\"uo'te" ]
+check "...the starting agent, from comebye whoami" [ "$(field "$f" agent)" = deskhost/w8J:p1 ]
+check "...and this host" [ "$(field "$f" from)" = "$(hostname -s | tr 'A-Z' 'a-z' | tr -c 'a-z0-9-\n' - | cut -c1-16)" ]
+st="$(field "$f" started)"; ex="$(field "$f" expires)"
+check "...started just now, expiring with the hold (20 min on)" [ "$(( $(date -d "$ex" +%s) - $(date -d "$st" +%s) ))" -ge 1190 -a "$(( $(date +%s) - $(date -d "$st" +%s) ))" -le 30 ]
+sleep 2.5
+check "...renewed with the hold: a later expiry, the same start" [ "$(date -d "$(field "$f" expires)" +%s)" -gt "$(date -d "$ex" +%s)" -a "$(field "$f" started)" = "$st" ]
+check "...nothing half-written beside it" [ "$(ls "$runs_dir")" = "$id.json" ]
+touch "$root/release"; wait "$a"; rc=$?
+check "...removed when the run ends (rc=$rc)" [ "$rc" = 0 -a -z "$(ls -A "$runs_dir" 2>/dev/null)" ]
+rm -f "$root/whoami.json" "$root/started" "$root/release"; git checkout -q feat/x
+"$r" kv1 browser rest >"$root/rec.log" 2>&1 & a=$!
+for _ in $(seq 150); do [ -e "$root/started" ] && break; sleep 0.1; done
+f="$(recf)"
+check "no agent where comebye whoami names none: the record's agent is empty" [ -n "$f" ] && [ "$(field "$f" agent):$(field "$f" suite)" = ":browser" ]
+touch "$root/release"; wait "$a"; rm -f wait.txt "$root/started" "$root/release"
 
 # ---- 2. go, flakes
 if command -v go >/dev/null && [ ! -e "$tools/go" ]; then
@@ -358,6 +395,7 @@ pkill -KILL -f "runs/'$ida'"; kill -KILL -- "-$(cat "$root/suite.pid")" 2>/dev/n
 check "a holder killed hard: the waiting run goes ahead" wf "grep -q 'is free after' '$root/b.log'"
 wait "$b"; rc=$?; wait "$a"
 check "...and passes (rc=$rc)" [ "$rc" = 0 ]
+check "...and the killed run's record is gone with it" [ -z "$(ls -A "$vm/.local/state/comebye/test-runs" 2>/dev/null)" ]
 
 # giving up while waiting
 : >"$root/starts.log"; start_a; suite_a="$(cat "$root/suite.pid")"

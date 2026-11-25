@@ -482,6 +482,47 @@ type HostStatus struct {
 	// Tmp is how full the host's temporary directory is (/tmp is RAM on
 	// many Linux hosts); a peer reports its own and the hub keeps it.
 	Tmp *scratch.Usage `json:"tmp,omitempty"`
+	// TestRuns are the test suites running on the host now, one per busy slot of a
+	// test VM (tools/ci/remote.sh writes them; internal/testruns reads them). A peer
+	// reports its own; the hub keeps them, and drops each one when it expires.
+	TestRuns TestRuns `json:"test_runs,omitempty"`
+}
+
+// TestRuns decodes leniently: a run this version cannot read is left out, and a
+// field that is not a list at all is no runs, so a peer of another version never
+// costs the hub the rest of its event.
+type TestRuns []TestRun
+
+// UnmarshalJSON keeps the runs it can read.
+func (t *TestRuns) UnmarshalJSON(b []byte) error {
+	*t = nil
+	var raw []json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	for _, r := range raw {
+		var one TestRun
+		if json.Unmarshal(r, &one) == nil {
+			*t = append(*t, one)
+		}
+	}
+	return nil
+}
+
+// TestRun is one suite running in a slot of a test VM, as tools/ci/remote.sh
+// records it on the VM. The record is renewed while the run goes, so one whose
+// Expires has passed is a run that died without removing it.
+type TestRun struct {
+	ID      string    `json:"id"`    // the run's id (also its idle hold's name)
+	Slot    int       `json:"slot"`  // 1-based
+	Slots   int       `json:"slots"` // how many the VM has
+	Suite   string    `json:"suite"` // browser, flakes, prelanding, gotest or go
+	Branch  string    `json:"branch,omitempty"`
+	Head    string    `json:"head,omitempty"`  // the commit it tests
+	Started time.Time `json:"started"`         // when it took its slot
+	Agent   string    `json:"agent,omitempty"` // the starting agent's id (host/pane), when it had one
+	From    string    `json:"from,omitempty"`  // the host it was started from
+	Expires time.Time `json:"expires"`
 }
 
 // RepoDamage is a repository whose object store git reports as damaged: missing

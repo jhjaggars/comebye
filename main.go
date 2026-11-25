@@ -38,6 +38,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/scratch"
 	"github.com/jhjaggars/comebye/internal/server"
 	"github.com/jhjaggars/comebye/internal/state"
+	"github.com/jhjaggars/comebye/internal/testruns"
 	"github.com/jhjaggars/comebye/internal/transcript"
 	"github.com/jhjaggars/comebye/internal/tsauth"
 	"github.com/jhjaggars/comebye/internal/usage"
@@ -367,7 +368,11 @@ func main() {
 		}
 		return scratch.UsageOf(*scratchDir)
 	}
-	fopts := fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage}
+	// The test suites running here (a test VM's busy slots, written by tools/ci/remote.sh): shown on the host, and to
+	// the hub.
+	runsDir := testruns.Dir(expandHome(*stateDir))
+	fopts := fleet.Options{Version: buildVersion(), HubMode: *hubMode, NoLocalAgents: *hubOnly, RepoDamage: repoHealth.List, Tmp: tmpUsage,
+		TestRuns: func() []state.TestRun { return testruns.List(runsDir, time.Now()) }}
 	if *testMode {
 		// Browser tests and the dev server: a peer that comes back (a worker started, a hub restarted) is seen
 		// within 2 s, not after a reconnect delay that has doubled up to 30 s while it was down.
@@ -375,6 +380,7 @@ func main() {
 	}
 	fl := fleet.New(manager, *hostName, peers, fopts)
 	repoHealth.OnChange = fl.Changed
+	go testruns.Watch(context.Background(), runsDir, testRunsEvery(*testMode), fl.Changed)
 	fl.AttachStore(peerStore, addrOpt)
 	go fl.Run(context.Background())
 	if !*hubOnly {
@@ -807,6 +813,15 @@ func envBool(key string, def bool) bool {
 		log.Printf("ignoring %s=%q: not a boolean", key, v)
 	}
 	return def
+}
+
+// testRunsEvery is how often the host looks for test runs starting or ending (internal/testruns.Watch): a run shows
+// within this. Test mode (the browser tests) looks every 500 ms.
+func testRunsEvery(testMode bool) time.Duration {
+	if testMode {
+		return 500 * time.Millisecond
+	}
+	return 10 * time.Second
 }
 
 // defaultStateDir is $XDG_STATE_HOME/comebye, else

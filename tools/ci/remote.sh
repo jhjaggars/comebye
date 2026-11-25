@@ -31,6 +31,11 @@
 # A worker powers itself off when idle. A stopped one is started first, through the provisioner (`worker start HOST`,
 # saying so and how long it took); REMOTE_START=0 refuses instead. While the suite runs, an idle hold on the VM
 # (remote-test-ID, 20 min, renewed every 5) keeps it from powering off: a plain ssh session is not activity to it.
+# Beside it, once the suite has its slot, the run's record (test-runs/ID.json in the VM's comebye state dir, renewed
+# and expiring with the hold, removed when the run ends) says what runs there: the run, slot I/N, suite, branch, HEAD,
+# start, the starting agent (`comebye whoami --json` here; empty when there is none) and this host. The VM's comebye
+# reports the unexpired ones to the hub, and the app shows them on the VM's row and the agent's.
+# (REMOTE_RENEW_SECS, default 300, is how often both are renewed; the self-test uses it.)
 # The provisioner is $COMEBYE_WORKER_TOOL (words, e.g. "comebye-worker -config FILE"), else comebye-worker if it is
 # on PATH, else `go run ./tools/worker`; COMEBYE_WORKER_CONFIG=FILE adds `-config FILE`. The repository is the one
 # this script lives in, whatever the current directory. The heavy wrappers call this by themselves when a test VM
@@ -143,6 +148,8 @@ rroot='"${REMOTE_ROOT:-$HOME/.cache/comebye-remote}"'
 [ -n "${REMOTE_ROOT:-}" ] && rroot="$(q "$REMOTE_ROOT")"
 rrun="$rroot/runs/$(q "$run_id")"
 rhold='"${WK_IDLE_HOLDS:-$HOME/.local/state/comebye/idle-holds}"'"/remote-test-$run_id"
+rrec='"${WK_TEST_RUNS:-$HOME/.local/state/comebye/test-runs}"'"/$run_id.json" # the run's record (internal/testruns)
+renew_secs="${REMOTE_RENEW_SECS:-300}"; [[ "$renew_secs" =~ ^[1-9][0-9]*$ ]] || renew_secs=300
 # hold_cmd MINUTES: the VM's shell line that holds the VM up that long (idle-check.sh reads "<until> <reason>").
 hold_cmd() { echo "h=$rhold; mkdir -p \"\${h%/*}\" && echo \"\$((\$(date +%s) + $1 * 60)) remote test run $run_id\" >\"\$h.tmp\" && mv -f \"\$h.tmp\" \"\$h\""; }
 spid=""
@@ -155,7 +162,7 @@ cleanup() {
   fi
   if [ -n "$sent" ]; then
     [ -n "$t1pid" ] || temps_at end
-    slot="$(ssh_vm "cat $rrun/slot 2>/dev/null; rm -rf $rrun; rm -f $rhold" </dev/null 2>/dev/null | head -1)"
+    slot="$(ssh_vm "cat $rrun/slot 2>/dev/null; rm -rf $rrun; rm -f $rhold $rrec" </dev/null 2>/dev/null | head -1)"
     log_run "$st" "$slot"
   fi
   rm -rf "$tmp"; [ -n "$check" ] || rm -f "$gitdir/comebye-remote.run"
@@ -296,6 +303,16 @@ done
 [ -n "$env_art" ] && envs="$envs $env_art=\"\$art\""
 [ -n "$envs" ] && envs="export$envs"
 
+# The run's record (see the top): what is known here, as JSON members; the VM adds the slot, start and expiry.
+# jstr: a JSON string (backslash and quote escaped, control characters dropped). The agent is whoever runs this, from
+# `comebye whoami --json`: empty when that names none, fails, or takes over 5 s.
+jstr() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$(printf '%s' "$s" | tr -d '\000-\037')"; }
+agent=""
+if command -v comebye >/dev/null; then
+  agent="$(timeout 5 comebye whoami --json </dev/null 2>/dev/null 9>&- | sed -n 's/^[[:space:]]*"agent":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 | tr -cd 'A-Za-z0-9/:._-' | cut -c1-200)"
+fi
+rec_fixed="\"id\":$(jstr "$run_id"),\"suite\":$(jstr "$kind"),\"branch\":$(jstr "$branch"),\"head\":$(jstr "$head"),\"agent\":$(jstr "$agent"),\"from\":$(jstr "$me")"
+
 # The script the VM runs. Its stdin is held open by this side: when ssh goes (Ctrl-C, a dropped link), the VM sees
 # EOF and stops the suite's whole process group, so nothing keeps running there.
 remote_script='set -u
@@ -320,11 +337,17 @@ if [ -n "$lockh" ] && [ -d "$nm" ] && [ ! -e tools/uitest/node_modules ]; then
   cp -al "$nm" tools/uitest/node_modules 2>/dev/null || cp -a "$nm" tools/uitest/node_modules
 fi
 echo "remote(vm): $(hostname), $(nproc) CPUs, in $src" >&2
-# The idle hold, renewed while this run waits and its suite runs, and only while this script is alive (it lapses on
-# its own 20 min after a lost link). Neither helper keeps the lock below.
-( while sleep 300 && kill -0 $$ 2>/dev/null; do '"$(hold_cmd 20)"'; done ) </dev/null >/dev/null 2>&1 7>&- 8>&- &
+# The run'"'"'s record (see the top of remote.sh), once it has a slot: $run/slot and $run/started say which and since
+# when. Written whole (a .tmp, then a rename), so a reader never sees half of one.
+rec='"$rrec"'; fixed='"$(q "$rec_fixed")"'
+rec_write() { local s st; read -r s <"$run/slot" 2>/dev/null && read -r st <"$run/started" 2>/dev/null || return 0
+  mkdir -p "${rec%/*}" && printf "{\"v\":1,%s,\"slot\":%s,\"slots\":%s,\"started\":\"%s\",\"expires\":\"%s\"}\n" "$fixed" "${s%/*}" "${s#*/}" "$st" \
+    "$(date -u -d "@$(( $(date +%s) + 1200 ))" +%Y-%m-%dT%H:%M:%SZ)" >"$rec.tmp" && mv -f "$rec.tmp" "$rec"; }
+# The idle hold and the record, renewed while this run waits and its suite runs, and only while this script is alive
+# (both lapse on their own 20 min after a lost link). Neither helper keeps the lock below.
+( while sleep '"$renew_secs"' && kill -0 $$ 2>/dev/null; do '"$(hold_cmd 20)"'; rec_write; done ) </dev/null >/dev/null 2>&1 7>&- 8>&- &
 renew=$!
-trap '"'"'kill "$renew" 2>/dev/null'"'"' EXIT
+trap '"'"'kill "$renew" 2>/dev/null; rm -f "$rec" "$rec.tmp"'"'"' EXIT
 # A slot on this VM (see the top of remote.sh). The suite inherits the slot lock (fd 7) and run.lock, shared
 # (fd 8), so both are free once the suite and this script are gone, however they end. While every slot is taken,
 # try again every 2 s, and give up when this side goes (EOF on stdin).
@@ -353,7 +376,8 @@ if ! take; then
 fi
 who="$(printf "%s since %s" '"$(q "$run_id ($kind, $branch, from $me)")"' "$(date -u +%H:%M:%SZ)")"
 echo "$who" >"$root/slot-$slot.who"; echo "$who" >"$root/run.who" # run.who: what an old client says it waits for
-echo "$((slot + 1))/$n" >"$run/slot" # for the temperature log
+echo "$((slot + 1))/$n" >"$run/slot" # for the temperature log, and the record
+date -u +%Y-%m-%dT%H:%M:%SZ >"$run/started"; rec_write
 if [ "$n" -gt 1 ]; then # this slot'"'"'s share of the VM: a lower value sent from here is kept, a higher one is not
   lower() { local v="${!1:-}"; [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -le "$2" ] && [ "$v" -ge 1 ] || export "$1=$2"; }
   mb() { [[ "$1" =~ ^([0-9]+)([KMGT]?)$ ]] || return 1
@@ -372,6 +396,7 @@ pid=$!
 watch=$!
 wait "$pid"; rc=$?
 kill "$watch" "$renew" 2>/dev/null
+rm -f "$rec" "$rec.tmp"
 if [ -n "$lockh" ] && [ -d tools/uitest/node_modules/playwright-core ] && [ ! -d "$nm" ]; then
   cp -al tools/uitest/node_modules "$nm.$$" 2>/dev/null || cp -a tools/uitest/node_modules "$nm.$$"
   mv -T "$nm.$$" "$nm" 2>/dev/null || rm -rf "$nm.$$"
