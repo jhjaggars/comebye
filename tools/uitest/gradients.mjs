@@ -22,7 +22,14 @@ async function check(name, fn) {
 }
 
 // Everything under test, read in one round trip. A pseudo-element is "on" when its content is not none.
+// The list rows come from whichever agents the hub has, so a blocked row and the two lit dots are made here, inside
+// #agents, with the app's own classes (as depth.mjs makes its card).
 const probe = (page) => page.evaluate(() => {
+  if (!document.getElementById("grad-probe")) {
+    const d = document.createElement("div"); d.id = "grad-probe";
+    d.innerHTML = '<div class="agent blocked"><span class="dot blocked"></span><div class="name">probe</div></div><div class="agent working"><span class="dot working"></span><div class="name">probe</div></div>';
+    document.getElementById("agents").prepend(d);
+  }
   const cs = (sel, pseudo) => { const e = document.querySelector(sel); return e ? getComputedStyle(e, pseudo || null) : null; };
   const on = (sel, pseudo) => { const s = cs(sel, pseudo); return !!s && s.content !== "none" && s.content !== "normal" && s.display !== "none"; };
   const img = (sel, pseudo) => { const s = cs(sel, pseudo); return s ? s.backgroundImage : null; };
@@ -59,7 +66,7 @@ async function open({ width, theme, dark, depth, feature }) {
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: feature[0], value: feature[1] }] });
   }
   await page.goto(base + "/", { waitUntil: "load" });
-  await page.waitForSelector(".agent.blocked");
+  await page.waitForSelector("#agents .agent");
   if (feature) {
     const m = await page.evaluate((q) => matchMedia(q).matches, `(${feature[0]}: ${feature[1]})`);
     if (!m) throw new Error(`the browser did not take (${feature[0]}: ${feature[1]})`);
@@ -71,9 +78,12 @@ async function peers(page) {
   await page.click("#pr-tab-rel");
   await page.waitForSelector(".rl-card[data-card=release]");
 }
+// The first agent's conversation, whichever agent that is.
 async function chat(page) {
-  await page.goto(base + "/#/agent/w3:p1", { waitUntil: "load" });
-  await page.waitForSelector("#detail #chat");
+  await page.goto(base + "/", { waitUntil: "load" });
+  const id = await page.locator("#agents .agent[data-id]").first().getAttribute("data-id");
+  await page.goto(base + "/#/agent/" + encodeURIComponent(id), { waitUntil: "load" });
+  await page.waitForSelector("#detail #chat", { state: "attached" });
 }
 
 const THEMES = [["dark", true], ["light", false], ["nord", true]];
