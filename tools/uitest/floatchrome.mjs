@@ -161,14 +161,18 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         // Offline first: no poll can then answer and redraw the agent as the hub has it (not blocked).
         await ctx.setOffline(true);
         await page.waitForFunction(() => { const h = document.getElementById("hub-strip"); return h && !h.hidden && h.dataset.kind === "offline"; }, null, { timeout: 8000 });
-        await page.evaluate(() => {
+        // Blocked with a note, as the hub would send it. Set again before each read: an answer already on its way when the
+        // link was cut can still redraw the agent as the hub has it (not blocked).
+        const block = () => page.evaluate(() => {
           const a = agentById(state.selected);
           a.agent_status = "blocked"; a.blocked_on = { label: "Allow Bash: rm -rf build?" };
           ledger.on = true;
           ledger.byAgent.set(agentId(a), { id: "t1", status: "running", progress: { text: "running the browser checks", at: new Date().toISOString() } });
           renderDetail();
         });
+        await block();
         await page.waitForTimeout(300);
+        await block();
         const why = [];
         const cap = await rect(page, "#detail > header .d-cap-l"), capR = await rect(page, "#detail > header .d-cap-r");
         const g = await page.evaluate(() => ({ strip: document.getElementById("hub-strip").parentElement.id, border: getComputedStyle(document.querySelector("#detail > header .d-cap-l"), "::before").borderTopColor,
@@ -190,6 +194,7 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         await page.screenshot({ path: `${out}/floatchrome-chips-${width}x${height}-${theme}.png` });
         await page.locator("#prompt-text").focus();
         await page.waitForTimeout(200);
+        await block();
         if (await rect(page, "#d-note")) why.push("the note still shows while typing");
         if (!(await rect(page, "#d-why"))) why.push("the blocked reason went while typing");
         await page.screenshot({ path: `${out}/floatchrome-typing-${width}x${height}-${theme}.png` });
