@@ -126,7 +126,8 @@ async function phase(width) {
       await page.waitForFunction((q) => document.body.innerText.includes(q), todoQ, { timeout: 3000 }).catch(() => { throw new Error("the saved to-do is not shown"); });
       await page.screenshot({ path: `${out}/saved-held-${tag}.png` });
       // Every other screen draws its saved list too, marked old, with no skeleton and no "Can't reach".
-      const want = [["#/status", desk ? "#ps-body" : "#ss-body"], ["#/pages", "#pgs-items"], ["#/peers", "#pr-items"], ["#/peers/~releases", "#pr-releases"], ["#/usage", "#us-view"]];
+      // (Status draws from the ledger: a hub whose ledger is empty has none saved, and Status waits for the hub.)
+      const want = [...(has.ledger ? [["#/status", desk ? "#ps-body" : "#ss-body"]] : []), ["#/pages", "#pgs-items"], ["#/peers", "#pr-items"], ["#/peers/~releases", "#pr-releases"], ["#/usage", "#us-view"]];
       for (const [h, sel] of want) {
         await page.evaluate((x) => { location.hash = x; }, h);
         try {
