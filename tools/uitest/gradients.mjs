@@ -208,15 +208,12 @@ const differing = (page, a, b) => page.evaluate(async ([a, b]) => {
   for (let i = 0; i < p.length; i += 4) if (Math.max(Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2])) > 2) n++;
   return n;
 }, [a.toString("base64"), b.toString("base64")]);
-// With dump (a path prefix), a band that differs is saved as -with.png and -without.png, to see what was drawn over it.
-const sameWithout = async (page, y, h, dump) => {
+const sameWithout = async (page, y, h) => {
   const a = await band(page, y, h);
   const tag = await page.addStyleTag({ content: NOPSEUDO });
   const b = await band(page, y, h);
   await tag.evaluate((e) => e.remove());
-  const same = (await differing(page, a, b)) === 0;
-  if (!same && dump) { fs.writeFileSync(dump + "-with.png", a); fs.writeFileSync(dump + "-without.png", b); }
-  return same;
+  return (await differing(page, a, b)) === 0;
 };
 const barBottom = (page) => page.evaluate(() => {
   const scr = [...document.querySelectorAll(".screen:not([hidden]), #st-screen:not([inert]), #list")].find((e) => e.checkVisibility()) || document.body;
@@ -344,12 +341,15 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         await page.waitForTimeout(200);
         const g = await page.evaluate(() => {
           const c = document.getElementById("chat").getBoundingClientRect(), m = document.querySelector("#chat .msg").getBoundingClientRect();
-          return { top: Math.ceil(c.top), first: Math.ceil(m.top), dtop: getComputedStyle(document.getElementById("detail")).getPropertyValue("--d-top"), chips: document.getElementById("d-chips").innerText.trim().slice(0, 60), caps: Math.ceil(document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom),
+          return { top: Math.ceil(c.top), first: Math.ceil(m.top), caps: Math.ceil(document.querySelector("#detail > header .d-cap-l").getBoundingClientRect().bottom),
             strip: Math.ceil(document.querySelector("#detail > header").getBoundingClientRect().bottom) };
         });
         if (g.top > 0) throw new Error("the conversation does not run to the top of the screen, under the capsules: " + JSON.stringify(g));
         if (g.first < g.caps) throw new Error("at rest the first message starts under the capsules: " + JSON.stringify(g));
-        if (!(await sameWithout(page, g.first, 24, `${out}/rest-${width}x${height}-${theme}`))) throw new Error("the band covers the first message at rest: " + JSON.stringify(g));
+        // At rest the band ends above the first message. Measured, not by pixels: hiding the band (a backdrop-filter layer)
+        // makes CI's Chrome raster the text under it again, with different anti-aliasing (CI run 45707111687).
+        const bandEnd = await page.evaluate(() => { const h = document.querySelector("#detail > header"), b = getComputedStyle(h, "::before"); return h.getBoundingClientRect().top + parseFloat(b.top) + parseFloat(b.height); });
+        if (bandEnd > g.first) throw new Error(`the band (to ${bandEnd}) covers the first message at rest: ` + JSON.stringify(g));
         await page.evaluate(() => { document.getElementById("chat").scrollTop = 200; });
         await page.waitForTimeout(200);
         if (await sameWithout(page, g.strip, 8)) throw new Error("no band over a message scrolled under the capsules: " + JSON.stringify(g));
