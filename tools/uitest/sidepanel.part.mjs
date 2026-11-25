@@ -185,6 +185,8 @@ for (const width of [1440, 390]) {
     await page.waitForSelector("#sp-body details.df", { timeout: 10000 });
     // More than 8 files start collapsed, as an outline; open them to read the placeholders.
     if (/Expand all/.test(await page.locator("#sp-fold").innerText())) await page.locator("#sp-fold").click();
+    // The whole list, not the first file to be drawn: read once, it missed c.go or a section 3 times in 20.
+    await page.waitForFunction(() => { const t = document.querySelector("#sp-body")?.innerText || ""; return ["a.go", "README.md", "drill.sh", "c.go", "docs/plan.md"].every((p) => t.includes(p)) && ["Unstaged", "Staged", "Untracked", "Commits since main"].every((h) => new RegExp(h, "i").test(t)); }, null, { timeout: 10000 }).catch(() => {});
     const txt = await body().innerText();
     for (const p of ["a.go", "README.md", "drill.sh", "c.go", "docs/plan.md"]) if (!txt.includes(p)) throw new Error("missing " + p + " in:\n" + txt.slice(0, 600));
     for (const h of ["Unstaged", "Staged", "Untracked", "Commits since main"]) if (!new RegExp(h, "i").test(txt)) throw new Error("no section " + h);
