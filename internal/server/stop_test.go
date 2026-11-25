@@ -106,6 +106,11 @@ func TestStopNeedsTheUserOrTheCoordinator(t *testing.T) {
 		t.Fatalf("coordinator = %d %s", rec.Code, rec.Body)
 	}
 	waitUntil(t, "stop ran", func() bool { return wk.runs("stop demo1") == 1 })
+	// The job goes on writing its record under the provision folder after the tool ran: wait for it to finish, or
+	// TempDir's cleanup races it ("directory not empty").
+	var j hubJobView
+	json.Unmarshal(rec.Body.Bytes(), &j)
+	waitHubJob(t, s, j.ID, jobOK)
 }
 
 func TestAFailedStopSaysWhy(t *testing.T) {
