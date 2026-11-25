@@ -99,7 +99,7 @@ for (const width of [1280, 390]) {
     if (!/Opening the chat/.test(await toastText())) throw new Error("toast while starting: " + (await toastText()));
     await page.screenshot({ path: `${out}/pagechat-toast-${width}.png` });
     await page.click("#pgs-chat", { force: true }); // a second tap while it starts
-    await settle();
+    await frames(); // its handler has run (not settle(): the POST held above keeps the app from settling until released)
     release(); hold = null;
     await page.waitForFunction(() => /^#\/(agent|a)\b|detail|chat/i.test(location.hash) || document.body.classList.contains("in-detail") || !document.getElementById("detail")?.hidden, null, { timeout: 8000 }).catch(() => {});
     await waitPosts(1); await settle();
