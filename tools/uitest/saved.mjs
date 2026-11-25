@@ -224,9 +224,11 @@ async function phase(width) {
       if ((await rows(page)) < 100) throw new Error("the big list is not drawn");
       await page.evaluate(() => { cacheMark("todos"); cacheFlush(true); }); // a write: the eviction runs
       let after = {};
-      for (let i = 0; i < 40; i++) { after = (await stored(page)) || {}; if (total(after) <= 2 << 20 && !after.board) break; await sleep(250); }
+      // The filled board is what must go; a fresh board answer saved again afterwards (a few KB) is fine.
+      const filler = (o) => !!o.board && o.board.size >= 500 * 1024;
+      for (let i = 0; i < 40; i++) { after = (await stored(page)) || {}; if (total(after) <= 2 << 20 && !filler(after)) break; await sleep(250); }
       if (total(after) > 2 << 20) throw new Error("store over 2 MB: " + total(after) + " " + JSON.stringify(Object.keys(after)));
-      if (after.board) throw new Error("the board was not the first to go: " + JSON.stringify(after) + " app: " + await page.evaluate(() => JSON.stringify({ sizes: [...cache.sizes], viewer: cache.viewer, dirty: [...cache.dirty], off: cache.off, flushing: cache.flushing })));
+      if (filler(after)) throw new Error("the board was not the first to go: " + JSON.stringify(after) + " app: " + await page.evaluate(() => JSON.stringify({ sizes: [...cache.sizes], viewer: cache.viewer, dirty: [...cache.dirty], off: cache.off, flushing: cache.flushing })));
       if (after.agents && after.agents.size > 512 * 1024) throw new Error("a 3 MB agents list was kept: " + after.agents.size);
       if (!after.todos) throw new Error("the to-dos went, not only the board: " + Object.keys(after));
       if (!after.peers) throw new Error("more went than needed: " + Object.keys(after));
