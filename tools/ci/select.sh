@@ -60,7 +60,8 @@ while IFS= read -r f; do
     internal/server/*|internal/herdr/*|internal/state/*)
       lint=true; smoke=true; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")" ;;
     internal/pageskit/*) lint=true; smoke=true; add_script pages; add_script starters; merge_browser=true; merge_go=true; add_pkg ./internal/pageskit ;;
-    internal/fleet/*) lint=true; add_script peers; merge_browser=true; merge_go=true; add_pkg ./internal/fleet ;;
+    internal/fleet/*) lint=true; add_script peers; add_script testruns; merge_browser=true; merge_go=true; add_pkg ./internal/fleet ;;
+    internal/testruns/*) lint=true; add_script testruns; merge_browser=true; merge_go=true; add_pkg ./internal/testruns; add_pkg ./internal/fleet ;;
     tools/worker/*|internal/provision/*) lint=true; add_script provision; add_script provhosts; add_script provkubevirt; add_script wake; add_script multiconfig; add_script wakeuse; add_script wakepolish; merge_browser=true; merge_go=true; add_pkg "$(pkg_of "$f")"
       # internal/server's tests read the provision and tools/worker golden files and testdata
       add_pkg ./internal/provision; add_pkg ./internal/server ;;

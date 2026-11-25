@@ -2615,6 +2615,15 @@
     .ph-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .ph-row .btn { min-height: var(--hit-44); align-self: flex-start; padding: 0 var(--sp-14); }
     .ph-row .btn.danger, .ph-dest .btn.danger { color: var(--red); border-color: var(--red); }
+    /* Test runs on a test VM (#138): its busy slots under the host's card, and "testing on …" on the agent's row */
+    .tr-runs { list-style: none; margin: calc(-1 * var(--sp-4)) 0 var(--sp-4); padding: 0 var(--sp-12); display: flex; flex-direction: column; gap: var(--sp-4); }
+    .tr-run { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-8); font-size: var(--fs-13); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+    .tr-what { color: var(--text); font-variant-numeric: tabular-nums; }
+    .tr-what::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: var(--sp-8); border-radius: 50%; background: var(--blue); vertical-align: 1px; }
+    .tr-who { min-width: 0; }
+    a.tr-agent { color: var(--blue); text-decoration: none; display: inline-block; padding: var(--sp-4) 0; }
+    @media (pointer: coarse) { a.tr-agent { padding: 12px 0; margin: -8px 0; } }
+    @media (hover: hover) { a.tr-agent:hover { text-decoration: underline; } }
     /* Stopped workers: Start (issue #66) */
     .wk-line { margin: calc(-1 * var(--sp-4)) 0 var(--sp-4); padding: 0 var(--sp-12); }
     .wk-start, .sp-stop, .wk-acts .btn { min-height: var(--hit-44); padding: 0 var(--sp-14); }

@@ -338,6 +338,68 @@ function repoDamageList() {
   return out;
 }
 
+// ---- Test runs (#138): a test VM reports its busy slots (tools/ci/remote.sh writes one record per run on the VM,
+// internal/testruns reads them), each with the agent that started it when there was one. Shown on the VM's row in
+// Peers › Hosts, with a ticking elapsed time, and on the starting agent's row ("testing on kv-a (slot 2/4)"). A host
+// too old to report runs shows none.
+function testRunsOf(h) {
+  return h && Array.isArray(h.test_runs) ? h.test_runs.filter((r) => r && r.id && !Number.isNaN(Date.parse(r.started))) : [];
+}
+function runIsAgent(r, a) {
+  return !!r.agent && (r.agent === agentId(a) || r.agent === `${a.host}/${a.pane_id}` || (isLocal(a) && r.agent === `${state.localHost}/${a.pane_id}`));
+}
+function runAgent(r) { return r.agent ? (state.agents || []).find((a) => runIsAgent(r, a)) || null : null; }
+// runsOfAgent: [{host, run}] for every run the agent started, on any host.
+function runsOfAgent(a) {
+  const out = [];
+  for (const h of state.hosts || []) for (const r of testRunsOf(h)) if (runIsAgent(r, a)) out.push({ host: h.name, run: r });
+  return out;
+}
+// fmtRunFor: how long a run has gone, to the second: "45 s", "3 min 12 s", "1 h 04 min".
+function fmtRunFor(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + " s";
+  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} s`;
+  return `${Math.floor(s / 3600)} h ${String(Math.floor(s / 60) % 60).padStart(2, "0")} min`;
+}
+const runSlot = (r) => `slot ${r.slot | 0}/${r.slots | 0}`;
+// The busy slots under a host's card in Peers › Hosts. The elapsed times are filled in (and ticked) by runTick, so the
+// list's HTML stays the same from one second to the next.
+function runsHtml(h) {
+  const runs = testRunsOf(h);
+  if (!runs.length) return "";
+  const li = runs.map((r) => {
+    const a = runAgent(r);
+    const nm = a ? (a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id) : "";
+    const who = a ? `<a class="tr-agent" href="${esc(agentHash(a))}">${esc(nm)}</a>` : r.agent ? `<span class="tr-agent">${esc(r.agent)}</span>` : "";
+    const from = [who ? "" : r.from ? "from " + esc(r.from) : "", r.branch ? `<span class="tr-branch">${esc(r.branch)}</span>` : ""].filter(Boolean).join(" · ");
+    const title = `${r.suite} run ${r.id}${r.head ? " at " + r.head.slice(0, 12) : ""}${r.from ? ", started from " + r.from : ""}`;
+    return `<li class="tr-run" title="${escAttr(title)}"><span class="tr-what">${esc(r.suite || "run")} · ${esc(runSlot(r))} · <span class="tr-for" data-tr-at="${Date.parse(r.started)}"></span></span>${
+      who || from ? `<span class="tr-who">${[who, from].filter(Boolean).join(" · ")}</span>` : ""}</li>`;
+  }).join("");
+  return `<ul class="tr-runs" aria-label="${escAttr(`Test runs on ${h.name}`)}">${li}</ul>`;
+}
+// runTick fills in every run's elapsed time, once a second while any is on screen; while the hosts come from an old
+// answer (the hub is out of reach) it says when the run started instead of counting on.
+const runTicker = { timer: 0 };
+function runTick() {
+  const els = document.querySelectorAll(".tr-for[data-tr-at]");
+  if (!els.length) { clearInterval(runTicker.timer); runTicker.timer = 0; return; }
+  const old = srcStale(agentsSrc), now = Date.now();
+  for (const el of els) {
+    const at = +el.dataset.trAt, t = old ? "since " + clockAt(at) : fmtRunFor(now - at);
+    if (el.textContent !== t) el.textContent = t;
+  }
+  if (!runTicker.timer) runTicker.timer = setInterval(runTick, 1000);
+}
+// The starting agent's row: "testing on kv-a (slot 2/4)", one line for all its runs.
+function testingHtml(a) {
+  const runs = runsOfAgent(a);
+  if (!runs.length) return "";
+  const t = "testing on " + runs.map((x) => `${x.host} (${runSlot(x.run)})`).join(", ");
+  return `<div class="why quiet tr-on" title="${escAttr(runs.map((x) => `${x.run.suite} on ${x.host}, ${runSlot(x.run)}${x.run.branch ? ", " + x.run.branch : ""}`).join("; "))}">${esc(t)}</div>`;
+}
+
 // Each host reports how full its temporary directory is (on many Linux hosts
 // /tmp is RAM, and agents' scratch files fill it). Shown on Status, red above
 // the host's own warning threshold.
@@ -1889,7 +1951,7 @@ function agentRow(a, worker) {
       <div class="meta">
         <div class="name">${esc(a.name || a.terminal_title_stripped || a.display_agent || a.agent || a.pane_id)}${
           isCoordinator(a) ? '<span class="role-chip">coordinator</span>' : ""}</div>
-        ${subLine(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgWhy(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
+        ${subLine(a)}${testingHtml(a)}${noteHtml(a)}${quietMs(a) && !whyBlocked(a) ? `<div class="why stuck" title="${escAttr(quietTitle(a))}">${esc(quietText(a))}</div>` : bgRunning(a) && !whyBlocked(a) && !noteOf(a) ? `<div class="why quiet" title="${escAttr(bgTitle(a))}">${esc(bgWhy(a))}</div>` : whyBlocked(a) ? `<div class="why" title="${escAttr(whyBlocked(a))}">${esc(whyBlocked(a))}</div>` : noteOf(a) ? `<div class="why quiet" title="${escAttr(noteOf(a))}">${esc(noteOf(a))}</div>` : ""}
       </div>
       <span class="status ${esc(agentStatusCls(a))}"${bgRunning(a) ? ` title="${esc(bgTitle(a))}"` : ""}>${esc(agentStatusText(a))}${
         bgRunning(a) ? (bgSinceMs(a) ? `<br><span class="ago">${old ? frozenAt(bgSinceMs(a)) : fmtAgo(bgSinceMs(a))}</span>` : "")
@@ -9137,7 +9199,7 @@ function renderPeersList() {
     return `<a class="pr-card${r.name === h.name ? " current" : ""}" href="${esc(peerHash(h.name))}" data-name="${esc(h.name)}">
       <span class="pr-name"><span class="pr-st ${esc(st)}" aria-hidden="true"></span>${esc(h.name)}${h.local ? ' <span class="pr-meta">(this host)</span>' : ""}${hostNeedsSignin(h.name) ? '<span class="pr-need" role="img" aria-label="an agent here is signed out" title="An agent on this host is signed out"></span>' : ""}</span>
       <span class="pr-meta">${esc(peerStatusText(h))} · ${esc(h.version || "version unknown")}${mis} · ${h.no_agents ? "no agents here" : (h.agents || 0) + " agent" + (h.agents === 1 ? "" : "s")}</span>
-      ${wakeOf(h) ? `<span class="pr-meta">${esc(wakeWhat(wakeOf(h)))}</span>` : ""}${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) && !phHost(h.name).adopted ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>${wakeOf(h) ? `<div class="wk-line" data-wk-for="${esc(h.name)}">${wakeAction(h, wakeOf(h))}</div>` : ""}`;
+      ${wakeOf(h) ? `<span class="pr-meta">${esc(wakeWhat(wakeOf(h)))}</span>` : ""}${def || old ? `<span class="pr-meta">${esc(def)}${old}</span>` : ""}${phHost(h.name) && !phHost(h.name).adopted ? `<span class="pr-meta pr-spend">built from the app · ${esc(phSpendText(phHost(h.name)))}</span>` : ""}</a>${wakeOf(h) ? `<div class="wk-line" data-wk-for="${esc(h.name)}">${wakeAction(h, wakeOf(h))}</div>` : ""}${runsHtml(h)}`;
   }).join("");
   const nudge = rls.data && rls.data.needs_you && rls.data.todo
     ? `<a class="pr-nudge" href="${RELEASES_HASH}">${esc(rls.data.todo.release.version)} needs you: ${esc(rls.data.needs_text || "see the Releases tab")} →</a>` : "";
@@ -9149,6 +9211,7 @@ function renderPeersList() {
   const cloudNote = cloud && cloud.length ? `<p class="pz-note warn pr-cloud" role="status">Not refreshed from the cloud: ${esc(cloud.join("; "))}</p>` : "";
   const all = browse + html + cloudNote + nudge;
   if ($("pr-items")._html !== all) { $("pr-items")._html = all; $("pr-items").innerHTML = all; }
+  runTick();
 }
 
 // The Hosts | Releases tabs. The Releases tab carries an orange dot while a
