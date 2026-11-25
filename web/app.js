@@ -16055,7 +16055,7 @@ function renderLaunchHosts() {
   const nav = $("ln-hosts");
   if (!multiHost()) { nav.hidden = true; nav.innerHTML = ""; return; }
   if (state.hosts.some((h) => !h.local && h.status !== "ok")) phEnsure(); // is a down host stopped? (the tag and Start follow)
-  nav.innerHTML = state.hosts.map((h) => {
+  patchHTML(nav, state.hosts.map((h) => { // patched: a poll keeps each chip the same element (a tap on one lands)
     const wx = wakeOf(h); // a stopped worker can be picked: launching starts it (issue #66)
     const down = !h.local && h.status !== "ok" && !wx;
     const off = down || h.no_agents; // a hub-only hub starts nothing itself
@@ -16063,7 +16063,7 @@ function renderLaunchHosts() {
     return `<button type="button" class="hf-chip${down ? " down" : ""}${wx ? " wk-" + esc(wx.kind) : ""}" data-host="${esc(h.name)}"` +
       `${h.no_agents ? ' title="This hub hosts no agents"' : ""}` +
       ` aria-pressed="${launch.host === h.name}"${off ? " disabled" : ""}>${esc(h.name)}${tag}</button>`;
-  }).join("");
+  }).join(""));
   nav.hidden = false;
 }
 
@@ -16078,7 +16078,8 @@ function renderLaunchStopped(host) {
   const h = hostStatus(host), x = h && wakeOf(h);
   if (!x) return;
   const msg = x.kind === "starting" ? `Starting ${host}…` : x.kind === "failed" ? `${host} did not start: ${x.reason}` : `${host} is stopped. Start it to choose a folder; launching on it also starts it (about 2 minutes).`;
-  $("ln-list").innerHTML = `<div class="ln-empty wk-launch" data-wk-launch="${esc(host)}"><p>${esc(msg)}</p>${wakeAction(h, x)}</div>`;
+  // Patched: the wake's poll redraws this every 1.5 s, and the Start button stays the same element through it.
+  patchHTML($("ln-list"), `<div class="ln-empty wk-launch" data-wk-launch="${esc(host)}"><p>${esc(msg)}</p>${wakeAction(h, x)}</div>`);
 }
 
 async function setLaunchHost(host) {
