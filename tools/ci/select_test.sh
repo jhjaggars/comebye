@@ -27,7 +27,7 @@ expect "docs only" "$o" browser_parallel false
 o="$(sel .github/workflows/ci.yml)"
 expect "CI change" "$o" scripts all
 expect "CI change" "$o" go all
-expect "CI change" "$o" go_shards 2
+expect "CI change" "$o" go_shards 3
 expect "CI change" "$o" browser_parallel true
 
 # One small extra script: the smoke job (about 130 s plus 7 s).
@@ -43,16 +43,17 @@ expect "side panel" "$o" scripts "sidepanel statussplit pagessplit offline saved
 expect "side panel" "$o" browser_parallel true
 expect "side panel" "$o" visual false
 
-# internal/server is among the packages: go-changed in 2 jobs.
+# internal/server is among the packages: go-changed in 3 jobs.
 o="$(sel internal/server/x.go)"
-expect "server" "$o" go_shards 2
+expect "server" "$o" go_shards 3
 case " $(key "$o" go) " in *" ./internal/server "*) ok "server: go names ./internal/server" ;; *) bad "server: go is '$(key "$o" go)'" ;; esac
 
 # go_shards follows whether ./internal/server is in go, whatever imports what.
-for f in internal/pageskit/x.go internal/usage/x.go tools/genicon/x.go internal/fleet/x.go; do
-  o="$(sel "$f")"; g=" $(key "$o" go) "; want=1
-  case "$g" in *" ./internal/server "*) want=2 ;; esac
-  expect "$f" "$o" go_shards "$want"
+# (Labels name the directory: "x.go: " in the log would look like a compiler error to the runner's Go problem matcher.)
+for d in internal/pageskit internal/usage tools/genicon internal/fleet; do
+  o="$(sel "$d/x.go")"; g=" $(key "$o" go) "; want=1
+  case "$g" in *" ./internal/server "*) want=3 ;; esac
+  expect "a change in $d" "$o" go_shards "$want"
 done
 
 # A visual script among the extras turns the visual pass on when the run goes parallel (the rest parts leave it out),
@@ -82,8 +83,10 @@ check_parts visual 2 "$(printf '%s\n' $visual | sort)"
 # gotest.sh --shard with packages needs internal/server among them (it splits that package's tests).
 if out="$(TEST_VM=local tools/ci/gotest.sh --shard 1/2 ./internal/usage 2>&1)"; then bad "gotest --shard without internal/server ran: $out"
 else case "$out" in *"name ./internal/server"*) ok "gotest --shard without internal/server is refused" ;; *) bad "gotest --shard: $out" ;; esac; fi
-if out="$(TEST_VM=local tools/ci/gotest.sh --shard 1/3 2>&1)"; then bad "gotest --shard 1/3 ran"
-else ok "gotest --shard 1/3 is refused"; fi
+if out="$(TEST_VM=local tools/ci/gotest.sh --shard 4/3 2>&1)"; then bad "gotest --shard 4/3 ran"
+else ok "gotest --shard 4/3 is refused"; fi
+if out="$(TEST_VM=local tools/ci/gotest.sh --shard 1/4 2>&1)"; then bad "gotest --shard 1/4 ran"
+else ok "gotest --shard 1/4 is refused"; fi
 
 echo
 [ "$fails" = 0 ] && echo "select_test: all ok" || echo "select_test: $fails FAILED"
