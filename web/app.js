@@ -11337,22 +11337,27 @@ function sxCard(p) {
     <div class="sx-acts"><button type="button" class="btn sm" data-sx="rename"${sx.busy ? " disabled" : ""}>Rename</button><button type="button" class="btn sm danger" data-sx="remove"${sx.busy ? " disabled" : ""}>Remove</button></div></div>`;
 }
 
+// A phone on its side: index.html's "phone landscape" rules use the same query.
+const PHONE_LANDSCAPE = "(pointer: coarse) and (max-height: 500px) and (min-width: 601px)";
+
 // The Appearance section: device-level choices kept in localStorage (web/themes.js), applied to <html> before
 // first paint. Reading width is four presets; the strip draws the column to scale on this window's conversation pane.
 function sxAppearance() {
   const cur = CT.colChoice();
   const pane = Math.max(1, Math.round($("settings").getBoundingClientRect().width || window.innerWidth)); // the screen is the conversation pane
+  // A phone on its side: the default column is 72% of the screen (index.html, "phone landscape"), not 820px.
+  const cols = matchMedia(PHONE_LANDSCAPE).matches ? CT.COLS.map((c) => (c.id ? c : { ...c, px: Math.round(0.72 * window.innerWidth), sub: "72%, the default" })) : CT.COLS;
   const colPx = (c) => (c.px ? Math.min(c.px, pane - 20) : pane - 20);
-  const sel = CT.COLS.find((c) => c.id === cur);
+  const sel = cols.find((c) => c.id === cur);
   const w = colPx(sel);
   const pct = (n) => (Math.max(0, Math.min(1, n / pane)) * 100).toFixed(2);
-  const same = CT.COLS.every((c) => Math.round(colPx(c)) === Math.round(colPx(CT.COLS[0])));
+  const same = cols.every((c) => Math.round(colPx(c)) === Math.round(colPx(cols[0])));
   const caption = same ? `On this window the column is always ${Math.round(w)} px: this setting has no effect here.`
     : `On this window the column is ${Math.round(w)} px of the ${pane} px conversation pane.` + (sel.id === "full" ? " Full means very long lines of prose." : "");
   return `<h2>Appearance</h2>
     <p class="sx-note">Saved on this device only.</p>
     <div class="sx-field"><div class="sx-lbl" id="sx-col-lbl">Reading width</div>
-      ${sxRadios("col", "sx-col-lbl", CT.COLS, cur)}
+      ${sxRadios("col", "sx-col-lbl", cols, cur)}
       <div class="sx-strip" aria-hidden="true"><i class="sx-strip-col" style="left:${pct((pane - w) / 2)}%;width:${pct(w)}%"></i></div>
       <p class="sx-note" role="status">${esc(caption)}</p></div>
     <div class="sx-field"><div class="sx-lbl" id="sx-rs-lbl">Text size</div>

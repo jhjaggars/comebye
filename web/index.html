@@ -134,7 +134,7 @@
     #theme-panel .tp-sys label { display: flex; flex-direction: column; gap: var(--sp-4); }
     #theme-panel select { min-height: var(--hit-40); padding: 0 var(--sp-8); background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-8); font: inherit; font-size: var(--fs-14); }
     #theme-panel select:focus-visible { outline-offset: 1px; }
-    main { padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); max-width: 640px; margin: 0 auto; }
+    main { padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); max-width: 640px; margin: 0 auto; }
 
     .agent {
       display: flex; align-items: center; gap: var(--sp-12);
@@ -365,7 +365,7 @@
 
     /* The offline strip (app.js stripSync): one quiet line under the header of the screen in front, while its rows are old. */
     .hub-strip { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: 30px; box-sizing: border-box;
-      padding: var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+      padding: var(--sp-4) max(var(--sp-16), env(safe-area-inset-right, 0px)) var(--sp-4) max(var(--sp-16), env(safe-area-inset-left, 0px));
       background: var(--panel); border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--fs-13); line-height: 1.3; }
     .hub-strip[hidden] { display: none; }
     .hub-strip.sticky { position: sticky; z-index: var(--z-bar); }
@@ -379,7 +379,7 @@
     .hub-strip .hs-retry:disabled { color: var(--muted); cursor: default; }
     /* Actions while offline (app.js hubGateSync): a write the hub can't take shows as unavailable, with the reason in words. */
     [data-hub-off] { opacity: .45; cursor: not-allowed; }
-    .hub-off-note { flex: none; padding: var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) var(--sp-4) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+    .hub-off-note { flex: none; padding: var(--sp-4) max(var(--sp-16), env(safe-area-inset-right, 0px)) var(--sp-4) max(var(--sp-16), env(safe-area-inset-left, 0px));
       color: var(--muted); font-size: var(--fs-13); line-height: 1.3; }
     .td-panel .hub-off-note { padding: var(--sp-4) 0 0; }
 
@@ -430,7 +430,10 @@
     /* A phone in landscape (touch, short, wider than the phone rules): the default column is a centred ~72% of the
        screen, as phone chat apps do on their side, not the desktop's 820px with wide gutters; a width the user picked
        in Appearance still applies. The rest of the landscape rules are after the header's (search "phone landscape"). */
-    @media (pointer: coarse) and (max-height: 500px) and (min-width: 601px) { html:not([data-col]) { --col: 72vw; } }
+    @media (pointer: coarse) and (max-height: 500px) and (min-width: 601px) {
+      :root { --land-col: 72vw; } /* the other screens' column too (search "phone landscape: every screen") */
+      html:not([data-col]) { --col: var(--land-col); }
+    }
     /* The text size: Settings > Appearance sets <html data-rs>. It scales the conversation only (#chat, #sv-chat, the
        composer's text, the Appearance preview): those redefine --fs-11..18 from --rs, so every font-size in them
        follows with no per-rule work. The header, the list and the menus keep the root tokens and their tap targets. */
@@ -1093,7 +1096,7 @@
     .ln-body {
       flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
       width: 100%; max-width: 640px; margin: 0 auto;
-      padding: var(--sp-12) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) var(--sp-16) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+      padding: var(--sp-12) max(var(--sp-16), env(safe-area-inset-right, 0px)) var(--sp-16) max(var(--sp-16), env(safe-area-inset-left, 0px));
     }
     .ln-hosts { margin: 0 -16px var(--sp-4); padding: 0 var(--sp-16) var(--sp-2); }
     .hf-chip:disabled { opacity: 0.45; cursor: default; }
@@ -1156,7 +1159,7 @@
     .ln-hint[hidden] { display: none; }
     .ln-foot {
       flex: none; width: 100%; max-width: 640px; margin: 0 auto;
-      padding: var(--sp-10) calc(var(--sp-16) + env(safe-area-inset-right, 0px)) calc(var(--sp-10) + var(--safe-bottom)) calc(var(--sp-16) + env(safe-area-inset-left, 0px));
+      padding: var(--sp-10) max(var(--sp-16), env(safe-area-inset-right, 0px)) calc(var(--sp-10) + var(--safe-bottom)) max(var(--sp-16), env(safe-area-inset-left, 0px));
       border-top: 1px solid var(--border); background: var(--bg);
     }
     .ln-status { color: var(--muted); font-size: var(--fs-13); text-align: center; }
@@ -1520,7 +1523,7 @@
     .ss-body {
       flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
       width: 100%; max-width: 640px; margin: 0 auto;
-      padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px));
+      padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px));
     }
     /* The to-do list: an accordion, one item open at a time. The phone shows
        it as a card in the list; desktop as the To do page (rules further down). */
@@ -1708,7 +1711,7 @@
     #p-todo > .rs { position: absolute; inset: 0; z-index: var(--z-view); } /* above the page header (z-bar) */
     .rs.on-phone { position: fixed; inset: 0; z-index: var(--z-view); padding-bottom: var(--safe-bottom); } /* top is set under the app header (rsPlace), and below the menus, sheets and screens, so they open over it */
     .rs.on-phone .rs-bar { padding-top: 0; min-height: var(--hit-48); }
-    .rs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-8) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
+    .rs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-8); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) max(var(--sp-12), env(safe-area-inset-right, 0px)) 0 max(var(--sp-8), env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
     .rs-back { flex: none; display: inline-flex; align-items: center; gap: var(--sp-4); }
     .rs-title { margin: 0; min-width: 0; flex: 0 1 auto; font-size: var(--fs-16); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rs-bar .pgs-pill { flex: none; }
@@ -2129,7 +2132,7 @@
     .rc-fresh.warn { color: var(--orange); }
     .rc-panes { flex: 1; min-height: 0; display: flex; }
     .rc-list, .rc-session { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-    .rc-list { flex: 1; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .rc-list { flex: 1; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .rc-session { display: none; flex: 1; padding-bottom: calc(var(--sp-20) + var(--safe-bottom)); }
     #recall.in-session .rc-list { display: none; }
     #recall.in-session .rc-session { display: block; }
@@ -2187,7 +2190,7 @@
     .rc-step { flex: none; min-width: 44px; min-height: var(--hit-44); font: inherit; font-size: var(--fs-18); color: var(--text); background: none; border: 0; border-radius: var(--r-8); cursor: pointer; }
     .rc-step:disabled { color: var(--muted); opacity: .5; cursor: default; }
     .rc-step:focus-visible { outline-offset: -2px; }
-    .rc-sbody { max-width: 860px; margin: 0 auto; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .rc-sbody { max-width: 860px; margin: 0 auto; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) 0 max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .rc-stitle { font-size: var(--fs-18); font-weight: 650; margin: 0 0 var(--sp-4); overflow-wrap: anywhere; }
     .rc-subs { display: flex; gap: var(--sp-6); margin-top: var(--sp-8); overflow-x: auto; scrollbar-width: none; }
     .rc-subs .rc-chip { max-width: none; white-space: nowrap; }
@@ -2328,7 +2331,7 @@
     #pgs-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pgs-panes { flex: 1; min-height: 0; display: flex; }
     .pgs-list, .pgs-view { min-width: 0; min-height: 0; }
-    .pgs-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .pgs-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .pgs-view { display: none; flex: 1; flex-direction: column; }
     #pages.in-page .pgs-list { display: none; }
     #pages.in-page .pgs-view { display: flex; }
@@ -2393,7 +2396,7 @@
     .pgs-empty code { font: var(--fs-13) var(--ff-code); color: var(--text); }
     /* The viewer's bar: one row, so the page gets the height. It replaces the screen's header, so it clears the status bar and notch itself (an installed app draws under them): without that the back arrow is out of reach. Who made it and the sandbox note are behind (i), the actions behind the three dots. */
     #pages.in-page > header { display: none; }
-    .pgs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-6); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) calc(var(--sp-6) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-6) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
+    .pgs-bar { flex: none; display: flex; align-items: center; gap: var(--sp-6); min-height: calc(var(--hit-48) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) max(var(--sp-6), env(safe-area-inset-right, 0px)) 0 max(var(--sp-6), env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
     .pgs-ib { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: var(--hit-44); min-height: var(--hit-44); padding: 0; background: none; border: 0; border-radius: var(--r-10); color: var(--muted); cursor: pointer; }
     .pgs-ib[aria-pressed="true"], .pgs-ib[aria-expanded="true"] { background: var(--panel2); color: var(--text); }
     .pgs-ib:focus-visible { outline-offset: -2px; }
@@ -2472,7 +2475,7 @@
     #pr-back { margin: -10px 0 -10px -10px; color: var(--text); }
     .pr-panes { flex: 1; min-height: 0; display: flex; }
     .pr-list, .pr-view { min-width: 0; min-height: 0; }
-    .pr-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    .pr-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .pr-view { display: none; flex: 1; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 calc(var(--sp-20) + var(--safe-bottom)); }
     #peers.in-peer .pr-list { display: none; }
     #peers.in-peer .pr-view { display: flex; }
@@ -2483,9 +2486,9 @@
     .pr-st.connecting { background: var(--orange); }
     .pr-meta { color: var(--muted); font-size: var(--fs-13); overflow-wrap: anywhere; }
     .pr-meta .warn { color: var(--orange); }
-    .pr-bar { flex: none; padding: var(--sp-10) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) var(--sp-10) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+    .pr-bar { flex: none; padding: var(--sp-10) max(var(--sp-12), env(safe-area-inset-right, 0px)) var(--sp-10) max(var(--sp-12), env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
     .pr-bar h2 { margin: 0; font-size: var(--fs-16); font-weight: 650; overflow-wrap: anywhere; display: flex; align-items: center; gap: var(--sp-8); }
-    .pr-sec { padding: var(--sp-14) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-12) + env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; }
+    .pr-sec { padding: var(--sp-14) max(var(--sp-12), env(safe-area-inset-right, 0px)) 0 max(var(--sp-12), env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: var(--sp-8); min-width: 0; }
     .pr-sec h3 { margin: 0; font-size: var(--fs-12); font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
     .pr-kv { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-4) var(--sp-12); font-size: var(--fs-14); min-width: 0; margin: 0; }
     .pr-kv dt { color: var(--muted); } .pr-kv dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
@@ -2710,7 +2713,7 @@
     .az-acts .btn { min-height: var(--hit-44); padding: 0 var(--sp-16); white-space: nowrap; }
     @media (max-width: 560px) { .az-grid { grid-template-columns: 1fr; } .az-acts { width: 100%; } .az-acts .btn { flex: 1 1 0; } }
     /* The Releases tab: the current release, the fleet's versions with their Upgrade buttons, and the last five releases. */
-    .pr-tabs { flex: none; display: flex; gap: var(--sp-4); padding: var(--sp-6) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) 0 calc(var(--sp-12) + env(safe-area-inset-left, 0px)); background: var(--panel); border-bottom: 1px solid var(--border); }
+    .pr-tabs { flex: none; display: flex; gap: var(--sp-4); padding: var(--sp-6) max(var(--sp-12), env(safe-area-inset-right, 0px)) 0 max(var(--sp-12), env(safe-area-inset-left, 0px)); background: var(--panel); border-bottom: 1px solid var(--border); }
     .pr-tabs button { font: inherit; font-size: var(--fs-14); min-height: var(--hit-44); padding: 0 var(--sp-14); border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; }
     .pr-tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--blue); }
     .pr-tabs button[hidden] { display: none; }
@@ -2720,7 +2723,7 @@
     #peers.in-peer .pr-tabs { display: none; }
     .pr-panes[hidden], .rl-pane[hidden] { display: none; }
     .pr-nudge { display: block; margin: var(--sp-2) var(--sp-2) var(--sp-12); padding: var(--sp-10) var(--sp-12); border: 1px solid var(--orange); border-radius: var(--r-12); color: var(--text); text-decoration: none; font-size: var(--fs-14); background: color-mix(in srgb, var(--orange) 10%, var(--panel)); overflow-wrap: anywhere; }
-    .rl-pane { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); min-width: 0; }
+    .rl-pane { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-20) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); min-width: 0; }
     .rl-wrap { display: grid; gap: var(--sp-12); grid-template-columns: minmax(0, 1fr); grid-template-areas: "card" "fleet" "hist"; max-width: 1240px; margin: 0 auto; }
     .rl-a-card { grid-area: card; } .rl-a-fleet { grid-area: fleet; } .rl-a-hist { grid-area: hist; }
     .rl-a-card, .rl-a-fleet, .rl-a-hist { min-width: 0; }
@@ -2784,11 +2787,11 @@
     /* Usage: tokens by kind, model, project and handoff. A screen of its own, like Peers and Pages. Charts are drawn by hand as inline SVG from theme tokens. */
     #us-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #us-body:focus { outline: 0; }
-    #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    #us-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     /* Archived: finished work put away (#/archived). A screen of its own, like Settings; its rows are .rv-item cards. */
     #ar-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #ar-body:focus { outline: 0; }
-    #ar-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    #ar-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .ar-wrap { max-width: 900px; margin: 0; display: flex; flex-direction: column; gap: var(--sp-10); min-width: 0; }
     .ar-sum { margin: 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.45; overflow-wrap: anywhere; }
     .ar-sum b { color: var(--text); font-size: var(--fs-15); font-weight: 650; }
@@ -2817,7 +2820,7 @@
     /* Settings: the passkeys list. A screen of its own, like Usage. */
     #sx-back { margin: -10px 0 -10px -10px; color: var(--text); }
     #sx-body:focus { outline: 0; }
-    #sx-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) calc(var(--sp-12) + env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) calc(var(--sp-12) + env(safe-area-inset-left, 0px)); }
+    #sx-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-12) max(var(--sp-12), env(safe-area-inset-right, 0px)) calc(var(--sp-24) + var(--safe-bottom)) max(var(--sp-12), env(safe-area-inset-left, 0px)); }
     .sx-wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-12); min-width: 0; }
     .sx-wrap h2 { margin: 0; font-size: var(--fs-16); font-weight: 650; }
     .sx-note { color: var(--muted); font-size: var(--fs-13); line-height: 1.45; overflow-wrap: anywhere; margin: 0; }
@@ -3021,6 +3024,36 @@
       #detail.sp-open > #sp { position: fixed; left: 0; right: 0; bottom: 0; height: 72vh; height: 72dvh; z-index: var(--z-view); border-left: 0; border-top: 1px solid var(--border); border-radius: var(--r-16) var(--r-16) 0 0; box-shadow: 0 -6px 24px var(--sh-lg); }
       #sp .sp-tabs { padding-top: var(--sp-14); }
       #sp .sp-tabs::before { content: ""; position: absolute; top: 5px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: var(--r-2); background: var(--border); }
+    }
+    /* ---- Phone landscape: every screen (the agent chat's rules are after its header's) ----
+       A phone on its side is 844-932px wide and only 390-430px tall. Each screen gets the chat's treatment: one 44px
+       bar, the notch's inset instead of our side padding (never both), and a centred column. Screens of text and rows
+       (the agents list with its To do card, Status, Hosts, Releases, Archived, Settings, the New agent dialog and the
+       other dialogs) use the chat's 72vw column; grids, tables and charts (Pages, Prices, Usage, a page itself) keep
+       the whole safe area, where their columns read better than in 600px. The side panel's sheet takes the height under
+       the header. Portrait phones and desktops never match the query, so nothing changes for them. */
+    @media (pointer: coarse) and (max-height: 500px) and (min-width: 601px) {
+      :root { --land-pad: max(var(--sp-12), env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px), calc((100% - var(--land-col)) / 2)); }
+      /* One 44px bar: no padding above or below the row, the buttons at full tap height. */
+      :is(#list, .screen, #st-screen, #launch, #review, #switch, #chatpick, #mk, #fs, #pk, #ps, #rt) > header { padding-top: env(safe-area-inset-top, 0px); padding-bottom: 0; min-height: var(--hit-44); }
+      .pgs-bar, .rs-bar, .rs.on-phone .rs-bar { min-height: calc(var(--hit-44) + env(safe-area-inset-top, 0px)); }
+      .rs.on-phone .rs-bar { min-height: var(--hit-44); }
+      .pr-tabs { padding-top: 0; }
+      /* The column: padding centres it, so a background or a scrollbar still spans the screen. */
+      #list > main { max-width: none; }
+      .ss-body, .ln-body, .ln-foot { max-width: none; }
+      :is(#list > main, .ss-body, .ln-body, .ln-foot, #ar-body, #sx-body) { padding-left: var(--land-pad); padding-right: var(--land-pad); }
+      /* Peers: one list on the column; from 860px it is already a list beside the host, and from 900px Releases is two
+         columns, and those keep the safe area. */
+      @container (max-width: 859px) { :is(#peers .pr-list, #peers .pr-bar, #peers .pr-sec) { padding-left: var(--land-pad); padding-right: var(--land-pad); } }
+      @container (max-width: 899px) { #pr-releases { padding-left: var(--land-pad); padding-right: var(--land-pad); } }
+      /* The side panel: a sheet over the conversation from under its header down, clear of the notch. */
+      #detail.sp-open > #sp { top: calc(var(--hit-44) + env(safe-area-inset-top, 0px)); height: auto; }
+      #sp .sp-tabs { padding-left: max(var(--sp-8), env(safe-area-inset-left, 0px)); padding-right: max(var(--sp-8), env(safe-area-inset-right, 0px)); }
+      #sp .sp-bar { padding-left: max(var(--sp-10), env(safe-area-inset-left, 0px)); padding-right: max(var(--sp-10), env(safe-area-inset-right, 0px)); }
+      #sp .sp-body { padding-left: max(var(--sp-14), env(safe-area-inset-left, 0px)); padding-right: max(var(--sp-14), env(safe-area-inset-right, 0px)); }
+      /* A page itself: its own layout, kept out from under the notch (a frame does not get the insets). */
+      #pgs-view .pgs-frame { width: auto; margin-left: env(safe-area-inset-left, 0px); margin-right: env(safe-area-inset-right, 0px); }
     }
     /* ---- Surfaces: Layered (the default; <html data-depth="flat"> turns it off and leaves every rule above as it was) ----
        The tonal scale from themes.js: --s1 cards, rows, bars and fields; --s2 the wells and the composer inside them (a step
