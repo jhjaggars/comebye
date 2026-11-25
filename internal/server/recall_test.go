@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -194,9 +193,7 @@ func TestRecallWithoutAnIndex(t *testing.T) {
 
 // What was searched for stays out of the log, even when the query fails.
 func TestRecallDoesNotLogQueries(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	buf := captureLog(t)
 	path := recallIndex(t)
 	ts := recallServer(t, path)
 	for _, q := range []string{"sekritquery", `"sekritquery`} {

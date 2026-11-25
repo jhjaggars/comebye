@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,10 +60,7 @@ func signinWait(t *testing.T, s *Server, id string, want string) map[string]any 
 }
 
 func TestSigninRoutesHappyPathAndSentinelCode(t *testing.T) {
-	var logs bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(old) })
+	logs := captureLog(t)
 
 	s, home, dir := signinHost(t, "echo") // the child prints the code back
 	var seen bytes.Buffer                 // every answer the routes gave

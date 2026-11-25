@@ -1,12 +1,10 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -117,9 +115,7 @@ func TestPeerReleaseOpsAreOnlyEverRegisteredUserOnly(t *testing.T) {
 }
 
 func TestPeerReleaseOpsRunTheToolForAHubCall(t *testing.T) {
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	logs := captureLog(t)
 	s, tool := peerTagServer(t)
 
 	w := do(s, "POST", "/api/release/check", hubCall, peerRelCalls[0].body)
