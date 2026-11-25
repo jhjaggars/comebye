@@ -11774,7 +11774,7 @@ function sxCard(p) {
 
 // Vibrate (#135 slice 6): a short buzz on a few key actions, Android only. Safari has no navigator.vibrate, so
 // the setting is shown only where it exists. Off by default: native apps do not buzz on a plain tap either.
-// haptic(ms) is the one entry point (Send, Answer, tab switches, long press, pull to refresh); it must run inside a
+// haptic(ms) is the one entry point (Send, Answer, tab switches, pull to refresh); it must run inside a
 // user gesture, and does nothing with the setting off or without the API.
 const VIBRATE_KEY = "comebye-vibrate";
 const VIBRATES = [
@@ -11790,12 +11790,22 @@ function haptic(ms = 8) {
   if (!vibrateOK() || !vibrateOn()) return;
   try { navigator.vibrate(ms); } catch {}
 }
+// The key actions that buzz: Send, an answer (a to-do's choice or Answer button, a blocked agent's option), and a switch
+// to another tab or segment. A tab that is already the selected one is not a switch. One capture listener, so a
+// handler that redraws or stops the click cannot lose it; a click is a user gesture, which vibrate needs.
+const HAPTIC_SEL = '#btn-send, .td-answer-btn, .td-opt, #answer .opt, .lf-tab, [role="tab"]';
+addEventListener("click", (ev) => {
+  const el = ev.target && ev.target.closest && ev.target.closest(HAPTIC_SEL);
+  if (!el || el.disabled) return;
+  if (el.matches('.lf-tab, [role="tab"]') && (el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-pressed") === "true")) return;
+  haptic();
+}, true);
 function sxTouch() {
   if (!vibrateOK()) return "";
   return `<h3 class="sx-grp">Touch</h3>
     <div class="sx-field"><div class="sx-lbl" id="sx-vibrate-lbl">Vibrate</div>
       ${sxRadios("vibrate", "sx-vibrate-lbl", VIBRATES, vibrateOn() ? "on" : "")}
-      <p class="sx-note">A short buzz when you send, answer, switch a tab, long press or pull to refresh.</p></div>`;
+      <p class="sx-note">A short buzz when you send, answer, switch a tab or pull to refresh.</p></div>`;
 }
 
 // A phone on its side: index.html's "phone landscape" rules use the same query.

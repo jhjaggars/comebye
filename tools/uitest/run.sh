@@ -203,8 +203,12 @@ if want viewtrans; then
   fixture_hub viewtr 283
   node viewtrans.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
 fi
-# Vibrate (#135): a Settings choice, off by default, shown only on a touch screen with navigator.vibrate (Android).
-if want vibrate; then node vibrate.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# Vibrate (#135): a Settings choice, off by default, shown only on a touch screen with navigator.vibrate (Android);
+# with it on, Send, an answer and a tab switch buzz.
+if want vibrate; then
+  fixture_hub vibrate 284
+  node vibrate.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
+fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want notes; then node notes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want refused; then node refused.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
