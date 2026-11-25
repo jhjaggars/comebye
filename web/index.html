@@ -2141,7 +2141,7 @@
       position: fixed; inset: 0; z-index: var(--z-screen); display: flex; flex-direction: column; background: var(--bg);
     }
     .screen[hidden] { display: none; }
-    /* Pull to refresh (#136 slice 6, app.js "Pull to refresh"): while a screen that pulls is in front on a phone, the
+    /* Pull to refresh (issue 136, slice 6; app.js "Pull to refresh"): while a screen that pulls is in front on a phone, the
        browser's own bounce and pull to refresh are off, so the ring is the only thing that moves. */
     html.ptr-on, html.ptr-on body, html.ptr-on :is(#ss-body, .pgs-list, .pr-list, .rl-pane, #us-body, #ar-body) { overscroll-behavior-y: none; }
     .ptr {
