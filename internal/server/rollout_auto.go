@@ -276,7 +276,7 @@ func (s *Server) autoCatchUpTick(ctx context.Context) string {
 	if !actionable(plan) {
 		return "current"
 	}
-	j, err := s.rollout.StartAuto(it.ID, v, it.Release.Commit, autoRolloutBy, plan)
+	j, err := s.rollout.StartCatchUp(it.ID, v, it.Release.Commit, autoRolloutBy, plan)
 	if err != nil {
 		return "error: " + err.Error()
 	}

@@ -337,6 +337,33 @@ func (d *Dispatcher) NotifyApproval(id, title, body string) {
 	}
 }
 
+// NotifyRollout is a rollout's one note: it finished (the "done" kind) or
+// stopped (the "blocked" kind: something needs the user). The tap opens the
+// release item. run (the rollout's id) keys its throttle, so a second
+// rollout of the same release is told too.
+func (d *Dispatcher) NotifyRollout(todo, run, title, body string, stopped bool) {
+	kind, urgency, tag := KindDone, "normal", "white_check_mark"
+	if stopped {
+		kind, urgency, tag = KindBlocked, "high", "warning"
+	}
+	if d == nil || !d.kindOn(kind) {
+		return
+	}
+	ntfyOn, pushOn := d.channels()
+	key := "rollout/" + run
+	if pushOn {
+		d.Push.Notify(key+"/"+kind, push.Message{Title: title, Body: body, URL: TodoRoute(todo), Tag: key},
+			push.Options{Urgency: urgency, TTL: 12 * time.Hour, Topic: push.TopicFor(key)})
+	}
+	if ntfyOn {
+		msg := ntfyMessage{Title: title, Message: body, Tags: []string{tag}}
+		if d.Ntfy.ClickURL != "" {
+			msg.Click = strings.TrimRight(d.Ntfy.ClickURL, "/") + TodoRoute(todo)
+		}
+		d.Ntfy.notify(key, kind, msg)
+	}
+}
+
 func (d *Dispatcher) kindOn(k string) bool { return d.Kinds == nil || d.Kinds[k] }
 
 // digestEntry is one "done" waiting for the digest.

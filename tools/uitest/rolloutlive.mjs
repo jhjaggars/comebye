@@ -5,11 +5,14 @@
 // 13) stops the rollout at the first peer (there is no canary by default) and leaves the rest untouched. A fourth peer, "prov",
 // is -hub-only (the in-cluster provisioner): it reports with_hub, is never upgraded in place, and is done after the hub's
 // deploy ("upgraded with the hub"). Last, a peer that is down is skipped, and caught up by itself when it is back.
+// The hub sends its notifications to a local ntfy stand-in: each rollout sends exactly one note when it first finishes or
+// stops (issue #141, slice 5), none after the hub restart, the Retry or the catch-up.
 //
 //   node rolloutlive.mjs OUT_DIR       (env: COMEBYE_BIN, FAKE_SOCK; SCHEME=dark|light)
 import { launch } from "./lib.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +27,14 @@ const freePort = () => new Promise((res) => { const s = net.createServer().liste
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const procs = {};
 const results = [];
+// The ntfy stand-in: every notification the hub publishes.
+const notes = [];
+const ntfy = await new Promise((res) => {
+  const srv = http.createServer((req, rsp) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { notes.push(JSON.parse(b)); } catch {} rsp.end("{}"); }); });
+  srv.listen(0, "127.0.0.1", () => res(srv));
+});
+const hubArgs = ["-hub-mode", "-ntfy-url", `http://127.0.0.1:${ntfy.address().port}`, "-ntfy-topic", "rollout-live"];
+const rolloutNotes = (v) => notes.filter((n) => (n.title || "").startsWith(v + " roll"));
 
 function start(name, port, extra) {
   const log = fs.openSync(path.join(out, `rollout-${name}.log`), "a");
@@ -48,7 +59,7 @@ let browser;
 try {
   names.forEach((n, i) => start(n, peerPorts[i], ["-ledger=false", "-hub", base]));
   start("prov", provPort, ["-ledger=false", "-hub-only", "-hub", base]);
-  start("hub", hubPort, ["-hub-mode"]);
+  start("hub", hubPort, hubArgs);
   await Promise.all([up(hubPort), ...peerPorts.map(up), up(provPort)]);
   [...peerPorts, provPort].forEach(async (port, i) => { const n = fleet[i]; const r = await j("POST", "/api/peers", { name: n, urls: [`http://127.0.0.1:${port}`] }); if (r.status !== 201) throw new Error("add " + n + JSON.stringify(r)); });
   for (let i = 0; i < 100; i++) { const r = await j("GET", "/api/peers"); if (fleet.every((n) => (r.body.peers || []).some((p) => p.name === n && p.status === "ok"))) break; await sleep(100); }
@@ -118,7 +129,7 @@ try {
     await sleep(500);
     const file = JSON.parse(fs.readFileSync(path.join(work, "state-hub", "release", "rollout.json"), "utf8"));
     if (file.state !== "running") throw new Error("the file says " + file.state);
-    start("hub", hubPort, ["-hub-mode"]);
+    start("hub", hubPort, hubArgs);
     await up(hubPort);
     for (let i = 0; i < 100; i++) { const r = await j("GET", "/api/peers"); if (names.every((n) => (r.body.peers || []).some((p) => p.name === n && p.status === "ok"))) break; await sleep(100); }
     const done = await until("done", async () => { const x = await job(); return x && x.state === "done" && x; }, 120000);
@@ -131,6 +142,16 @@ try {
     if (steps.join() !== "rollout.step:p1,rollout.step:p2,rollout.step:p3,rollout.step:hub") throw new Error(steps.join());
     const v = await view();
     if (!v.hosts.every((h) => h.version === V1)) throw new Error(v.hosts.map((h) => h.name + ":" + h.version).join());
+  });
+  await check("the finished rollout sent one note, from the restarted hub, and the item says the same line", async () => {
+    await until("the note", async () => rolloutNotes(V1).length > 0, 10000);
+    await sleep(1500); // a second one would have come by now
+    const n = rolloutNotes(V1);
+    if (n.length !== 1 || n[0].title !== V1 + " rolled out" || n[0].message !== V1 + " is on every host") throw new Error(JSON.stringify(n));
+    const acts = await audit(r1.id);
+    if (acts.filter((a) => a.startsWith("rollout.told")).length !== 1) throw new Error(acts.join(" "));
+    const todo = (await j("GET", "/api/todos/" + r1.id)).body.todo;
+    if (todo.state === "open" && todo.release.rollout_note !== V1 + " is on every host") throw new Error(JSON.stringify(todo.release));
   });
 
   // ---- scenario 2: a build whose simulated upgrade fails stops at the first peer ----
@@ -154,6 +175,10 @@ try {
     const up2 = await j("POST", `/api/hosts/p2/release/upgrade`, { todo: r2.id, version: V2 }, { "X-Comebye-Csrf": r2.csrf });
     if (JSON.stringify(up2.body).includes("rollout_active")) throw new Error("still locked after Cancel");
   });
+  await check("the stop sent one note naming the host and the reason; the Retry that stopped again sent none", async () => {
+    const n = rolloutNotes(V2);
+    if (n.length !== 1 || n[0].title !== V2 + " rollout stopped" || !/^v9\.7\.13 stopped at p1: .*simulated smoke check failed/.test(n[0].message) || !n[0].tags.includes("warning")) throw new Error(JSON.stringify(n));
+  });
 
   // ---- scenario 3: p3 is down; it is skipped, the rest go, and it is caught up by itself when it is back ----
   const V3 = "v9.7.2";
@@ -176,6 +201,9 @@ try {
     if (phases(caught) !== "p1=ok p2=ok p3=ok hub=ok prov=ok") throw new Error(phases(caught));
     const acts = await audit(r3.id);
     if (!acts.includes("rollout.catchup:p3")) throw new Error(acts.join(" "));
+    await sleep(1500);
+    const n = rolloutNotes(V3);
+    if (n.length !== 1 || n[0].message !== V3 + " is on every host (1 behind until they're back: p3)") throw new Error("notes: " + JSON.stringify(n));
     const v = await view();
     if (!v.hosts.every((h) => h.version === V3)) throw new Error(v.hosts.map((h) => h.name + ":" + h.version).join());
   });
@@ -199,6 +227,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   for (const p of Object.values(procs)) p.kill("SIGKILL");
+  ntfy.close();
   fs.rmSync(work, { recursive: true, force: true });
 }
 let bad = 0;

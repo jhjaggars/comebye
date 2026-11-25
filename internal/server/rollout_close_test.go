@@ -248,7 +248,7 @@ func TestFinishWithAHubSkipIsStillNotOk(t *testing.T) {
 	if got := behindOnly(j); len(got) != 1 || got[0] != "wk1" {
 		t.Fatalf("behind %v", got)
 	}
-	if n := rolloutNoteOf(Rollout{Version: "v1.0.0", State: roDone, Plan: j.Plan}); !strings.Contains(n, "behind until they are back: wk1") {
+	if n := rolloutNoteOf(Rollout{Version: "v1.0.0", State: roDone, Plan: j.Plan}); !strings.Contains(n, "behind until they're back: wk1") {
 		t.Fatalf("note %q", n)
 	}
 }

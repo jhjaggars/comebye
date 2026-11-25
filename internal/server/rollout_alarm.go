@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -44,6 +45,12 @@ func rolloutAlarmPrefix(release, target string) string {
 // rolloutFailed files the item for a failed run, unless one is open for the
 // release and target already. run names the run (its id or start time).
 func (s *Server) rolloutFailed(rel Todo, target, run, what, headline, errText, output string) {
+	s.rolloutFailedUndo(rel, target, run, what, headline, errText, output, "")
+}
+
+// rolloutFailedUndo is rolloutFailed with a way back (Markdown) the item
+// gives before the output: the hub bump's undo command (hubUndo).
+func (s *Server) rolloutFailedUndo(rel Todo, target, run, what, headline, errText, output, undo string) {
 	if s.todos == nil || rel.Release == nil {
 		return
 	}
@@ -69,6 +76,9 @@ func (s *Server) rolloutFailed(rel Todo, target, run, what, headline, errText, o
 	}
 	if reason != "" {
 		fmt.Fprintf(&b, "- Reason: %s\n", mdSafe(oneLine(reason, 300)))
+	}
+	if undo != "" {
+		b.WriteString("\n" + undo + "\n")
 	}
 	if tail := lastLines(cleanDeployOutput(output), rolloutAlarmLines); tail != "" {
 		fmt.Fprintf(&b, "\nThe last lines of its output:\n\n```\n%s\n```\n", strings.ReplaceAll(tail, "```", "'''"))
@@ -113,8 +123,9 @@ func (s *Server) rolloutSucceeded(rel Todo, target string) {
 	}
 }
 
-// alarmDeploy is the alarm's side of a settled deploy record.
-func (s *Server) alarmDeploy(rec DeployRecord) {
+// alarmDeploy is the alarm's side of a settled deploy record; cmd is the
+// deploy command's program (deployStatus.Command), for the undo line.
+func (s *Server) alarmDeploy(rec DeployRecord, cmd string) {
 	if s.todos == nil || rec.Todo == "" {
 		return
 	}
@@ -131,8 +142,76 @@ func (s *Server) alarmDeploy(rec DeployRecord) {
 			label = "Deploy"
 		}
 		what := fmt.Sprintf("The **%s** command on %s", mdSafe(label), mdSafe(s.releaseHost()))
-		s.rolloutFailed(rel, rolloutAlarmTargetHub, rec.Started.UTC().Format(time.RFC3339Nano), what, rec.Headline, rec.Error, rec.Output)
+		s.rolloutFailedUndo(rel, rolloutAlarmTargetHub, rec.Started.UTC().Format(time.RFC3339Nano), what, rec.Headline, rec.Error, rec.Output,
+			hubUndo(rec, cmd, s.hubPrevVersion(rec), s.releaseHost()))
 	}
+}
+
+// The way back from a hub bump that failed after its push (issue #141,
+// slice 6). The bump script (homelab's comebye-hub-bump.sh) pushes the new
+// pins to homelab main before it makes Flux apply them and waits for the
+// hub; a failure after that leaves main pinning the new version, Flux
+// applies it anyway, and the hub runs one pod: there is no automatic undo.
+// The item then names the exact command that pins the previous version
+// again, and says what it does.
+
+// bumpPushedRE is the script's push line: "bump: push      +12s <commit>".
+var bumpPushedRE = regexp.MustCompile(`(?m)^bump: push +\+[0-9]+s ([0-9a-f]{40})\s*$`)
+
+// bumpAfterPush are the script's phases that run after its push.
+var bumpAfterPush = map[string]bool{"reconcile": true, "rollout": true, "readyz": true, "provisioner": true, "done": true}
+
+// deployProgRE is a deploy command's program as it may be quoted in a
+// command line: a plain name or path.
+var deployProgRE = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,80}$`)
+
+// hubUndo is the item's undo paragraph for a failed deploy, or "" when the
+// output does not show a push followed by a later phase's failure (nothing
+// changed on main, or it is not the bump script). prev is the version to put
+// back ("" when the hub cannot tell); host runs the command.
+func hubUndo(rec DeployRecord, cmd, prev, host string) string {
+	m := bumpPushedRE.FindAllStringSubmatch(rec.Output, -1)
+	if len(m) == 0 {
+		return ""
+	}
+	pm := phaseRE.FindStringSubmatch(rec.Headline + "\n" + rec.Error)
+	if pm == nil || !bumpAfterPush[pm[1]] {
+		return ""
+	}
+	commit := m[len(m)-1][1]
+	prog := path.Base(cmd)
+	if !deployProgRE.MatchString(prog) || prog == "." || prog == "/" {
+		prog = "comebye-hub-bump.sh"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "**The bump was already pushed** (homelab commit `%s`): main pins %s, and Flux applies it even though the bump failed. There is no automatic undo, and the hub runs one pod.\n\n", commit[:12], mdSafe(rec.Version))
+	if _, ok := parseSemver(prev); !ok || !newerVersion(rec.Version, prev) {
+		fmt.Fprintf(&b, "To put the previous version back, run `%s vPREV --allow-older` on %s, with the version the hub ran before as vPREV. ", prog, mdSafe(host))
+		b.WriteString("It pins that version again in the hub's and the provisioner's manifests, with its checksum read from that release, pushes the change to homelab main, makes Flux apply it now and waits until the hub reports it. It changes nothing else.")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "To put %s back, run this on %s:\n\n```\n%s %s --allow-older\n```\n\n", prev, mdSafe(host), prog, prev)
+	fmt.Fprintf(&b, "It pins %s again in the hub's and the provisioner's manifests, with its checksum read from that release, pushes the change to homelab main, makes Flux apply it now and waits until the hub reports %s. It changes nothing else.", prev, prev)
+	return b.String()
+}
+
+// hubPrevVersion is the version the hub ran before the bump of rec: the
+// rollout's hub step keeps it (From); else this hub's own version, when it
+// is still the older one (the new pod never took over).
+func (s *Server) hubPrevVersion(rec DeployRecord) string {
+	if s.rollout != nil {
+		if j, ok := s.rollout.Peek(); ok && j.Todo == rec.Todo && j.Version == rec.Version {
+			for _, st := range j.Plan {
+				if isHubStep(st) && st.Mode == stepModeDeploy && st.From != "" {
+					return st.From
+				}
+			}
+		}
+	}
+	if _, ok := parseSemver(s.cfg.Version); ok && newerVersion(rec.Version, s.cfg.Version) {
+		return s.cfg.Version
+	}
+	return ""
 }
 
 // alarmUpgrade is the alarm's side of a settled upgrade record: only an

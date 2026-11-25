@@ -297,6 +297,9 @@ type Server struct {
 	// approvalPush tells the user a new approval item waits (the dispatcher's
 	// NotifyApproval): once per item, never for a renewed request.
 	approvalPush func(id, title, body string)
+	// rolloutPush is a rollout's one note (the dispatcher's NotifyRollout):
+	// once per rollout, when it finished or stopped.
+	rolloutPush func(todo, run, title, body string, stopped bool)
 	// ledger records handoffs and marks (nil without a state directory,
 	// and on a peer that is not the hub).
 	ledger *ledger.Store
@@ -472,6 +475,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.rollout.onState = s.noteRollout
 			s.rollout.onHubTrouble = s.alarmHubStep
 			s.rollout.onSoakFail = s.alarmSoak
+			s.rollout.onEnd = s.tellRollout
 			s.rollout.catchUpAlways = s.autoRolloutOn
 			s.rollout.soakFor = s.rolloutSoakSetting // the setting; unset: the engine's own (10 min, shorter below)
 			if cfg.Release.Simulated {
@@ -546,6 +550,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		manager.Dispatcher().Quiet = s.quietAgent
 		s.planPush = manager.Dispatcher().NotifyPlan
 		s.approvalPush = manager.Dispatcher().NotifyApproval
+		s.rolloutPush = manager.Dispatcher().NotifyRollout
 	}
 	s.routes()
 	return s

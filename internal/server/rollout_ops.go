@@ -87,8 +87,9 @@ func (s *Server) RunRollout(ctx context.Context) {
 }
 
 // rolloutNoteOf is the line a release item keeps about its rollout: why it
-// stopped, which hosts were skipped, who cancelled it. Empty when there is
-// nothing to say (running, paused, or done with every host).
+// stopped, which hosts were skipped, who cancelled it, or that it is on
+// every host. Empty while it runs or is paused. It is also the body of the
+// rollout's one note (tellRollout).
 func rolloutNoteOf(j Rollout) string {
 	switch j.State {
 	case roStopped:
@@ -115,11 +116,12 @@ func rolloutNoteOf(j Rollout) string {
 		}
 		if behind := behindOnly(j); behind != nil {
 			// Stopped or offline: the catch-up upgrades them when they are back.
-			return fmt.Sprintf("%s rolled out; behind until they are back: %s (upgraded then)", j.Version, strings.Join(behind, ", "))
+			return fmt.Sprintf("%s is on every host (%d behind until they're back: %s)", j.Version, len(behind), strings.Join(behind, ", "))
 		}
 		if len(skipped) > 0 {
 			return fmt.Sprintf("%s rolled out; %s skipped (%s): roll it out again from Peers", j.Version, strings.Join(skipped, ", "), skippedWhy(j))
 		}
+		return j.Version + " is on every host"
 	case roCancelled:
 		return j.Version + " rollout cancelled: hosts keep the version they have"
 	}
@@ -157,6 +159,36 @@ func (s *Server) noteRollout(j Rollout) {
 }
 
 var errNoChange = errors.New("no change")
+
+// tellRollout is the rollout's one note to the user (the engine's onEnd: the
+// first time the job finished or stopped): a push notification, when the
+// app has them, with the line the release item now shows. A stop has filed
+// its To do already (the alarm); this adds no other.
+func (s *Server) tellRollout(j Rollout) {
+	body := rolloutNoteOf(j)
+	if body == "" {
+		return
+	}
+	title := j.Version + " rolled out"
+	if j.State == roStopped {
+		title = j.Version + " rollout stopped"
+	} else if hubSkipped(j) || (behindOnly(j) == nil && skippedAny(j)) {
+		title = j.Version + " rolled out, not everywhere"
+	}
+	s.auditBy(ledger.AuditEvent{By: "comebye", Action: "rollout.told", Todo: j.Todo, OK: j.State == roDone, Detail: j.ID + ": " + body})
+	if s.rolloutPush != nil {
+		s.rolloutPush(j.Todo, j.ID, title, body, j.State == roStopped)
+	}
+}
+
+func skippedAny(j Rollout) bool {
+	for _, st := range j.Plan {
+		if st.Phase == roSkipped {
+			return true
+		}
+	}
+	return false
+}
 
 // DeployStatus is the deploy record, as the release host keeps it.
 func (o serverRolloutOps) DeployStatus(ctx context.Context) (deployStatus, error) {

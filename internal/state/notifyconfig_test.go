@@ -356,3 +356,21 @@ func TestNotifyApprovalOpensTheTodoItem(t *testing.T) {
 		}
 	}
 }
+
+// A rollout's note opens its release item, is keyed per rollout, and is the
+// done kind when it finished, the blocked kind when it stopped.
+func TestNotifyRollout(t *testing.T) {
+	fp := &fakePusher{}
+	d := &Dispatcher{Push: fp}
+	d.NotifyRollout("t0123456789", "rab1234", "v0.5.59 rolled out", "v0.5.59 is on every host", false)
+	d.NotifyRollout("t0123456789", "rcd5678", "v0.5.59 rollout stopped", "v0.5.59 stopped at a: a crash loop", true)
+	if len(fp.msgs) != 2 || fp.keys[0] != "rollout/rab1234/done" || fp.keys[1] != "rollout/rcd5678/blocked" ||
+		fp.msgs[0].URL != "/#/todo/t0123456789" || fp.msgs[1].Body != "v0.5.59 stopped at a: a crash loop" || fp.opts[1].Urgency != "high" {
+		t.Fatalf("pushes = %v %+v %+v", fp.keys, fp.msgs, fp.opts)
+	}
+	off := &fakePusher{}
+	(&Dispatcher{Push: off, Kinds: map[string]bool{KindBlocked: true}}).NotifyRollout("t0123456789", "r1", "t", "b", false)
+	if len(off.msgs) != 0 {
+		t.Fatal("a done rollout pushed with the done kind off")
+	}
+}

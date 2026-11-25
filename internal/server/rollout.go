@@ -162,6 +162,11 @@ type Rollout struct {
 	Stop *RolloutStop `json:"stop,omitempty"`
 	// Note is the line the band shows: what it is doing now, or why it waits.
 	Note string `json:"note,omitempty"`
+	// Told is when the user was sent the job's one note (onEnd): the first
+	// time it finished or stopped. A job that runs again after that (a
+	// Retry, the hub retried, a catch-up) ends without another; a job
+	// started only to catch a host up is told from its start (it sends none).
+	Told *time.Time `json:"told,omitempty"`
 }
 
 // RolloutStop says which host's gate failed and why.
@@ -243,6 +248,10 @@ type rolloutEngine struct {
 	// onSoakFail is told when the canary's soak failed: the hub files its
 	// To do (alarmSoak).
 	onSoakFail func(Rollout, RolloutStep)
+	// onEnd is told once per job, after the file was written, the first time
+	// it finished or stopped (Told): the user gets one note (issue #141,
+	// slice 5).
+	onEnd func(Rollout)
 	// lastReask is when retryHub last asked the release host.
 	lastReask time.Time
 	// catchUpAlways, when it says true (the automatic rollout is on), lifts
@@ -311,6 +320,11 @@ func (e *rolloutEngine) Get() (Rollout, bool) {
 	defer e.mu.Unlock()
 	return e.load()
 }
+
+// Peek is the job as saved, read without the engine's lock: for a hook the
+// loop itself may call while it holds the lock (a deploy settled inside a
+// tick). The file is replaced whole (a rename), so a read is never torn.
+func (e *rolloutEngine) Peek() (Rollout, bool) { return e.load() }
 
 // ---- planning ----
 
@@ -403,9 +417,21 @@ func (e *rolloutEngine) StartAuto(todo, version, commit, by string, plan []Rollo
 	return e.start(todo, version, commit, by, plan, true, false)
 }
 
+// StartCatchUp is StartAuto for a job that only catches a host up to a
+// release already rolled out: it sends no note when it ends (Told is set
+// from the start), since the release's own note went out, or had nothing
+// to say, when it was rolled out.
+func (e *rolloutEngine) StartCatchUp(todo, version, commit, by string, plan []RolloutStep) (Rollout, error) {
+	return e.startWith(todo, version, commit, by, plan, true, false, true)
+}
+
 var errRolloutSame = errors.New("this release already has a rollout")
 
 func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutStep, auto, skipSoak bool) (Rollout, error) {
+	return e.startWith(todo, version, commit, by, plan, auto, skipSoak, false)
+}
+
+func (e *rolloutEngine) startWith(todo, version, commit, by string, plan []RolloutStep, auto, skipSoak, quiet bool) (Rollout, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if cur, ok := e.load(); ok && cur.live() {
@@ -429,6 +455,10 @@ func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutSt
 	if plan[0].Wave == waveCanary {
 		j.Canary = plan[0].Host
 	}
+	if quiet {
+		t := now
+		j.Told = &t
+	}
 	j.Note = "starting"
 	if err := e.save(&j); err != nil {
 		return Rollout{}, err
@@ -446,6 +476,9 @@ func (e *rolloutEngine) start(todo, version, commit, by string, plan []RolloutSt
 	}
 	if skipSoak {
 		how += " soak=skipped"
+	}
+	if quiet {
+		how += " catch-up=true"
 	}
 	for _, st := range plan {
 		if isHubStep(st) && st.Phase == roSkipped && e.onHubTrouble != nil {
@@ -492,6 +525,7 @@ func (e *rolloutEngine) Resume(by string) (Rollout, error) {
 				}
 			}
 			j.State, j.Stop, j.Note = roRunning, nil, "retrying "+host
+			e.told(j)
 			return "rollout.resume", "retry " + host, nil
 		}
 		return "", "", errRolloutState
@@ -628,12 +662,31 @@ func (e *rolloutEngine) tick(ctx context.Context) {
 	if sameJob(before, j) {
 		return
 	}
+	// The job's one note: the first time it finished or stopped. Told is
+	// saved with the state, so a restart of the hub never sends it twice.
+	tell := j.State != before.State && (j.State == roDone || j.State == roStopped) && j.Told == nil
+	if tell {
+		e.told(&j)
+	}
 	if err := e.save(&j); err != nil {
 		log.Printf("rollout: %v", err)
 		return
 	}
 	if j.State != before.State && e.onState != nil {
 		e.onState(j)
+	}
+	if tell && e.onEnd != nil {
+		e.onEnd(j)
+	}
+}
+
+// told stamps the job's one note as sent (or as not wanted any more): a job
+// that runs again after it ended, also one saved before Told existed, ends
+// again without another note.
+func (e *rolloutEngine) told(j *Rollout) {
+	if j.Told == nil {
+		t := e.now()
+		j.Told = &t
 	}
 }
 
@@ -728,6 +781,7 @@ func (e *rolloutEngine) reopen(j Rollout, hosts []relHost, addNew bool) []string
 	upgrading := append(append([]string{}, back...), added...)
 	if len(upgrading) > 0 {
 		cur.State, cur.Finished, cur.Note = roRunning, nil, "catching up "+strings.Join(upgrading, ", ")
+		e.told(&cur)
 	}
 	if err := e.save(&cur); err != nil {
 		log.Printf("rollout: %v", err)
@@ -779,6 +833,7 @@ func (e *rolloutEngine) retryHub(ctx context.Context, j Rollout) {
 	st := &cur.Plan[i]
 	*st = RolloutStep{Host: st.Host, Wave: st.Wave, Mode: st.Mode, Phase: roPending, Attempt: st.Attempt + 1, Detail: "the release host answers: retrying the deploy"}
 	cur.State, cur.Stop, cur.Note = roRunning, nil, "retrying the hub: the release host answers"
+	e.told(&cur)
 	if err := e.save(&cur); err != nil {
 		log.Printf("rollout: %v", err)
 		return

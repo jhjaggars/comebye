@@ -213,6 +213,20 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   that skipped a host for any other reason (the hub, a host the app may not upgrade, an error) finishes
   `not ok: X of N hosts upgraded, K skipped (…)` (audited with ok=false); when the hub was skipped it adds "the hub
   was not bumped", and the item's line says to bump it from its row in Peers (Roll out again never retries the hub).
+- **One note:** the first time a rollout finishes or stops, automatic or tapped, the hub sends the user one push
+  notification (a "done" kind, or a "blocked" kind for a stop; it opens the release item) and puts the same line on
+  the item: "v0.5.59 is on every host", "v0.5.59 is on every host (2 behind until they're back: wk1, wk2)", or
+  "v0.5.59 stopped at canary-host: …". It is audited `rollout.told`. The job saves when it was sent (`told`), so exactly
+  one goes out per rollout: none after a hub restart, a Retry, the hub retried, a catch-up, or a job the hub starts
+  only to catch a host up. A stop has already filed its To do (above), and the note adds none.
+- **When the hub bump fails after its push:** homelab's `comebye-hub-bump.sh` pushes the new pins to homelab main
+  before it makes Flux apply them and waits for the hub. A failure after that (phase `reconcile`, `rollout`, `readyz`
+  or `provisioner`) leaves main pinning the new version, and Flux applies it anyway; there is no automatic undo, and
+  the hub runs one pod. The hub's To do then names the commit that was pushed and the exact way back, run on the
+  release host: `comebye-hub-bump vPREV --allow-older`, with the version the hub ran before (the rollout's hub step
+  keeps it, else the hub's own when it still runs it). That pins vPREV again in the same two manifests, with its
+  checksum from that release, pushes it, makes Flux apply it and waits until the hub reports it. `--allow-older` is
+  what lets the script take a version older than the one main pins; without it the script still refuses.
 - The user starts one from the page (user role and the page's CSRF token; the body repeats version, commit and the
   ordered hosts), or the hub does, by itself:
 - **Automatic rollout** (on by default): once a release item the user approved is tagged and its Release workflow
