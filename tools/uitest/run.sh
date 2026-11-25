@@ -198,6 +198,11 @@ if want taptargets; then
   fixture_hub taptgt 282
   COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-taptgt" node taptargets.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
 fi
+# View Transitions (#135): screen changes slide on a phone and fade on the desktop; none under reduced motion; a tap mid-way lands.
+if want viewtrans; then
+  fixture_hub viewtr 283
+  node viewtrans.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
+fi
 # Vibrate (#135): a Settings choice, off by default, shown only on a touch screen with navigator.vibrate (Android).
 if want vibrate; then node vibrate.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want seenidle; then node seenidle.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
