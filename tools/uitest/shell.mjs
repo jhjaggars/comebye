@@ -121,6 +121,16 @@ async function phase(width) {
       await page.reload();
       if (page.url().startsWith("chrome-error:") || !(await isApp(page))) throw new Error("no app offline: " + page.url() + " " + (await page.evaluate(() => document.body.innerText.slice(0, 200))));
       await page.waitForFunction(() => document.querySelectorAll("#agents .agent").length > 0, null, { timeout: 5000 }).catch(async () => { throw new Error("no saved rows offline: " + JSON.stringify(await page.evaluate(() => [document.querySelector("#agents")?.innerText.slice(0, 300), document.getElementById("hub-strip")?.innerText]))); });
+      // The strip goes under the screen in front when that screen shows a saved list. A desktop's cold start opens a
+      // blocked agent or Status; a hub with no ledger entries has no Status saved (an empty list never is), and then
+      // Status says in its body that the device is offline (slice 2's rule: no strip over nothing) and the strip shows
+      // on a screen that has its list, such as Peers (the hosts, from the saved agents answer).
+      const front = await page.evaluate(() => { const v = stripView(); return { src: v.src.name, at: v.src.at, hash: location.hash }; });
+      if (!front.at) {
+        await page.waitForFunction(() => { const v = stripView(); const b = v.header && v.header.parentElement; return b && /Can.t reach the hub/.test(b.innerText) && /offline/i.test(b.innerText); }, null, { timeout: 5000 })
+          .catch(async () => { throw new Error(`${front.hash} (${front.src}, nothing saved) does not say it is offline: ` + JSON.stringify(await page.evaluate(() => stripView().header?.parentElement?.innerText.slice(0, 200)))); });
+        await page.evaluate(() => { location.hash = "#/peers"; });
+      }
       await page.waitForFunction(() => { const e = document.getElementById("hub-strip"); return e && !e.hidden && e.dataset.kind === "offline"; }, null, { timeout: 5000 })
         .catch(async () => {
           await page.screenshot({ path: `${out}/shell-nostrip-${tag}.png` });

@@ -618,7 +618,10 @@ async function phase3(width) {
       if (/\d+[smh] ago/.test(await textOf(page, `${listSel} .td-item.open[data-id="${id}"]`))) throw new Error("an age in the open item still counts");
       await page.clock.fastForward("12:00");
       await page.evaluate(() => renderTodos(true));
-      if ((await age()) !== frozen) throw new Error(`the age moved while old: ${frozen} -> ${await age()}`);
+      // Still frozen: the same instant as a clock time, not a count. (Not the same string: 12 minutes on can cross
+      // midnight, and then the time is yesterday's and rightly gains its weekday, "at Tue 11:48 PM".)
+      const still = await page.evaluate((s) => { const e = document.querySelector(s); return { text: e?.textContent || "", want: e ? frozenAt(Number(e.dataset.at)) : "" }; }, `${listSel} .td-item[data-id="${id}"] .td-age`);
+      if (!/^at /.test(still.text) || still.text !== still.want) throw new Error(`the age moved while old: ${frozen} -> ${still.text} (frozen now reads ${still.want})`);
       await page.screenshot({ path: `${out}/offline-actions-ages-${tag}.png` });
       await online(page);
       await page.waitForFunction((s) => /^1[23]m$/.test(document.querySelector(s)?.textContent || ""), `${listSel} .td-item[data-id="${id}"] .td-age`, { timeout: 8000 })
