@@ -11,8 +11,9 @@
 // the screen's real colours); in a phone's conversation (the floating capsules, #142) a message at rest is the same
 // too, and one scrolled under the capsules has the blur band over it. The top edge (same sizes and themes): on each of
 // those screens and in a conversation, WebKit's rule for iOS's status-bar blur (topEdge, below) finds a solid bar to
-// take its colour from (in a conversation, the strip as tall as the status bar, with the capsules under it), and the
-// capsules (← and the name, the side panel and ⋮) are the same with every pseudo-element but their glass off.
+// take its colour from (in a conversation, the strip as tall as the status bar, with the capsules under it, and kept with
+// the keyboard out), the capsules (← and the name, the side panel and ⋮) are the same with every pseudo-element but their
+// glass off, and no text in a top bar is drawn between two whole font weights (barWeights).
 //
 //   node gradients.mjs BASE OUT_DIR
 import { launch } from "./lib.mjs";
@@ -225,16 +226,20 @@ const barBottom = (page) => page.evaluate(() => {
   return Math.ceil(y);
 });
 // iOS 26's top edge (the Liquid Glass scroll edge effect) in an installed web app: it blurs the status bar and about
-// 40pt under it, over whatever is there (a chat header's agent name, v0.5.59), unless WebKit finds a "fixed container"
-// at the top edge to take a solid colour from (WebCore LocalFrameView::fixedContainerEdges). Only a real iPhone draws
-// the blur, so this replays WebKit's rule in the page:
+// 40pt under it, over whatever is there, unless WebKit finds a "fixed container" at the top edge to take a colour from
+// (WebCore LocalFrameView::fixedContainerEdges, Page::updateFixedContainerEdges). Then it paints that colour as a solid
+// band in the top inset and hides its blur (WKWebView _shouldHideTopScrollPocket). Only a real iPhone draws the blur,
+// so this replays WebKit's rule in the page:
 //   - hit-test 4px under the middle of the top edge (pointer-events ignored, as WebKit's first pass does);
 //   - walk up from the hit element; the container is the first position: fixed or sticky box at least 90% of the
 //     viewport's width and not more than 5% taller than the viewport (a taller one is skipped, as WebKit does);
-//   - on the way, a backdrop-filter makes the edge glass (blurred), and the colour is the first visible background
-//     colour on a box over 10px each way and at least 90% wide.
-// No container, no colour, or glass: iOS draws its blur.
-const topEdge = (page) => page.evaluate(() => {
+//   - on the way, the colour is the first visible background colour on a box over 10px each way and at least 90% wide;
+//     a backdrop-filter gives "Multiple", which iOS draws as a solid band in the page's background colour (glass: true),
+//     not as its blur.
+//   - no container this time: WebKit keeps the last top container (Page::updateFixedContainerEdges) while that element
+//     is still rendered and visible, so pass the last result as `last` to get what iOS keeps (kept: true).
+// No container (and none kept), or no colour: iOS draws its blur (blur: true).
+const topEdge = (page, last = null) => page.evaluate((last) => {
   const vw = innerWidth, vh = innerHeight;
   const tag = document.createElement("style");
   tag.textContent = "*, *::before, *::after { pointer-events: auto !important; }";
@@ -253,15 +258,40 @@ const topEdge = (page) => page.evaluate(() => {
         if (+a > 0) color = s.backgroundColor;
       }
     }
-    if ((s.position === "fixed" || s.position === "sticky") && !hidden && r.width >= vw * 0.9 && r.height <= vh * 1.05)
-      return { hit: name(hit), container: name(e), color, glass };
+    if ((s.position === "fixed" || s.position === "sticky") && !hidden && r.width >= vw * 0.9 && r.height <= vh * 1.05) {
+      if (glass) color = getComputedStyle(document.body).backgroundColor;
+      window.__topEdgeLast = e;
+      return { hit: name(hit), container: name(e), color, glass, blur: !color };
+    }
   }
-  return { hit: hit ? name(hit) : null, container: null, color, glass };
-});
+  // The last container, still rendered and visible (a 0-tall one too): WebKit keeps its colour.
+  if (last && last.container && last.color) {
+    const e = window.__topEdgeLast, s = e && e.isConnected && getComputedStyle(e);
+    if (s && e.getClientRects().length && s.display !== "none" && s.visibility !== "hidden")
+      return { hit: hit ? name(hit) : null, container: last.container, color: last.color, glass: last.glass, kept: true, blur: false };
+  }
+  return { hit: hit ? name(hit) : null, container: null, color, glass, blur: true };
+}, last);
 const solidTop = async (page, where) => {
   const t = await topEdge(page);
-  if (!t.container || !t.color || t.glass) throw new Error(`${where}: iOS would blur the top edge (no solid fixed or sticky bar there): ` + JSON.stringify(t));
+  if (t.blur || t.glass) throw new Error(`${where}: iOS would not draw our bar's colour at the top edge (no solid fixed or sticky bar there): ` + JSON.stringify(t));
+  return t;
 };
+// Text in a top bar is drawn at a whole weight (100, 200 ... 900), never between two, such as 650: on an iPhone the
+// chat header's name and a screen's title at 650 were drawn soft while the 600 and 400 text beside them was sharp
+// (index.html "header h1"). Every element with its own text inside a top bar on screen.
+const barWeights = (page, where) => page.evaluate(() => {
+  const bad = [];
+  for (const bar of document.querySelectorAll("header, .pgs-bar, .rs-bar")) {
+    if (!bar.getClientRects().length) continue;
+    for (const e of [bar, ...bar.querySelectorAll("*")]) {
+      if (![...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || !e.getClientRects().length) continue;
+      const w = +getComputedStyle(e).fontWeight;
+      if (w % 100) bad.push(`${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${[...e.classList].join(".")} ${w}`);
+    }
+  }
+  return bad;
+}).then((bad) => { if (bad.length) throw new Error(`${where}: text in a top bar between two whole weights: ${bad.join(", ")}`); });
 const PLAIN = NOPSEUDO + " * { view-transition-name: none !important; }";
 // The capsules' own pixels: the same with every pseudo-element and view-transition name off but their own glass and the
 // band behind them (which is under the glass, not over the text).
@@ -298,6 +328,7 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
           const y = await barBottom(page);
           if (!(await sameWithout(page, y))) throw new Error(`${name}: something is drawn over the 24 px under its top bar (y ${y})`);
           await solidTop(page, name);
+          await barWeights(page, name);
         }
         // The status bar (and the notch, on its side), as an iPhone has them: the capsules must sit under the status bar.
         const cdp = await browser.newCDPSession(page);
@@ -307,7 +338,8 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         // The phone's chat has no bar (index.html "Floating chrome"): the header is a strip as tall as the status bar,
         // solid, and that is what iOS takes the top edge's colour from, so it draws no blur at all; the capsules sit under
         // it, and nothing of ours is drawn over their text but their own glass.
-        await solidTop(page, "the conversation");
+        const rest = await solidTop(page, "the conversation");
+        await barWeights(page, "the conversation");
         const geo = await page.evaluate(() => {
           const r = (q) => { const e = document.querySelector(q).getBoundingClientRect(); return { t: e.top, b: e.bottom, l: e.left, r: e.right }; };
           return { strip: r("#detail > header"), l: r("#detail > header .d-cap-l"), r: r("#detail > header .d-cap-r") };
@@ -316,15 +348,15 @@ for (const [width, height] of [[390, 844], [844, 390]]) {
         if (Math.abs(geo.strip.b - st) > 0.5) throw new Error(`the top strip is ${geo.strip.b}px tall, want ${st} (the status bar, at least 12)`);
         if (geo.l.t < geo.strip.b || geo.r.t < geo.strip.b) throw new Error("a capsule reaches into the status bar: " + JSON.stringify(geo));
         if (!(await capsPlain(page))) throw new Error("something is drawn over the capsules (back, the name, the side panel or ⋮)");
-        // The keyboard out: iOS pans the visual viewport and the strip leaves the screen with the capsules. Then the strip
-        // is no longer the top edge's bar, so iOS's blur lies over the messages there, as the user likes it; back, it is again.
+        // The keyboard out: iOS pans the visual viewport and the strip leaves the screen with the capsules (0 tall). The hit
+        // test finds no bar then, but the strip is still rendered and visible, so WebKit keeps its colour: no blur either.
         const kbd = (top) => page.evaluate((top) => {
           Object.defineProperty(visualViewport, "offsetTop", { configurable: true, get: () => top });
           visualViewport.dispatchEvent(new Event("scroll"));
         }, top);
         await kbd(300);
-        const k = await topEdge(page);
-        if (k.container && k.color && !k.glass) throw new Error("with the keyboard out the strip still takes iOS's top edge (the blur would not lie over the messages): " + JSON.stringify(k));
+        const k = await topEdge(page, rest);
+        if (k.blur) throw new Error("with the keyboard out WebKit would drop the strip's colour (iOS would blur the top edge over the capsules' place): " + JSON.stringify(k));
         await kbd(0);
         await solidTop(page, "the conversation after the keyboard");
         await page.screenshot({ path: `${out}/topedge-${width}x${height}-${theme}-chat.png`, clip: { x: 0, y: 0, width, height: 140 } });

@@ -17137,7 +17137,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
 // iOS's blur at the top of the screen (index.html, "#detail header"): the agent's header is the solid bar iOS takes the
 // status bar's colour from, so the blur stays off the header. With the keyboard out, iOS pans the page and the header
-// leaves the screen: then html.vv-panned drops the header as that bar, and the blur lies over the messages as before.
+// leaves the screen: then html.vv-panned makes the header 0 tall (WebKit most likely keeps its colour as the last top box,
+// index.html "Floating chrome").
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const pan = () => { const was = document.documentElement.classList.contains("vv-panned"); document.documentElement.classList.toggle("vv-panned", vv.offsetTop > 0.5); if (was && !(vv.offsetTop > 0.5) && typeof floatSync === "function") floatSync(); };
