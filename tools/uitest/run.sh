@@ -144,6 +144,9 @@ if want depth; then node depth.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want gradients; then node gradients.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The phone chat's floating capsules (#142): their controls, hit areas, chips, and the chat scrolling under them.
 if want floatchrome; then node floatchrome.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
+# The space at the foot of the phone chat: the composer's margin and the last row's gap, through the keyboard, iOS's
+# short viewport after it (web/app.js viewportHeal), a screen change and a background.
+if want bottomgap; then node bottomgap.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 # The left nav, one journey (#139 slice 6): its nav row, host picker, status tabs and filter box, and Group by menu.
 if want navjourney; then node navjourney.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi
 if want shapes; then node shapes.mjs "http://127.0.0.1:$port" "$out" || rc=1 ; fi

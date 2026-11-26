@@ -17146,6 +17146,50 @@ if (window.visualViewport) {
   vv.addEventListener("resize", pan);
 }
 
+// The installed app on iOS (standalone) can lose the bottom of its screen after the keyboard closes: WebKit leaves the
+// layout viewport short (innerHeight, 100dvh and fixed bottom: 0 all drop, ~59pt on a Pro Max, the top inset) until
+// the app is quit, and the chat, 100dvh tall, ends above an empty band. viewportHeal notices innerHeight below the
+// tallest seen at this width, after the keyboard was out (something took focus to type) and with nothing being typed
+// into now. It first re-lays the page out (a display flip on the screen that shows, which snaps the viewport back for
+// others who hit it), then, if it is still short, sets --app-h on <html> to the tallest height, which the full-height screens use in place of 100dvh. A stray window scroll
+// left by the keyboard goes back to 0. Only in iOS's installed app (navigator.standalone, which only iOS has): Safari's
+// tab, Android and the desktop (whose installed window the user can make shorter) size themselves as before.
+// tools/uitest/bottomgap.mjs replays the shrink.
+const viewport = { max: new Map(), timer: 0, kb: false };
+function viewportTyping() {
+  const a = document.activeElement;
+  return !!a && a !== document.body && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+}
+function viewportHeal() {
+  if (navigator.standalone !== true) return;
+  const root = document.documentElement, w = innerWidth, h = innerHeight;
+  const max = Math.max(viewport.max.get(w) || 0, h);
+  viewport.max.set(w, max);
+  if (viewportTyping()) { viewport.kb = true; return; } // the keyboard may be out: a short viewport is right then
+  if (max - h <= 4) { viewport.kb = false; root.style.removeProperty("--app-h"); return; }
+  if (!viewport.kb) return; // shorter for another reason (a window resized): not the keyboard's leftover
+  if (window.scrollY) window.scrollTo(0, 0);
+  const scr = $("chat"), top = scr ? scr.scrollTop : 0;
+  for (const id of ["detail", "list"]) {
+    const el = $(id);
+    if (!el || !el.getClientRects().length) continue;
+    const d = el.style.display;
+    el.style.display = "none"; void el.offsetHeight; el.style.display = d;
+  }
+  if (scr) scr.scrollTop = top;
+  if (max - innerHeight > 4) root.style.setProperty("--app-h", max + "px");
+  else root.style.removeProperty("--app-h");
+}
+function viewportHealSoon() { clearTimeout(viewport.timer); viewport.timer = setTimeout(viewportHeal, 150); }
+window.addEventListener("resize", viewportHealSoon);
+window.visualViewport?.addEventListener("resize", viewportHealSoon);
+document.addEventListener("focusin", () => { if (viewportTyping()) viewport.kb = true; });
+document.addEventListener("focusout", viewportHealSoon);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) viewportHealSoon(); });
+window.addEventListener("pageshow", viewportHealSoon);
+window.addEventListener("hashchange", viewportHealSoon);
+window.addEventListener("DOMContentLoaded", viewportHeal);
+
 // Floating chrome (index.html): below 1100px the agent's header is two glass capsules over the chat, with the chips
 // (blocked reason, note, usage, the offline strip) hanging under the left one. floatSync measures where they end and
 // sets --d-top on #detail: the chat's top padding, so at rest the first message starts under them, and the foot of

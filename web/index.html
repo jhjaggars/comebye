@@ -394,7 +394,8 @@
     .stale .ps-state { color: var(--muted); }
 
     /* Detail view */
-    #detail { display: none; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+    /* --app-h: set only when iOS's installed app is left with a short viewport after the keyboard (app.js viewportHeal). */
+    #detail { display: none; flex-direction: column; height: 100vh; height: var(--app-h, 100dvh); overflow: hidden; }
     #detail header { flex: none; }
     #detail main {
       flex: 1; min-height: 0; width: 100%; box-sizing: border-box;
@@ -1525,7 +1526,7 @@
     #list, #list *, #st-screen, #st-screen * { touch-action: pan-y pinch-zoom; }
     #list .host-filter, #list .host-filter *, .md pre, .md pre *, .md table, .md table * { touch-action: pan-x pan-y pinch-zoom; }
     /* The list covers the screen, even when short: a touch below it would go to the page, which pans sideways. */
-    #list { min-height: 100vh; min-height: 100dvh; }
+    #list { min-height: 100vh; min-height: var(--app-h, 100dvh); }
     #list > main { padding-bottom: calc(var(--sp-16) + var(--safe-bottom)); }
     #st-screen {
       position: fixed; inset: 0; z-index: var(--z-view); background: var(--bg);
