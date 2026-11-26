@@ -182,25 +182,33 @@ func (e *rolloutEngine) verifyWithHub(j *Rollout, st *RolloutStep, h relHost, fo
 	return false
 }
 
-// peersBack: every peer an earlier wave finished is up and on the version
-// (the hub wave must not start, or finish, over a peer that went away).
-func (e *rolloutEngine) peersBack(j Rollout, hub *RolloutStep) bool {
-	_, ok := e.peersMissing(j, hub)
-	return ok
+// peersMissing: the peers an earlier wave finished that are not up and on
+// the version now (the hub wave must not start over a peer that went away).
+func (e *rolloutEngine) peersMissing(j Rollout, hub *RolloutStep) ([]string, bool) {
+	old, away := e.peersNotBack(j)
+	missing := append(old, away...)
+	return missing, len(missing) == 0
 }
 
-func (e *rolloutEngine) peersMissing(j Rollout, hub *RolloutStep) ([]string, bool) {
-	var missing []string
+// peersNotBack splits the peers an earlier wave finished that are not up and
+// on the version now: old are reachable on an older version (gone back, a
+// real sign of trouble), away are not reachable at all (a worker that
+// powered off when idle, a laptop asleep: it was proven on the version when
+// its step finished).
+func (e *rolloutEngine) peersNotBack(j Rollout) (old, away []string) {
 	for _, st := range j.Plan {
 		if st.Wave == waveHub || st.Phase != roOK {
 			continue
 		}
 		h, found := findHost(e.hosts, st.Host)
-		if !found || !hostUp(h) || !(h.Current || (h.DryRun && h.Record != nil && h.Record.State == "dry_run")) {
-			missing = append(missing, st.Host)
+		switch {
+		case !found || !hostUp(h):
+			away = append(away, st.Host)
+		case !(h.Current || (h.DryRun && h.Record != nil && h.Record.State == "dry_run")):
+			old = append(old, st.Host+" ("+orUnknown(h.Version)+")")
 		}
 	}
-	return missing, len(missing) == 0
+	return old, away
 }
 
 func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {

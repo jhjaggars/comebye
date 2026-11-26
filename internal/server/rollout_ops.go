@@ -123,6 +123,9 @@ func rolloutNoteOf(j Rollout) string {
 		}
 		return j.Version + " is on every host"
 	case roCancelled:
+		if j.SupersededBy != "" {
+			return fmt.Sprintf("%s rollout stopped and was superseded by %s, which rolls out instead", j.Version, j.SupersededBy)
+		}
 		return j.Version + " rollout cancelled: hosts keep the version they have"
 	}
 	return ""

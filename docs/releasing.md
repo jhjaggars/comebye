@@ -144,7 +144,11 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
 
 - **Order:** the canary first, alone, then a soak, then the other peers one at a time (fleet order), then the hub
   last. The hub wave is the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what
-  is running in the cluster and has no automatic undo, so it only follows peers that came back healthy.
+  is running in the cluster and has no automatic undo, so it only follows peers that came back healthy. Its own
+  gate is the hub: once the deploy's record is ok and the hub (the new one, after the restart the deploy causes)
+  runs the version, the step passes. A peer of an earlier wave that is unreachable by then (a worker that powered
+  off when idle) does not hold it, since it was proven on the version when its step finished; the step names it.
+  One that is reachable on an older version went back, and stops the rollout.
 - **The canary and its soak:** every rollout, automatic or tapped, upgrades the canary first. It is a hub setting
   (the hub's Settings, "Canary host"; `rollout.canary` in `PUT /api/settings`): empty is the default, the
   `-release-canary` peer (`COMEBYE_RELEASE_CANARY`) if one is set, else the release host (`-release-host`), which
@@ -205,7 +209,7 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
 - **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few
   seconds. Each step is derived from the file, the hosts' upgrade records and the fleet's versions, so a restart of
   the hub, including the one the hub wave itself causes, carries on where it was. Every step is in the audit log
-  (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`,
+  (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`, `.supersede`,
   `.finish`, `.catchup`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the
   release's to-do item.
 - **Finishing:** a rollout with every host upgraded finishes `ok: all N hosts`. One that skipped only hosts that were
@@ -233,7 +237,10 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   is green, the hub starts the same rollout Roll out to all starts (every peer behind, then the hub wave), with no
   tap (`rollout.auto`, and `auto=true` on `rollout.start`). The loop looks once a minute at the newest open, tagged
   item tagged in the last 24 hours, and waits while another rollout is live or a deploy runs. A red or running build
-  starts nothing. It starts once per release: the item keeps the job's id (`auto_rollout`), and the job on file
+  starts nothing. A rollout of an older release that **stopped** does not hold a newer one back: once the newer
+  release's build is green, the stopped job is ended (`rollout.supersede`, "superseded by v…"), its release item
+  is closed with that line (`release.superseded`) and its rollout alarm with it, and the newer rollout starts; it
+  goes through the same hosts and gates. A paused rollout, or a running one, is still waited for. It starts once per release: the item keeps the job's id (`auto_rollout`), and the job on file
   names its item, so a hub restart between the tag and the start, or between the start and that mark, neither
   misses the release nor starts it twice. An automatic rollout never wakes a stopped worker: it is listed as skipped
   and upgraded when it next starts. Turn it off with **Roll out automatically** in the hub's settings (Peers, the

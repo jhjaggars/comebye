@@ -167,6 +167,9 @@ type Rollout struct {
 	// Retry, the hub retried, a catch-up) ends without another; a job
 	// started only to catch a host up is told from its start (it sends none).
 	Told *time.Time `json:"told,omitempty"`
+	// SupersededBy: the newer release whose automatic rollout ended this
+	// stopped one (Supersede).
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 // RolloutStop says which host's gate failed and why.
@@ -542,6 +545,29 @@ func (e *rolloutEngine) Cancel(by string) (Rollout, error) {
 		now := e.now()
 		j.State, j.PauseRequested, j.Finished, j.Note = roCancelled, false, &now, "cancelled"
 		return "rollout.cancel", "", nil
+	})
+}
+
+// Supersede ends a stopped job (id) because a newer release's automatic
+// rollout is due: a rollout stopped at an older release would otherwise hold
+// every later one back for good (one rollout at a time). The newer rollout
+// goes through the same hosts and gates, so nothing the stop was about is
+// skipped; only a running or paused job, or one for this version or newer,
+// is left alone.
+func (e *rolloutEngine) Supersede(id, version, by string) (Rollout, error) {
+	return e.control(by, func(j *Rollout) (string, string, error) {
+		if j.ID != id || j.State != roStopped || !newerVersion(version, j.Version) {
+			return "", "", errRolloutState
+		}
+		now := e.now()
+		j.State, j.PauseRequested, j.Finished, j.SupersededBy = roCancelled, false, &now, version
+		j.Note = "superseded by " + version
+		e.told(j) // its stop was told already; the release item says the rest
+		why := ""
+		if j.Stop != nil {
+			why = " (it stopped at " + j.Stop.Host + ": " + oneLine(j.Stop.Reason, 160) + ")"
+		}
+		return "rollout.supersede", "superseded by " + version + why, nil
 	})
 }
 
@@ -1175,7 +1201,18 @@ func (e *rolloutEngine) watchRun(j *Rollout, st *RolloutStep, h relHost, found b
 func (e *rolloutEngine) verify(j *Rollout, st *RolloutStep, h relHost, found bool, now time.Time) bool {
 	j.Note = "verifying " + st.Host
 	dry := st.Dry || (found && h.DryRun && h.Record != nil && h.Record.State == upgrade.RecDryRun)
-	if found && hostUp(h) && (h.Current || dry) && (st.Mode != stepModeDeploy || e.peersBack(*j, st)) {
+	hubBack := found && hostUp(h) && (h.Current || dry)
+	// The hub's deploy is judged by the hub: up on the version, it passes at
+	// once (also in the new hub, right after the deploy restarted it). A peer
+	// of an earlier wave that is only unreachable now does not hold it: it
+	// was proven on the version when its step finished (issue #141, v0.5.64:
+	// a peer away for the deploy stopped a hub that was back). One that is
+	// reachable on an older version went back, and still does.
+	var peersOld, peersAway []string
+	if st.Mode == stepModeDeploy {
+		peersOld, peersAway = e.peersNotBack(*j)
+	}
+	if hubBack && len(peersOld) == 0 {
 		st.To = h.Version
 		if d := e.soakDuration(); st.Wave == waveCanary && d > 0 {
 			until := now.Add(d)
@@ -1185,12 +1222,18 @@ func (e *rolloutEngine) verify(j *Rollout, st *RolloutStep, h relHost, found boo
 			e.emit(*j, st.Host, "rollout.gate", true, fmt.Sprintf("upgrade=ok back=ok version=%s took=%s soak=%s", h.Version, took(*st, now), d.Round(time.Second)), "comebye")
 			return false
 		}
-		e.finishStep(j, st, h, now, "")
+		note := ""
+		if len(peersAway) > 0 {
+			note = "not reachable now (upgraded earlier in this rollout): " + strings.Join(peersAway, ", ")
+		}
+		e.finishStep(j, st, h, now, note)
 		return true
 	}
 	if now.Sub(st.At) >= e.backWait {
 		why := fmt.Sprintf("not back online on %s within %s", j.Version, e.backWait.Round(time.Second))
 		switch {
+		case hubBack:
+			why = fmt.Sprintf("the hub is back on %s, but peers of the earlier waves went back to an older version: %s", h.Version, strings.Join(peersOld, ", "))
 		case !found:
 			why += " (not in the fleet any more)"
 		case !hostUp(h):
@@ -1199,6 +1242,10 @@ func (e *rolloutEngine) verify(j *Rollout, st *RolloutStep, h relHost, found boo
 			why += " (it runs " + orUnknown(h.Version) + ")"
 		}
 		e.fail(j, st, now, why, "")
+		return false
+	}
+	if hubBack {
+		st.Detail = "waiting for the peers to be back on " + j.Version + ": " + strings.Join(peersOld, ", ")
 		return false
 	}
 	st.Detail = "waiting for it to be back on " + j.Version

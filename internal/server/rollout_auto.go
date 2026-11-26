@@ -115,7 +115,8 @@ func (s *Server) autoRolloutTick(ctx context.Context) string {
 		s.markAuto(it.ID, cur.ID)
 		return "marked " + cur.ID
 	}
-	if has && cur.live() {
+	stale := has && cur.State == roStopped && newerVersion(it.Release.Version, cur.Version)
+	if has && cur.live() && !stale {
 		return "busy" // another rollout is live: this one waits for it
 	}
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -126,6 +127,15 @@ func (s *Server) autoRolloutTick(ctx context.Context) string {
 	}
 	if bd.State != "success" {
 		return "build " + bd.State // red, or still running: no rollout
+	}
+	if stale {
+		// A rollout of an older release that stopped would hold this one back
+		// for good: it is superseded (the newer one upgrades the same hosts,
+		// through the same gates), and its release item is closed for it.
+		if _, err := s.rollout.Supersede(cur.ID, it.Release.Version, "comebye"); err != nil {
+			return "busy"
+		}
+		s.supersedeItem(cur, it.Release.Version)
 	}
 	hosts := s.rollout.ops.Hosts(cctx, it.Release.Version)
 	s.markWakeable(cctx, hosts)
@@ -158,6 +168,42 @@ func (s *Server) autoRolloutTick(ctx context.Context) string {
 	s.auditBy(ledger.AuditEvent{By: "comebye", Action: "rollout.auto", Todo: it.ID, OK: true,
 		Detail: it.Release.Version + ": approved by " + oneLine(it.Release.ApprovedBy, 80) + ", build green: started " + j.ID})
 	return "started " + j.ID
+}
+
+// supersedeItem closes the release item of a rollout a newer release's
+// superseded, and its rollout alarm with it: the newer release is the one
+// to watch now, and its own stop, if any, files its own.
+func (s *Server) supersedeItem(old Rollout, version string) {
+	if s.todos == nil || old.Todo == "" {
+		return
+	}
+	note := rolloutNoteOf(Rollout{State: roCancelled, Version: old.Version, SupersededBy: version})
+	closed, err := s.todos.mutate(old.Todo, func(t *Todo) error {
+		if !t.active() {
+			return errTodoClosed
+		}
+		now := time.Now().UTC()
+		t.State, t.ClosedBy, t.ClosedAt, t.Notice = TodoDone, "comebye", &now, nil
+		if t.Release != nil {
+			rel := *t.Release
+			rel.RolloutNote = note
+			t.Release = &rel
+		}
+		return nil
+	})
+	if err == nil {
+		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: closed.ID, Action: "release.superseded", OK: true,
+			Detail: old.Version + ": its rollout " + old.ID + " stopped; superseded by " + version + ": the item was closed"})
+	}
+	prefix := SourceRollout + ":" + old.Todo + ":"
+	for _, a := range s.todos.list("") {
+		if !a.active() || a.Source != SourceRollout || !strings.HasPrefix(a.AutoKey, prefix) {
+			continue
+		}
+		if _, err := s.todos.close(a.ID, TodoDone, AutoCreator, "superseded by "+version); err != nil && !errors.Is(err, errTodoClosed) {
+			log.Printf("auto rollout: close alarm %s: %v", a.ID, err)
+		}
+	}
 }
 
 // markAuto records on the release item that its automatic rollout is
