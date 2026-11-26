@@ -366,6 +366,8 @@ class Pass:
                 continue
             if t.source == "hub-blocked" or t.kind in ("approval", "release"):
                 continue
+            if t.kind == "review" and t.review and t.review.verdict and t.review.verdict.verdict == "good":
+                continue  # approved: nothing is left for its worker to do
             h = hours(t.answer.at)
             if h is None or h > c["answered_window_hours"]:
                 continue

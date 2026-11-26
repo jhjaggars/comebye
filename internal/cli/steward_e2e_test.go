@@ -33,6 +33,18 @@ func TestStewardPassAgainstAHub(t *testing.T) {
 		map[string]any{"id": "t0000000003", "question": "Land PR #8?", "kind": "decision", "state": "done",
 			"waiting": map[string]any{"id": "devbox/w98:p1", "name": "landed-worker"},
 			"answer":  map[string]any{"text": "ok 1", "by": "user", "at": ago(3)}, "created_at": ago(4), "updated_at": ago(3), "closed_at": ago(3)},
+		// Reviews whose workers are gone: the approved one has nothing left to do;
+		// the one asking for changes is still flagged.
+		map[string]any{"id": "t0000000004", "question": "Review the press layer", "kind": "review", "state": "done",
+			"waiting":    map[string]any{"id": "devbox/w97:p1", "name": "approved-worker"},
+			"answer":     map[string]any{"text": "Looks good", "by": "user", "at": ago(3), "via": "verdict"},
+			"review":     map[string]any{"verdict": map[string]any{"verdict": "good", "by": "user", "at": ago(3)}},
+			"created_at": ago(4), "updated_at": ago(3), "closed_at": ago(3)},
+		map[string]any{"id": "t0000000005", "question": "Review the offline strip", "kind": "review", "state": "done",
+			"waiting":    map[string]any{"id": "devbox/w96:p1", "name": "changes-worker"},
+			"answer":     map[string]any{"text": "Needs changes: wider strip", "by": "user", "at": ago(3), "via": "verdict"},
+			"review":     map[string]any{"verdict": map[string]any{"verdict": "changes", "note": "wider strip", "by": "user", "at": ago(3)}},
+			"created_at": ago(4), "updated_at": ago(3), "closed_at": ago(3)},
 	})
 	const dir = "tools/steward"
 	h.must(dir, "", "prompt", "needs-input", "please check the flaky test", "--queue")

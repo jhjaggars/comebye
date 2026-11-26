@@ -95,11 +95,14 @@ class StewardPass(unittest.TestCase):
         self.find("decider finished with decisions for the user")
         self.find("failed handoff h00000abc009 (launch-fail)")
         self.assertTrue(any("was retried as retry-me" in q for q in self.p.quiet), self.p.quiet)
-        never = self.find("answered to-do")
+        never = self.find("answered to-do t0000000002")
         self.assertIn("ghost-worker has not acted", never["title"])
         self.assertIn("Land PR #7?", never["evidence"])
         # The to-do whose worker landed afterwards counts as acted on.
         self.assertFalse([t for t in self.f if "landed-worker" in t])
+        # An approved review has nothing left to do; one asking for changes still has.
+        self.assertFalse([t for t in self.f if "approved-worker" in t])
+        self.find("answered to-do t0000000005: changes-worker has not acted")
         self.find("needs-input blocked", self.w)  # it blocked just now: watched for an hour first
         self.find("queued prompt", self.w)
         self.assertTrue(any(q.startswith("to-dos: 1 open; t0000000001 followup") for q in self.p.quiet), self.p.quiet)
