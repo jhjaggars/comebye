@@ -3235,6 +3235,23 @@
       :root:not([data-depth="flat"]) :is(.dot.working, .dot.blocked) { background-image: none; }
     }
 
+    /* Text fields on a touch screen: at least 16px. iOS zooms the page in when a field under 16px takes focus, and leaves
+       it zoomed after. Every field (input, textarea, select, the composer) reads its size from the --fs tokens, so here
+       the tokens under 16 are 16 inside a field, at every text size: outside the conversation they are fixed (16px);
+       inside it (#chat, #sv-chat, the composer, the Appearance preview) they follow --rs but never drop below 16. The
+       page can still be pinch-zoomed (no maximum-scale). A mouse matches none of this: the desktop is unchanged.
+       tools/uitest/fieldzoom.mjs reads every field's size on the screens that have one, at both ends of the
+       text size. */
+    @media (pointer: coarse) {
+      :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"]), textarea, select, [contenteditable]:not([contenteditable="false"])) {
+        --fs-11: 16px; --fs-12: 16px; --fs-13: 16px; --fs-14: 16px; --fs-15: 16px;
+      }
+      :is(#chat, #sv-chat, .prompt, .sx-prev) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"]), textarea, select, [contenteditable]:not([contenteditable="false"])) {
+        --fs-11: max(16px, calc(11px * var(--rs))); --fs-12: max(16px, calc(12px * var(--rs))); --fs-13: max(16px, calc(13px * var(--rs)));
+        --fs-14: max(16px, calc(14px * var(--rs))); --fs-15: max(16px, calc(15px * var(--rs))); --fs-16: max(16px, calc(16px * var(--rs)));
+      }
+    }
+
     /* Tap targets (issue 135, slice 4). On a touch screen every tappable thing answers to at least 44 x 44 (Apple's 44 pt).
        Where the drawn control must keep its size (the list's filter rows, chips, Copy, Retry), an invisible ::before
        hit box grows it to 44: up and down evenly (top/bottom min(0, 50% - 22px), against the button's own height), and

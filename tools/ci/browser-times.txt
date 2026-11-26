@@ -17,6 +17,7 @@ press 44
 saved 39
 taptargets 30
 returnmark 29
+fieldzoom 24
 todonav 23
 pullrefresh 23
 decisionsets 22

@@ -208,6 +208,11 @@ if want taptargets; then
   fixture_hub taptgt 282
   COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-taptgt" node taptargets.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
 fi
+# Field zoom: on a touch screen every text field is at least 16px at every text size (iOS zooms in under 16); a mouse sees no change.
+if want fieldzoom; then
+  fixture_hub fieldzm 287
+  COMEBYE_BIN="$tmp/comebye" COMEBYE_STATE_DIR="$tmp/state-fieldzm" node fieldzoom.mjs "http://127.0.0.1:$fxport" "$out" || rc=1
+fi
 # View Transitions (#135): screen changes slide on a phone and fade on the desktop; none under reduced motion; a tap mid-way lands.
 if want viewtrans; then
   fixture_hub viewtr 285
