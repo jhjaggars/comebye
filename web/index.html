@@ -3421,6 +3421,25 @@
       }
     }
     @keyframes d-sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+    /* #/debug/sharp (app.js syncDebugSharp): an on-device test of iOS's top-edge blur, linked from nowhere. It hides the
+       app and starts at the top of the page; the columns differ by one property each. */
+    body.dbg-sharp > :not(#dbg-sharp) { display: none !important; }
+    #dbg-sharp { position: relative; min-height: 100vh; background: var(--bg); color: var(--text); margin: 0; padding: 0; }
+    #dbg-sharp .dbs-bar { position: fixed; top: 0; left: 0; right: 0; height: 20px; background: var(--bg); z-index: 5; } /* over every column, so it is what the top edge hits */
+    #dbg-sharp .dbs-grid { display: flex; height: 176px; margin: 0; padding: 0; }
+    #dbg-sharp .dbs-col { position: relative; flex: none; width: calc(100% / 6); height: 176px; }
+    #dbg-sharp .dbs-c1 .dbs-fixed { position: fixed; top: 0; left: calc(100% / 6); width: calc(100% / 6); height: 176px; z-index: 2; }
+    #dbg-sharp .dbs-c2 { position: sticky; top: 0; }
+    #dbg-sharp .dbs-c3 { will-change: transform; }
+    #dbg-sharp .dbs-c4 { background-color: color-mix(in srgb, var(--panel) 86%, transparent);
+      -webkit-backdrop-filter: blur(18px) saturate(1.7); backdrop-filter: blur(18px) saturate(1.7); }
+    #dbg-sharp .dbs-row { position: absolute; left: 4px; display: flex; align-items: center; gap: 3px; height: 11px;
+      font: 600 11px/11px -apple-system, system-ui, sans-serif; color: var(--text); white-space: nowrap; }
+    #dbg-sharp .dbs-row i { display: block; width: 2px; height: 9px; background: currentColor; }
+    #dbg-sharp .dbs-info { padding: 8px 6px 40px; font-size: 12px; }
+    #dbg-sharp .dbs-names { display: flex; } #dbg-sharp .dbs-names span { width: calc(100% / 6); font-size: 11px; font-weight: 600; }
+    #dbg-sharp pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.35 var(--ff-code); margin: 8px 0; }
+    #dbg-sharp .dbs-probe { display: block; height: 0; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
     @media (max-width: 1099px) and (prefers-reduced-motion: reduce) { #detail > header.busy .d-cap-l::after { animation: none; background-size: 100% 100%; opacity: .6; } }
     /* Landscape (a phone on its side): one row. The chips sit beside the left capsule, between it and the right one. */
     @media (max-width: 1099px) and (pointer: coarse) and (max-height: 500px) and (min-width: 601px) {

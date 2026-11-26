@@ -9781,7 +9781,54 @@ function vtOpenAgent(id) {
   vtRun("fwd", () => { if (location.hash !== hash) return; if (state.selected !== id) openDetail(id); syncScreens(); }, "", from);
 }
 
+/* ---------- #/debug/sharp: an on-device test of iOS's top-edge blur (linked from nowhere) ----------
+   The installed iOS app's top bars are soft and Chrome cannot show it. This page covers the app with rows of the same
+   bold label and a 2px black stem, every 12px from the top of the page to 156px, in six columns that differ by one
+   property each: in flow, position: fixed, position: sticky, will-change: transform, under a backdrop-filter ancestor,
+   and a 0.5px offset. One screenshot shows whether softness follows the height on the screen (every column alike,
+   fading with y) or a property (one column soft). Under the grid: the numbers that say whether the page runs under the
+   status bar. ?bar=1 adds a full-width solid fixed bar at the top, the box WebKit takes its top edge colour from. */
+const DBG_SHARP = "#/debug/sharp";
+function syncDebugSharp() {
+  const on = location.hash.split("?")[0] === DBG_SHARP;
+  let el = $("dbg-sharp");
+  document.body.classList.toggle("dbg-sharp", on);
+  if (!on) { el?.remove(); return; }
+  const bar = /[?&]bar=1\b/.test(location.hash);
+  const ys = []; for (let y = 0; y <= 156; y += 12) ys.push(y);
+  const rows = (dy = 0) => ys.map((y) => `<span class="dbs-row" style="top:${y + dy}px"><i></i>Hg ${y}</span>`).join("");
+  const cols = ["flow", "fixed", "sticky", "will-chg", "backdrop", "+0.5px"];
+  if (!el) { el = document.createElement("div"); el.id = "dbg-sharp"; document.body.append(el); }
+  // The fixed column's rows hang from a fixed box placed over its own (empty) flex slot.
+  el.innerHTML = `${bar ? '<div class="dbs-bar"></div>' : ""}
+    <div class="dbs-grid">${cols.map((n, i) => i === 1 ? `<div class="dbs-col dbs-c1"><div class="dbs-fixed">${rows()}</div></div>`
+      : `<div class="dbs-col dbs-c${i}">${rows(i === 5 ? 0.5 : 0)}</div>`).join("")}</div>
+    <div class="dbs-info">
+      <div class="dbs-names">${cols.map((n) => `<span>${n}</span>`).join("")}</div>
+      <pre id="dbs-nums"></pre>
+      <p><a href="${bar ? DBG_SHARP : DBG_SHARP + "?bar=1"}">${bar ? "without" : "with"} a solid fixed bar at the top</a> · <a href="#/list">back to the list</a></p>
+      <span class="dbs-probe"></span>
+    </div>`;
+  requestAnimationFrame(() => {
+    const p = el.querySelector(".dbs-probe"), cs = p && getComputedStyle(p), vv = window.visualViewport;
+    const meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    const st = matchMedia("(display-mode: standalone)").matches;
+    const r0 = el.querySelector(".dbs-c0 .dbs-row")?.getBoundingClientRect();
+    $("dbs-nums").textContent = [
+      `standalone ${st} · navigator.standalone ${navigator.standalone}`,
+      `status-bar-style meta ${meta ? meta.content : "none"}`,
+      `safe-area top ${cs?.paddingTop} bottom ${cs?.paddingBottom}`,
+      `inner ${innerWidth}×${innerHeight} · screen ${screen.width}×${screen.height} · dpr ${devicePixelRatio}`,
+      `outer ${outerWidth}×${outerHeight} · client ${document.documentElement.clientWidth}×${document.documentElement.clientHeight}`,
+      `visualViewport ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} top ${vv.offsetTop}` : "none"} · scrollY ${scrollY}`,
+      `first row at ${r0 ? r0.top : "?"} · bar ${bar}`,
+      navigator.userAgent,
+    ].join("\n");
+  });
+}
+
 function route() {
+  syncDebugSharp();
   syncScreens();
   syncStatusScreen();
   syncSubview();
