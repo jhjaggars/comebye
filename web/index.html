@@ -9,7 +9,10 @@
   <!-- Theme data + the saved choice, applied before first paint (external: the CSP forbids inline scripts). -->
   <script src="themes.js"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- No apple-mobile-web-app-status-bar-style: with black-translucent the installed app ran under the status bar, and
+       since iOS 26.1 iOS lays its own edge blur over the top ~100pt of such an app, top bars and all; a page cannot turn
+       it off. Without it the app starts below a solid status bar in the theme-color (themes.js keeps it on --bg), and
+       env(safe-area-inset-top) is 0. iOS reads this when the app is added: an install made before needs re-adding. -->
   <meta name="apple-mobile-web-app-title" content="Comebye">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -818,7 +821,10 @@
        the top edge to take its colour from (LocalFrameView::fixedContainerEdges). As position: relative the agent's name
        sat in that blur. Sticky also contains the busy bar, as relative did. tools/uitest/gradients.mjs (topEdge) replays the rule.
        With the keyboard out iOS pans the header off the screen (app.js sets html.vv-panned): then it is relative again, so
-       iOS's blur lies over the messages at the top of the screen, as the user likes it. */
+       iOS's blur lies over the messages at the top of the screen, as the user likes it.
+       That rule did not keep the blur off on a real iPhone (v0.5.62): an app that runs under the status bar gets it over
+       every top bar. The installed app now starts below the status bar (no black-translucent, see the head), which ends
+       it; this stays for a browser tab and for an install made before. */
     #detail header { position: sticky; top: 0; overflow: hidden; }
     html.vv-panned #detail header { position: relative; }
     #detail header.busy::after {
@@ -3295,7 +3301,8 @@
        the capsules' text: it draws no blur at all. Our own blur band (header::before) lies over the messages under
        the status bar instead. With the keyboard out (html.vv-panned) the header is 0 tall: WebKit then keeps the last
        top box's colour while that box is still rendered and visible, so iOS most likely keeps the solid band.
-       tools/uitest/gradients.mjs (topEdge) replays the rule. */
+       tools/uitest/gradients.mjs (topEdge) replays the rule. On a real iPhone the rule was not enough (see "#detail
+       header" above): the installed app now starts below the status bar, so --d-st is its 12px floor there. */
     .d-cap, .d-name, .d-nm, .d-chips { display: contents; }
     @media (max-width: 1099px) {
       #detail { --d-st: max(env(safe-area-inset-top, 0px), 12px); --d-l: max(10px, env(safe-area-inset-left, 0px)); --d-r: max(10px, env(safe-area-inset-right, 0px));
