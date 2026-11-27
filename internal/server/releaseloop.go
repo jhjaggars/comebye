@@ -132,7 +132,9 @@ func (s *Server) RunRelease(ctx context.Context) {
 // every is the time to the next pass: the live tick while a rollout is
 // live, else the idle one.
 func (l *releaseLoop) every() time.Duration {
-	if j, ok := l.s.rollout.Get(); ok && j.live() {
+	// Peek: a tick holds the engine's lock across its calls out, and the
+	// clock must not wait for it (the file is written atomically).
+	if j, ok := l.s.rollout.Peek(); ok && j.live() {
 		return l.live
 	}
 	return l.idle
