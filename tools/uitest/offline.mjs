@@ -293,10 +293,13 @@ async function phase2(width) {
       if (!r.stale || !r.hollow) throw new Error("old rows keep their live look: " + JSON.stringify(r));
       if (r.agos && r.frozen !== r.agos) throw new Error(`times still count: ${r.frozen} of ${r.agos} frozen`);
       await page.screenshot({ path: `${out}/offline-strip-${tag}.png` });
-      // The age counts.
+      // The age counts. A jump fires the strip's 30 s tick once, at its due time early in the jump, so draw it at the
+      // jump's end (as renderTodos is below); before, the watchdog's /api/agents fetch, failing after the jump, did.
       await page.clock.fastForward("12:00");
+      await page.evaluate(() => stripSync());
       await page.waitForFunction(() => /(list|status|list and status) from 12 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.clock.fastForward("02:00");
+      await page.evaluate(() => stripSync());
       await page.waitForFunction(() => /(list|status|list and status) from 14 min ago/.test(document.getElementById("hub-strip")?.innerText || ""), null, { timeout: 3000 });
       await page.screenshot({ path: `${out}/offline-strip-12min-${tag}.png` });
       // Back online: "Updated", then no strip and no old marking.

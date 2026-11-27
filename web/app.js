@@ -15859,7 +15859,7 @@ function connectEvents() {
     es.close();
     if (state.es === es) scheduleReconnect();
     // An EventSource cannot see why it failed: one look tells a signed-out session from a network drop.
-    fetch("/api/agents", { method: "HEAD" }).then((r) => { if (r.status === 401) setUnauthorized(true); }).catch(() => {});
+    fetch("/api/agents").then((r) => { if (r.status === 401) setUnauthorized(true); }).catch(() => {});
   };
 }
 

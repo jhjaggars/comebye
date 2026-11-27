@@ -151,6 +151,9 @@ await check("chat: a tool call copies the command and the result", async () => {
     { id: "tc2", kind: "tool", tool: "Bash", args: "comebye upgrade --smoke-only", result: "smoke: dial tcp 10.0.0.7:443: connection refused", err: true, ms: 9 },
   ];
   await page.route(/\/transcript\?/, (r) => r.fulfill({ json: { messages: msgs, total: 2, more: false, format: "claude" } }));
+  // A fresh load: the same URL again would not reload, and the mocked transcript is no change on the host, so no
+  // transcript:<id> event would make the open chat read it.
+  await page.goto("about:blank");
   await page.goto(base + "/#/agent/" + encodeURIComponent("w1:p1"), { waitUntil: "load" });
   const card = page.locator('#chat .tr-item[data-id="tc1"]');
   await card.waitFor({ state: "attached", timeout: 8000 });
