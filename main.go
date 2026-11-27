@@ -565,9 +565,7 @@ func main() {
 	transcript.DefaultResolver.OpencodeDir = acfg.OpencodeDir
 	go srv.RunUsage(context.Background())
 	go srv.RunOpencodeMirror(context.Background())
-	go srv.RunReleaseSweep(context.Background())
-	go srv.RunRollout(context.Background())
-	go srv.RunAutoRollout(context.Background())
+	go srv.RunRelease(context.Background()) // rollout (with the catch-up), auto rollout, release sweep
 	go srv.RunProvision(context.Background())
 	go srv.RunRepoHealth(context.Background())
 

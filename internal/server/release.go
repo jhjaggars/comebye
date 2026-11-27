@@ -797,6 +797,7 @@ func (s *Server) handleUpgradeLocal(w http.ResponseWriter, r *http.Request) {
 // written as running, then the runner starts the run. On refusal it returns
 // the status and {code, message}.
 func (s *Server) startUpgrade(by, version string, rollback bool) (upgrade.Record, int, [2]string) {
+	defer s.dropRelHosts()
 	cfg := s.cfg.Release
 	if !cfg.Upgrade {
 		return upgrade.Record{}, http.StatusConflict, [2]string{"upgrade_disabled", "this host does not let the app upgrade it: start comebye with -release-upgrade"}
@@ -914,6 +915,7 @@ func (s *Server) handleHostUpgrade(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	code, body, err := s.fleet.CallHost(ctx, host, "release-upgrade", url.Values{}, inner)
+	s.dropRelHosts()
 	if err != nil {
 		s.auditBy(ledger.AuditEvent{By: by, Action: "upgrade.request", Todo: it.ID, Host: host, Detail: b.Version + ": " + oneLine(err.Error(), 200)})
 		relErr(w, http.StatusBadGateway, "peer_error", "could not reach "+host+": "+oneLine(err.Error(), 200))

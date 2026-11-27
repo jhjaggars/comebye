@@ -28,10 +28,10 @@ import (
 // already skipped, and the catch-up upgrades it when it next starts.
 
 const (
-	autoRolloutEvery = time.Minute
-	// autoCatchUpEvery: how often the automatic rollout asks the fleet
-	// whether a host is behind its newest release (autoCatchUpTick).
-	autoCatchUpEvery = 5 * time.Minute
+	// autoRolloutEvery: how often the release loop's auto step looks for a
+	// release to roll out (-test-mode: autoRolloutTestEvery).
+	autoRolloutEvery     = time.Minute
+	autoRolloutTestEvery = 2 * time.Second
 	// autoRolloutWindow: a release tagged longer ago than this is left to
 	// Roll out to all (an old item the hub sees after an upgrade, say).
 	autoRolloutWindow = 24 * time.Hour
@@ -46,36 +46,6 @@ func (s *Server) autoRolloutOn() bool {
 		return *v
 	}
 	return !s.cfg.TestMode
-}
-
-// RunAutoRollout looks for a release to roll out every minute until ctx
-// ends. Only the ledger host with a release tool has one to start.
-func (s *Server) RunAutoRollout(ctx context.Context) {
-	if s.rollout == nil || s.todos == nil || s.fleet == nil {
-		return
-	}
-	every := autoRolloutEvery
-	if s.cfg.TestMode {
-		every = 2 * time.Second
-	}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("auto rollout: %v", r)
-					}
-				}()
-				s.autoRolloutTick(ctx)
-				s.autoCatchUpTick(ctx)
-			}()
-		}
-	}
 }
 
 // autoCandidate is the newest open, tagged, unmarked release item inside the
@@ -323,37 +293,36 @@ func (s *Server) autoTarget() (Todo, bool) {
 	return best, found
 }
 
-// autoCatchUpTick does the one next thing for the hosts behind the newest
-// auto-rolled release: nothing, reopen its done job (CatchUpNow), or start
-// one when that release has none. It reports what it did, for the tests.
-func (s *Server) autoCatchUpTick(ctx context.Context) string {
+// catchUpPlan is the automatic rollout's say in the engine's one catch-up
+// (rolloutEngine.catchUp) for the hosts behind the newest auto-rolled
+// release: the job's own catch-up, that and any reachable host behind it
+// (the job is that release's), nothing, or a job of its own when that
+// release has none.
+func (s *Server) catchUpPlan(cur Rollout, has bool) catchUpPlan {
 	if s.rollout == nil || s.cfg.Release.Tool == nil || !s.autoRolloutOn() {
-		return "off"
+		return ownCatchUp(cur, has)
 	}
 	it, ok := s.autoTarget()
-	if !ok {
-		return "none"
-	}
-	cur, has := s.rollout.Get()
 	switch {
+	case !ok:
+		return ownCatchUp(cur, has)
 	case has && cur.live():
-		return "busy"
+		return catchUpPlan{Why: "busy"}
 	case has && cur.Todo != it.ID && !newerVersion(it.Release.Version, cur.Version):
-		return "none" // the job on file is for this version or a newer one
+		return ownCatchUp(cur, has) // the job on file is for this version or a newer one
 	case has && cur.Todo == it.ID && cur.State != roDone:
-		return "none" // cancelled: the user's call stands
+		return catchUpPlan{Why: "none"} // cancelled: the user's call stands
+	case has && cur.Todo == it.ID:
+		return catchUpPlan{Reopen: true, AddNew: true}
 	}
-	now := time.Now()
-	if !s.cfg.TestMode && now.Sub(s.lastAutoCatchUp) < autoCatchUpEvery {
-		return "wait"
-	}
-	s.lastAutoCatchUp = now
-	if has && cur.Todo == it.ID {
-		if hs := s.rollout.CatchUpNow(ctx); len(hs) > 0 {
-			return "caught up " + strings.Join(hs, ",")
-		}
-		return "current"
-	}
+	return catchUpPlan{Start: func(ctx context.Context) string { return s.startCatchUp(ctx, it) }}
+}
+
+// startCatchUp starts a job that catches up the hosts behind the release
+// item it, which has no job of its own (or an older release's is on file):
+// every reachable host behind it, through the same gates. It reports what
+// it did, for the tests.
+func (s *Server) startCatchUp(ctx context.Context, it Todo) string {
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	v := it.Release.Version

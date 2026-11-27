@@ -28,6 +28,7 @@ func rolloutRouteRig(t *testing.T, names ...string) (*Server, *fakeFleet, *fakeT
 	s.rollout = newRolloutEngine(filepath.Join(t.TempDir(), "rollout.json"), f, s.auditBy)
 	s.rollout.now = f.clock
 	s.rollout.onState = s.noteRollout
+	s.rollout.catchUpFor = s.catchUpPlan // the automatic rollout's say in the catch-up, as server.go wires it
 	it := newRelease(t, s, "v0.5.9", relSHA)
 	tok := tagIt(t, s, it.ID)
 	return s, f, tool, it, tok

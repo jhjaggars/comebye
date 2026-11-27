@@ -400,9 +400,10 @@ type Server struct {
 	// usage counts tokens (usage.go); nil when off.
 	usage *usageState
 
-	// lastAutoCatchUp is when the automatic rollout last looked for hosts
-	// behind its newest release (autoCatchUpTick); only its loop uses it.
-	lastAutoCatchUp time.Time
+	// relLoop is the release loop (releaseloop.go); relCache the fleet
+	// answer its steps share.
+	relLoop  *releaseLoop
+	relCache relHostsCache
 }
 
 // maxStreams caps concurrent SSE clients. A phone holds one or two and a
@@ -490,6 +491,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.rollout.onSkipFail = s.alarmSkipFail
 			s.rollout.onEnd = s.tellRollout
 			s.rollout.catchUpAlways = s.autoRolloutOn
+			s.rollout.catchUpFor = s.catchUpPlan
 			s.rollout.soakFor = s.rolloutSoakSetting // the setting; unset: the engine's own (10 min, shorter below)
 			if cfg.Release.Simulated {
 				s.rollout.soak = 8 * time.Second // a demo does not wait ten minutes (unless the setting asks)
@@ -498,6 +500,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 				s.rollout.tickEvery = TestPollMs * time.Millisecond
 				s.rollout.soak = time.Second
 				s.rollout.offlineGrace, s.rollout.catchUpEvery = 3*time.Second, time.Second // an offline peer is skipped, and caught up, in seconds
+				s.rollout.lookEvery = 2 * time.Second                                       // and a host behind is looked for as often as the auto step runs
 			}
 			s.events = openEvents(eventsPath(cfg.StateDir))
 			s.sent = openSent(sentPath(cfg.StateDir))
@@ -567,6 +570,11 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 	}
 	s.ship = newShipper(s, cfg.ArchiveShip)
 	s.janitor = newJanitor(s)
+	s.relCache.ttl = relHostsTTL
+	if cfg.TestMode {
+		s.relCache.ttl = TestPollMs * time.Millisecond / 2 // under the loop's tick, as relHostsTTL is under 5 s
+	}
+	s.relLoop = newReleaseLoop(s)
 	s.wireChanged()
 	s.routes()
 	return s

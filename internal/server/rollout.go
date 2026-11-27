@@ -78,6 +78,7 @@ const (
 	rolloutHostCallWait = 20 * time.Second
 	rolloutWakeWait     = 10 * time.Minute // a stopped worker: started and joined the hub (the start job 7 min, the join 3)
 	rolloutCatchUpEvery = time.Minute      // a done job looks for its offline hosts this often
+	rolloutLookEvery    = 5 * time.Minute  // the automatic rollout looks for any other host behind this often
 	rolloutCatchUpFor   = 7 * 24 * time.Hour
 	// rolloutBusyWait: a host busy with what a restart would cut short (a
 	// sign-in, a tagging, a deploy: upgradeStatus.Busy) is waited for this
@@ -244,10 +245,17 @@ type rolloutEngine struct {
 	soak, backWait, offlineGrace, runWait, startRetry, wakeWait time.Duration
 	busyWait                                                    time.Duration
 	// catchUpEvery is how often a done job with hosts skipped while offline
-	// asks the fleet whether they are back; lastCatchUp is when it last did.
-	catchUpEvery time.Duration
-	lastCatchUp  time.Time
-	// tickEvery is how often Run ticks (rolloutTick; -test-mode makes it shorter).
+	// asks the fleet whether they are back; lookEvery how often the catch-up
+	// asks it whether any other host is behind (catchUp); lastCatchUp is when
+	// it last asked. One clock for both.
+	catchUpEvery, lookEvery time.Duration
+	lastCatchUp             time.Time
+	// catchUpFor, when set, is the automatic rollout's say in the catch-up
+	// (Server.catchUpPlan); unset, a done job catches up its own skipped
+	// hosts (ownCatchUp).
+	catchUpFor func(j Rollout, has bool) catchUpPlan
+	// tickEvery is how often the release loop ticks while a rollout is live
+	// (rolloutTick; -test-mode makes it shorter).
 	tickEvery time.Duration
 	// onState is told, after the file was written, whenever the job's state
 	// changed (started, paused, resumed, stopped, done, cancelled): the
@@ -277,8 +285,8 @@ type rolloutEngine struct {
 
 func newRolloutEngine(path string, ops rolloutOps, audit func(ledger.AuditEvent)) *rolloutEngine {
 	return &rolloutEngine{path: path, ops: ops, now: func() time.Time { return time.Now().UTC() }, audit: audit,
-		catchUpEvery: rolloutCatchUpEvery,
-		soak:         rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait,
+		catchUpEvery: rolloutCatchUpEvery, lookEvery: rolloutLookEvery,
+		soak: rolloutSoak, backWait: rolloutBackWait, offlineGrace: rolloutOfflineGrace, runWait: rolloutRunWait, startRetry: rolloutStartRetry, wakeWait: rolloutWakeWait,
 		busyWait: rolloutBusyWait}
 }
 
@@ -623,32 +631,8 @@ func inFlight(j Rollout) int {
 
 // ---- the loop ----
 
-// Run ticks until ctx ends. A job found running at start-up is a rollout
-// that survived a restart of this server.
-func (e *rolloutEngine) Run(ctx context.Context) {
-	e.resumeAfterRestart()
-	every := rolloutTick
-	if e.tickEvery > 0 {
-		every = e.tickEvery
-	}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("rollout: %v", r)
-					}
-				}()
-				e.tick(ctx)
-			}()
-		}
-	}
-}
+// The engine has no loop of its own: the release loop (releaseloop.go) calls
+// resumeAfterRestart once at start-up and tick on its clock.
 
 func (e *rolloutEngine) resumeAfterRestart() {
 	e.mu.Lock()
@@ -664,22 +648,24 @@ func (e *rolloutEngine) resumeAfterRestart() {
 	e.emit(j, "", "rollout.resume-after-restart", true, detail, "comebye")
 }
 
-// tick reads the job and does the next thing. It is safe to call twice at
-// once and after a restart: it only ever acts on what the file and the
-// fleet say.
+// tick reads the job and does the next thing: a running job advances, one
+// stopped at the hub may retry it (retryHub), and otherwise (no job, or one
+// that ended) the catch-up looks for hosts that are behind (catchUp). It is
+// safe to call twice at once and after a restart: it only ever acts on what
+// the file and the fleet say.
 func (e *rolloutEngine) tick(ctx context.Context) {
 	e.mu.Lock()
 	j, ok := e.load()
 	e.mu.Unlock()
-	if ok && j.State == roDone {
-		e.catchUp(ctx, j)
-		return
-	}
 	if ok && j.State == roStopped {
 		e.retryHub(ctx, j)
 		return
 	}
-	if !ok || j.State != roRunning {
+	if !ok || !j.live() {
+		e.catchUp(ctx, j, ok)
+		return
+	}
+	if j.State != roRunning {
 		return
 	}
 	// The fleet is asked outside the lock, so Pause and Cancel never wait
@@ -734,22 +720,97 @@ func (e *rolloutEngine) told(j *Rollout) {
 	}
 }
 
-// catchUp: a done job whose offline hosts were skipped upgrades each one
-// when it is back. The step is reopened and the job runs again, through the
-// same gates; it is done again after it. A host that was upgraded meanwhile
-// (by hand, or by a later rollout) is marked done. It stops looking a week
-// after the job finished, and a newer rollout replaces the job anyway.
-func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout) {
-	now := e.now()
-	limited := e.catchUpAlways == nil || !e.catchUpAlways()
-	if j.Finished == nil || (limited && now.Sub(*j.Finished) > rolloutCatchUpFor) || now.Sub(e.lastCatchUp) < e.catchUpEvery {
-		return
+// The catch-up (#141 slice 4; one path since #143 slice 6). A host that was
+// offline or stopped while its release rolled out is upgraded when it is
+// back: the done job's step is reopened and the job runs again, through the
+// same gates, and is done again after it. A host that was upgraded meanwhile
+// (by hand, or by a later rollout) is marked done. Without the automatic
+// rollout it stops looking a week after the job finished, and a newer
+// rollout replaces the job anyway. With it (catchUpPlan) there is no time
+// limit, a reachable host the plan does not have (a worker made at the old
+// version) is added, and a release that has no job of its own starts one.
+//
+// There is one clock: the fleet is asked at most every catchUpEvery while
+// the job has a host it skipped while it was away, and at most every
+// lookEvery when the catch-up only looks for hosts behind that nothing
+// skipped.
+
+// catchUpPlan is what the catch-up does about the job on file (none when
+// has is false).
+type catchUpPlan struct {
+	// Reopen: the job is done, and its skipped hosts are reopened when back.
+	Reopen bool
+	// AddNew: reachable hosts behind that the plan does not have are added
+	// (and there is no week's limit).
+	AddNew bool
+	// Start, when set, starts a job of its own for hosts behind, given the
+	// fleet's answer; it reports what it did.
+	Start func(ctx context.Context) string
+	// Why is what the catch-up reports when it does nothing.
+	Why string
+}
+
+// ownCatchUp is the engine's catch-up with no automatic rollout: a done
+// job's own skipped hosts.
+func ownCatchUp(j Rollout, has bool) catchUpPlan {
+	if has && j.State == roDone {
+		return catchUpPlan{Reopen: true}
 	}
-	if !wantsCatchUp(j) {
-		return
+	return catchUpPlan{Why: "none"}
+}
+
+// catchUpClockSlack: the release loop's ticks are not exactly on the
+// minute; a look due within a second is due.
+const catchUpClockSlack = time.Second
+
+// catchUp does the one next thing for hosts behind: nothing, reopen the done
+// job, or start one. It reports what it did, for the tests. j and has are
+// the job on file, which is not live.
+func (e *rolloutEngine) catchUp(ctx context.Context, j Rollout, has bool) string {
+	plan := ownCatchUp(j, has)
+	if e.catchUpFor != nil {
+		plan = e.catchUpFor(j, has)
+	}
+	if !plan.Reopen && plan.Start == nil {
+		return plan.Why
+	}
+	now := e.now()
+	away := plan.Reopen && wantsCatchUp(j)
+	if plan.Reopen && !plan.AddNew {
+		limited := e.catchUpAlways == nil || !e.catchUpAlways()
+		if j.Finished == nil || (limited && now.Sub(*j.Finished) > rolloutCatchUpFor) {
+			return "none"
+		}
+		if !away {
+			return "current" // nothing skipped: the fleet is not asked
+		}
+	}
+	every := e.lookEvery
+	if away {
+		every = e.catchUpEvery
+	}
+	if every > 0 && !e.lastCatchUp.IsZero() && now.Sub(e.lastCatchUp)+catchUpClockSlack < every {
+		return "wait"
 	}
 	e.lastCatchUp = now
-	e.reopen(j, e.ops.Hosts(ctx, j.Version), false)
+	if plan.Start != nil {
+		return plan.Start(ctx)
+	}
+	if hs := e.reopen(j, e.ops.Hosts(ctx, j.Version), plan.AddNew); len(hs) > 0 {
+		return "caught up " + strings.Join(hs, ",")
+	}
+	return "current"
+}
+
+// catchUpTick is catchUp for a caller with no job at hand (tests).
+func (e *rolloutEngine) catchUpTick(ctx context.Context) string {
+	e.mu.Lock()
+	j, ok := e.load()
+	e.mu.Unlock()
+	if ok && j.live() {
+		return "busy"
+	}
+	return e.catchUp(ctx, j, ok)
 }
 
 // wantsCatchUp: the job has a host it skipped while it was away.
@@ -760,20 +821,6 @@ func wantsCatchUp(j Rollout) bool {
 		}
 	}
 	return false
-}
-
-// CatchUpNow is catchUp asked by the automatic rollout's own loop, which saw
-// a host behind this job's version: no time limit, and a reachable host that
-// is not in the plan at all (a worker made at the old version after the job
-// was planned) gets a step too. It reports the hosts it reopened or added.
-func (e *rolloutEngine) CatchUpNow(ctx context.Context) []string {
-	e.mu.Lock()
-	j, ok := e.load()
-	e.mu.Unlock()
-	if !ok || j.State != roDone {
-		return nil
-	}
-	return e.reopen(j, e.ops.Hosts(ctx, j.Version), true)
 }
 
 // reopen puts each skipped host that is back, and with addNew each reachable

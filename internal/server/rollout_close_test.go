@@ -101,7 +101,7 @@ func TestCatchUpWithNoRolloutJobAfterMoreThanAWeek(t *testing.T) {
 	if _, ok := s.rollout.Get(); ok {
 		t.Fatal("a job was saved")
 	}
-	if got := s.autoCatchUpTick(ctx); got != "current" {
+	if got := s.rollout.catchUpTick(ctx); got != "current" {
 		t.Fatalf("catch-up while stopped = %q", got)
 	}
 	// The item closed (all reachable current), and eight days pass.
@@ -119,11 +119,12 @@ func TestCatchUpWithNoRolloutJobAfterMoreThanAWeek(t *testing.T) {
 	f.advance(8 * 24 * time.Hour)
 	// wk1 starts, on the old version.
 	f.set("wk1", func(h *relHost) { h.Status, h.Stopped = "ok", false })
-	if got := s.autoCatchUpTick(ctx); got != "wait" {
+	s.rollout.lastCatchUp = f.clock() // as if it had just looked
+	if got := s.rollout.catchUpTick(ctx); got != "wait" {
 		t.Fatalf("within the interval = %q", got)
 	}
-	s.lastAutoCatchUp = time.Time{}
-	got := s.autoCatchUpTick(ctx)
+	s.rollout.lastCatchUp = time.Time{}
+	got := s.rollout.catchUpTick(ctx)
 	if !strings.HasPrefix(got, "started r") {
 		t.Fatalf("catch-up tick = %q", got)
 	}
@@ -142,8 +143,8 @@ func TestCatchUpWithNoRolloutJobAfterMoreThanAWeek(t *testing.T) {
 		t.Fatalf("job %s %s", j.State, j.Note)
 	}
 	// Caught up: nothing more, and never a second job.
-	s.lastAutoCatchUp = time.Time{}
-	if got := s.autoCatchUpTick(ctx); got != "current" || autoStarts(s) != 1 {
+	s.rollout.lastCatchUp = time.Time{}
+	if got := s.rollout.catchUpTick(ctx); got != "current" || autoStarts(s) != 1 {
 		t.Fatalf("after = %q starts=%d", got, autoStarts(s))
 	}
 }
@@ -196,8 +197,8 @@ func TestCatchUpOfTheJobHasNoWeekLimitWhileAutoIsOn(t *testing.T) {
 	// A new worker, made on the old version.
 	f.hosts["wk"] = &relHost{Name: "wk", Status: "ok", Version: "v0.5.8", Enabled: true}
 	f.order = append(f.order, "wk")
-	s.lastAutoCatchUp = time.Time{}
-	if got := s.autoCatchUpTick(ctx); got != "caught up wk" {
+	s.rollout.lastCatchUp = time.Time{}
+	if got := s.rollout.catchUpTick(ctx); got != "caught up wk" {
 		t.Fatalf("new worker tick = %q", got)
 	}
 	s.rollout.tick(ctx)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -40,7 +39,8 @@ const (
 	releaseHistoryMax = 5
 	// A finished release stays in the tab as "all upgraded" for this long.
 	releaseDoneShown = 24 * time.Hour
-	// How often the hub looks for rollouts that finished on their own.
+	// How often the release loop's sweep step looks for rollouts that
+	// finished on their own.
 	releaseSweepEvery = 30 * time.Second
 )
 
@@ -378,34 +378,9 @@ func (s *Server) sweepReleases(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	hosts := s.relHosts(ctx)
+	hosts := s.relHostsCached(ctx)
 	s.markWakeable(ctx, hosts) // the note says which hosts behind are stopped
 	s.sweepReleasesWith(hosts)
-}
-
-// RunReleaseSweep closes finished release items on a clock, so a rollout that
-// ends while nobody has the Releases tab open still closes its item.
-func (s *Server) RunReleaseSweep(ctx context.Context) {
-	if s.todos == nil || s.fleet == nil {
-		return
-	}
-	t := time.NewTicker(releaseSweepEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			func() {
-				defer func() {
-					if e := recover(); e != nil {
-						log.Printf("release sweep: %v", e)
-					}
-				}()
-				s.sweepReleases(ctx)
-			}()
-		}
-	}
 }
 
 func relS(n int) string {

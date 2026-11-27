@@ -129,7 +129,7 @@ func TestRolloutSkipsAPeerThatFailsAfterTheCanaryAndGoesOn(t *testing.T) {
 
 	// A failed host is not caught up by this release: it would loop.
 	f.advance(10 * time.Minute)
-	if got := s.rollout.CatchUpNow(ctx); len(got) != 0 {
+	if got := s.rollout.catchUpTick(ctx); got != "current" {
 		t.Fatalf("caught up %v", got)
 	}
 	tick()

@@ -22,7 +22,7 @@ type serverRolloutOps struct{ s *Server }
 func (o serverRolloutOps) Hosts(ctx context.Context, version string) []relHost {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	hosts := o.s.relHosts(cctx)
+	hosts := o.s.relHostsCached(cctx)
 	markRollout(hosts, version)
 	return hosts
 }
@@ -55,6 +55,7 @@ func (o serverRolloutOps) StartUpgrade(ctx context.Context, job Rollout, host st
 	}
 	inner, _ := json.Marshal(upgradeBody{Version: job.Version})
 	code, body, err := s.fleet.CallHost(ctx, host, "release-upgrade", url.Values{}, inner)
+	s.dropRelHosts()
 	if err != nil {
 		s.auditBy(ledger.AuditEvent{By: job.By, Action: "upgrade.request", Todo: it.ID, Host: host, Detail: job.Version + ": " + oneLine(err.Error(), 200)})
 		return upgrade.Record{}, err
@@ -75,15 +76,6 @@ func (o serverRolloutOps) StartUpgrade(ctx context.Context, job Rollout, host st
 		return upgrade.Record{}, fmt.Errorf("%s accepted the upgrade but sent no run id", host)
 	}
 	return resp.Record, nil
-}
-
-// RunRollout drives the rolling rollout on a clock. Only the ledger host has
-// the engine: a peer never runs a rollout.
-func (s *Server) RunRollout(ctx context.Context) {
-	if s.rollout == nil || s.fleet == nil || s.todos == nil {
-		return
-	}
-	s.rollout.Run(ctx)
 }
 
 // rolloutNoteOf is the line a release item keeps about its rollout: why it
@@ -232,6 +224,7 @@ func (o serverRolloutOps) StartDeploy(ctx context.Context, job Rollout) (string,
 	}
 	inner, _ := json.Marshal(deployReq{Version: job.Version, Todo: it.ID, By: job.By})
 	code, body, err := s.fleet.CallHost(ctx, cfg.Host, "release-deploy", url.Values{}, inner)
+	s.dropRelHosts()
 	if err != nil {
 		s.auditBy(ledger.AuditEvent{By: job.By, Action: "deploy.request", Todo: it.ID, Host: cfg.Host, Detail: job.Version + ": " + oneLine(err.Error(), 200)})
 		return "", err

@@ -208,7 +208,7 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   host is back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. While
   the automatic rollout is on there is no time limit; with it off, it looks for a week after the rollout finished.
   **Roll out again** does the same at once for just those hosts.
-- **Catch-up without a job:** while the automatic rollout is on, every 5 minutes the hub also looks for a reachable
+- **Catch-up without a job:** while the automatic rollout is on, every 5 minutes the same catch-up also looks for a reachable
   host behind the newest release it rolled out (one that was stopped when it ran, or a worker made at an older
   version). A host in the job is caught up by it; a host it never had gets a step added to it; and when that release
   had no job at all (every running host was already current: "none: nothing to upgrade") the hub starts one then,
@@ -225,8 +225,10 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   is stopped or paused, and the per-host buttons are locked meanwhile, as for the shown release's own rollout.
 - **Pause** takes effect when the step in flight ends; it never interrupts an install or a restart. While a rollout
   is live the per-host Upgrade, Roll back and Bump hub buttons are locked.
-- **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few
-  seconds. Each step is derived from the file, the hosts' upgrade records and the fleet's versions, so a restart of
+- **State:** `<state-dir>/release/rollout.json`, written atomically and read by the ledger host's release loop every
+  5 s while a rollout is live (every 30 s otherwise). That one loop also runs the automatic rollout (once a minute),
+  the catch-up and the release sweep (every 30 s), and its steps share one answer from the fleet: each peer is asked
+  for its release status once per tick, and asked afresh as soon as an upgrade or a deploy starts. Each step is derived from the file, the hosts' upgrade records and the fleet's versions, so a restart of
   the hub, including the one the hub wave itself causes, carries on where it was. Every step is in the audit log
   (`rollout.start`, `.step`, `.gate`, `.skip`, `.pause`, `.resume`, `.resume-after-restart`, `.stop`, `.cancel`, `.supersede`,
   `.finish`, `.catchup`) with the rollout id. A stopped rollout, a cancelled one and a skipped host leave a line on the

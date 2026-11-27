@@ -179,6 +179,7 @@ func (t *tailBuffer) String() string {
 // startDeployLocal starts the deploy command for version in the background.
 // It returns the record, or an HTTP status and {code, message}.
 func (s *Server) startDeployLocal(by, todo, version string) (DeployRecord, int, [2]string) {
+	defer s.dropRelHosts()
 	cfg := s.cfg.Release
 	if !s.deployEnabled() {
 		return DeployRecord{}, http.StatusConflict, [2]string{"deploy_disabled", "this host has no deploy command: start comebye with -release-deploy-cmd"}
@@ -447,6 +448,7 @@ func (s *Server) handleReleaseDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	inner, _ := json.Marshal(deployReq{Version: b.Version, Todo: it.ID, By: by})
 	code, body, err := s.fleet.CallHost(ctx, cfg.Host, "release-deploy", url.Values{}, inner)
+	s.dropRelHosts()
 	if err != nil {
 		s.auditBy(ledger.AuditEvent{By: by, Action: "deploy.request", Todo: it.ID, Host: cfg.Host, Detail: b.Version + ": " + oneLine(err.Error(), 200)})
 		relErr(w, http.StatusBadGateway, "peer_error", "could not reach "+cfg.Host+": "+oneLine(err.Error(), 200))
