@@ -162,6 +162,35 @@ func (a *autoTodo) isMuted(id string) bool {
 // on every fleet update and every autoTick, which is what notices that ten
 // minutes passed with no status change.
 
+// autoNextDue is how long until the next agent crosses a threshold (blocked
+// for cfg.Blocked, idle for cfg.Question), 0 when none will. The watch pass
+// (watch.go) wakes the step then, so an item is filed at its threshold and
+// not at the next autoTick: a blocked agent that sits still sends no event.
+func (s *Server) autoNextDue(agents []herdr.AgentInfo, now time.Time) time.Duration {
+	au := s.auto
+	if au == nil {
+		return 0
+	}
+	var next time.Duration
+	for _, a := range agents {
+		after := time.Duration(0)
+		switch a.Status {
+		case herdr.StatusBlocked:
+			after = au.cfg.Blocked
+		case herdr.StatusIdle, herdr.StatusDone:
+			after = au.cfg.Question
+		}
+		since := autoSince(a)
+		if after <= 0 || since == nil {
+			continue
+		}
+		if d := since.Add(after).Sub(now); d > 0 && (next == 0 || d < next) {
+			next = d
+		}
+	}
+	return next
+}
+
 // autoSince is when the agent's current status began, as far as known.
 func autoSince(a herdr.AgentInfo) *time.Time {
 	if a.StatusSince != nil {

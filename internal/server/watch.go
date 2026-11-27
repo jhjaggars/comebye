@@ -21,7 +21,8 @@ import (
 //     hang off the ledger (callbacks, queued prompts, to-do answers); every
 //     30 s also auto-clean and auto-remove;
 //  2. quiet: the "working but silent" mark, every quietTick;
-//  3. autotodo: blocked and question to-dos, on events and every autoTick;
+//  3. autotodo: blocked and question to-dos, on events and every autoTick,
+//     and once when the next agent crosses its threshold before that tick;
 //  4. relay: the blocked relay, on events and the tick, and every relayTick
 //     while an agent is blocked or an episode is open;
 //  5. loop: the loop nudge, every loopTick;
@@ -175,7 +176,11 @@ func newWatcher(s *Server) *watcher {
 			name: "autotodo",
 			on:   func() bool { return s.auto != nil && s.todos != nil },
 			event: func(ctx context.Context, agents []herdr.AgentInfo, _ time.Time) {
-				s.autoTodoStep(ctx, agents, time.Now())
+				now := time.Now()
+				s.autoTodoStep(ctx, agents, now)
+				if d := s.autoNextDue(agents, now); d > 0 && d < autoTick {
+					w.wakeIn("autotodo", d+100*time.Millisecond) // past the threshold, not on it
+				}
 			},
 			every: autoTick,
 		},

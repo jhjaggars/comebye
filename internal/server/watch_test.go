@@ -291,3 +291,27 @@ func TestResetHeldWhileTypingThenRetried(t *testing.T) {
 	waitFor(t, func() bool { return r.clears() == 1 })
 	waitFor(t, func() bool { return len(r.s.resets.get().Due) == 0 })
 }
+
+// Auto to-do wakes at the next threshold: a blocked agent that sits still
+// sends no fleet event, and the 30 s tick would file it up to 30 s late.
+func TestAutoNextDue(t *testing.T) {
+	s, _, _ := coordServer(t)
+	s.initAutoTodo(AutoTodoConfig{Blocked: 2 * time.Second, Question: time.Minute})
+	now := time.Now()
+	at := func(d time.Duration) *time.Time { x := now.Add(d); return &x }
+	agents := []herdr.AgentInfo{
+		{ID: "desk/w1:p1", Status: herdr.StatusBlocked, StatusSince: at(-500 * time.Millisecond)},
+		{ID: "desk/w2:p1", Status: herdr.StatusBlocked, StatusSince: at(-time.Hour)}, // past: the step filed it
+		{ID: "desk/w3:p1", Status: herdr.StatusIdle, StatusSince: at(-50 * time.Second)},
+		{ID: "desk/w4:p1", Status: herdr.StatusWorking, StatusSince: at(0)},
+	}
+	if d := s.autoNextDue(agents, now); d != 1500*time.Millisecond {
+		t.Fatalf("next due = %s, want 1.5s (the blocked agent)", d)
+	}
+	if d := s.autoNextDue(agents[1:], now); d != 10*time.Second {
+		t.Fatalf("next due = %s, want 10s (the idle agent)", d)
+	}
+	if d := s.autoNextDue(agents[1:2], now); d != 0 {
+		t.Fatalf("next due = %s, want none", d)
+	}
+}
