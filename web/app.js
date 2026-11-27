@@ -2960,14 +2960,8 @@ async function loadLedger() {
     if (!arch.data && !arch.err) loadArchived(); // the board footer and Recently closed need it
     if (Date.now() - todos.loadedAt > 8000) loadTodos();
     loadUsageChips();
-    // The server checks finished workers' worktrees in the background
-    // (for the "merged" hint): look again shortly until they are in.
-    const waiting = ledger.entries.some((e) => (e.status === "finished" || e.status === "landed") && e.worktree && !e.checks);
-    ledger.checkPolls = waiting ? (ledger.checkPolls || 0) + 1 : 0;
-    if (waiting && ledger.checkPolls <= 10 && !document.hidden) {
-      clearTimeout(ledger.timer);
-      ledger.timer = setTimeout(() => { ledger.timer = null; loadLedger(); }, 3000);
-    }
+    // The server checks finished workers' worktrees in the background (for the "merged" hint): when the checks
+    // are in it says changed{ledger}, and the ledger is read again.
   } catch (e) {
     if (e.status === 503) { ledger.on = false; srcOk(ledgerSrc); srcOk(todosSrc); renderTodos(); } // no state directory: no handoffs or marks here
     else if (ledger.on === true) srcFail(ledgerSrc, e); // a failed poll: Status keeps what it shows, marked as old
@@ -4588,30 +4582,14 @@ function renderReleaseDots() {
   if (d) { d.hidden = !need; d.setAttribute("aria-label", need ? "a release needs you: " + (rls.data.needs_text || "") : ""); }
 }
 
-// Outside Peers nobody loads the releases, so look now and then (a hub with
-// peers only: that is where releases are managed).
+// Who reads the releases: the Peers screen, and outside it the Peers dot (a hub with peers only: that is where
+// releases are managed). They are read again on changed{releases} (the rollout, the deploy, the release's item,
+// a host's version on the agents stream) and by the safety poll; a build's CI state is GitHub's, so the safety
+// poll is what sees it move.
+function relWanted() { return !!prs.route || (ledger.on === true && multiHost()); }
 function relBackground() {
-  if (document.hidden || ledger.on !== true || !multiHost() || (prs.route && prs.route.tab === "releases")) return;
-  if (Date.now() - rls.loadedAt > 55000) loadReleases(false);
-}
-
-// While a tag, a build or an upgrade is moving, refresh the tab often; now
-// and then otherwise.
-function relActive(d) {
-  if (!d || !d.current || !d.todo.release) return false;
-  const st = d.todo.release.state;
-  if (st === "tagging") return true;
-  if (st !== "tagged") return false;
-  if (d.build && d.build.state !== "success" && d.build.state !== "failure") return true;
-  if (d.deploy && d.deploy.record && d.deploy.record.state === "running") return true;
-  if (roState(d) === "running") return true;
-  return (d.hosts || []).some((h) => h.record && h.record.state === "running");
-}
-
-function relTick() {
-  if (document.hidden || !prs.route || prs.route.tab !== "releases") return;
-  const age = Date.now() - rls.loadedAt;
-  if (!rls.data && !rls.err ? age > pollMs(1500) : age > pollMs(relActive(rls.data) ? 4000 : 30000)) loadReleases(false);
+  if (document.hidden || !relWanted()) return;
+  loadReleases(false);
 }
 
 function relShort(sha) { return (sha || "").slice(0, 7); }
@@ -8676,7 +8654,7 @@ function initRecall() {
 // clicked link (a new tab, which is not this app), and forbids navigating this window. Everything about it that this screen
 // prints (title, publisher) is agent text, escaped.
 const PAGE_ID_RE = /^pg_[0-9a-f]{10}$/;
-const pgs = { items: [], loaded: false, err: "", q: "", route: null, timer: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, focus: false, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
+const pgs = { items: [], loaded: false, err: "", q: "", route: null, ctl: null, publicUrl: "", pagesUrl: "", frameKey: "", frameVer: 0, focus: false, frameFollow: false, reload: false, made: new Map(), body: null, bodyTimer: null, bodySeq: 0,
   view: lsGet("comebye.pgs.view") === "list" || (lsGet("comebye.pgs.view") !== "grid" && matchMedia("(max-width: 699px)").matches) ? "list" : "grid", sort: ["updated", "opened", "title"].includes(lsGet("comebye.pgs.sort")) ? lsGet("comebye.pgs.sort") : "updated",
   chip: "all", opened: null, prev: new Map(), prevQ: [], prevBusy: 0, io: null, prevRaf: 0 };
 
@@ -9455,15 +9433,14 @@ function syncPages() {
   pagesStamp(r, was, prev);
   if (!r) {
     pgsPop("pgsmenu", false); pgsPop("pgsinfo", false); pagesFocus(false);
-    clearInterval(pgs.timer); pgs.timer = null;
     $("pgs-view").replaceChildren(); $("pgs-view").dataset.id = ""; pgs.frameKey = "";
     if (was && window.SP) window.SP.pageRefocus(); // the comments were the Pages viewer's: back to the panel's page, if it shows one
     return;
   }
   if (!was) {
     $("pgs-q").value = pgs.q;
-    pgs.timer = setInterval(pagesLoad, 20000);
-    pagesLoad();
+    pagesLoad(); // later reads: changed{pages} and the safety poll
+
   } else if (r.id && !pgs.items.some((p) => p.id === r.id)) {
     pagesLoad(); // a page published since the list was read
   }
@@ -10260,7 +10237,7 @@ function onStatusToggle(ev) {
 // and writes a peer's through /api/hosts/<name>/settings. Everything shown
 // here that a host or agent chose (names, models) goes through esc().
 const prs = {
-  route: null, timer: null, seq: 0,
+  route: null, seq: 0,
   info: {},      // name -> the hub's record of a peer (urls, source, added by); /api/peers, hub only
   infoAt: 0,     // when /api/peers last answered (0: not in this visit; info may be what this device saved)
   hubVersion: "",
@@ -10520,7 +10497,7 @@ function peerSettingsForm(h, c, d) {
 
 // ---- Sign an agent in on a host (internal/signin). The link comes from the host; the user opens it, copies the
 // one-time code the page shows and pastes it here. Nothing is kept: the code goes to the host and out of the box.
-const sis = { by: {}, timer: null }; // by host: { agent, id, state, url, reason, message, method, err, copied }
+const sis = { by: {}, watched: new Set() }; // by host: { agent, id, state, url, reason, message, method, err, copied }
 const SIGNIN_STORE = "comebye.signin";
 const sinBase = (host) => isLocalHostName(host) ? "/api/signin" : `/api/hosts/${encodeURIComponent(host)}/signin`;
 function sinSave() {
@@ -10551,10 +10528,14 @@ function sinFail(host, msg) {
 }
 function sinTick() {
   const hosts = Object.keys(sis.by).filter((h) => sinActive(sis.by[h]) && sis.by[h].id);
-  if (!hosts.length) { clearInterval(sis.timer); sis.timer = null; return; }
+  for (const id of sis.watched) if (!hosts.some((h) => sis.by[h].id === id)) { unwatchJob(id); sis.watched.delete(id); }
+  if (!hosts.length) return;
   for (const host of hosts) sinPoll(host);
 }
-function sinWatch() { if (!sis.timer) sis.timer = setInterval(sinTick, 2000); }
+// Each running sign-in is a job its host names (job:<id>) when its state moves.
+function sinWatch() {
+  for (const v of Object.values(sis.by)) if (sinActive(v) && v.id && !sis.watched.has(v.id)) { sis.watched.add(v.id); watchJob(v.id, sinTick); }
+}
 // The host itself says it has no such sign-in: the only answer that ends one the page holds. A 404 from the hub on the
 // way (it does not know the host for a moment: "unknown_host"; "not a proxied operation") is not that, nor is a time-out
 // or a 5xx. Hosts before "no_signin" answered "not_found" with the manager's own words.
@@ -10760,12 +10741,11 @@ function syncPeers() {
   const was = !el.hidden;
   prs.route = r;
   el.hidden = !r;
-  if (!r) { clearInterval(prs.timer); prs.timer = null; return; }
+  if (!r) return;
   if (!was) {
     prs.cfg = {}; prs.cats = {}; prs.draft = null; $("pr-view").dataset.name = ""; $("pr-view")._html = "";
     rls.confirm = null; $("pr-releases")._html = ""; $("pr-prices")._html = "";
-    prs.timer = setInterval(peersLoadAll, pollMs(20000));
-    peersLoadAll();
+    peersLoadAll(); // later reads: changed{releases}, the hosts on the agents stream, and the safety poll
   }
   renderPeers();
 }
@@ -11120,7 +11100,7 @@ function initPrices() {
 // times, never the cloud's bill) and a total. Destroy… asks the node that
 // built the host to save its sessions, then remove the VM, its tailnet node
 // and its peer entry; the name is typed to confirm.
-const ph = { data: null, err: "", loading: false, dest: null, timer: null, polling: false };
+const ph = { data: null, err: "", loading: false, dest: null, watching: "", polling: false };
 
 function phMoney(v) { return v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)); }
 function phHost(name) { return ph.data && (ph.data.hosts || []).find((h) => h.name === name && h.state !== "destroyed") || null; }
@@ -11244,16 +11224,17 @@ async function phSubmit() {
   renderPeers();
 }
 
-function phStartPoll() { if (!ph.timer) ph.timer = setInterval(phPoll, 1500); }
+function phStartPoll() { const d = ph.dest; if (d && d.job) { ph.watching = d.job.id; watchJob(d.job.id, phPoll); } }
+function phStopPoll() { if (ph.watching) unwatchJob(ph.watching); ph.watching = ""; }
 async function phPoll() {
   const d = ph.dest;
-  if (!d || !d.job || ph.polling) { if (!d || !d.job) { clearInterval(ph.timer); ph.timer = null; } return; }
+  if (!d || !d.job || ph.polling) { if (!d || !d.job) phStopPoll(); return; }
   ph.polling = true;
   try {
     const j = await api(`/api/provision/jobs/${encodeURIComponent(d.job.id)}?after=${d.cursor}`, { timeout: 20000 });
     d.items = d.items.concat(j.items || []); d.cursor = j.next; d.job = { ...d.job, state: j.state, msg: j.msg };
     if (j.state !== "running") {
-      clearInterval(ph.timer); ph.timer = null;
+      phStopPoll();
       ph.polling = false;
       await loadProvHosts(true);
     }
@@ -11289,7 +11270,7 @@ function initProvHosts() {
 // tool's own step line. Start asks the node that can start it; the page reads
 // GET /api/provision/wake every moment or two until the host is up. A host
 // stopped at its budget cap asks first: starting it again costs money.
-const wk = { wakes: {}, confirm: "", busy: {}, err: {}, timer: null, polling: false };
+const wk = { wakes: {}, confirm: "", busy: {}, err: {}, polling: false };
 
 // wakeOf says what the hub knows of a peer that is not up: a stopped worker, one
 // being started, or one that failed to start. null: an ordinary host.
@@ -11325,7 +11306,8 @@ function wakeAction(h, x) {
   return `${err}<button type="button" class="btn wk-start" data-wk-start="${n}"${wk.busy[h.name] ? " disabled" : ""}>${wk.busy[h.name] ? "Starting…" : x.kind === "failed" ? "Start again" : "Start"}</button>`;
 }
 
-function wakeStartPoll() { if (!wk.timer) wk.timer = setInterval(wakePoll, 1500); }
+// The hub's book of host starts says job:wake when a start moves.
+function wakeStartPoll() { watchJob("wake", wakePoll); }
 async function wakePoll() {
   if (wk.polling) return;
   wk.polling = true;
@@ -11333,7 +11315,7 @@ async function wakePoll() {
     const d = await api("/api/provision/wake", { timeout: 20000 });
     wk.wakes = d.wakes || {};
     if (!Object.values(wk.wakes).some((w) => w.state === "starting")) {
-      clearInterval(wk.timer); wk.timer = null;
+      unwatchJob("wake");
       wk.polling = false;
       await loadProvHosts(true);
     }
@@ -11455,7 +11437,7 @@ document.addEventListener("click", (ev) => {
 // stopped from its page, disks kept (POST /api/provision/hosts/{name}/stop). It
 // asks first: whatever runs on the worker stops with it. The hub answers with a
 // job, which the page follows until it ends; then Start is offered again.
-const sp = { confirm: "", busy: {}, err: {}, jobs: {}, timer: null, polling: false };
+const sp = { confirm: "", busy: {}, err: {}, jobs: {}, polling: false };
 
 // stopOf: the provisioner's record of a peer that is up and running, so it can be stopped. null otherwise.
 function stopOf(h) {
@@ -11482,7 +11464,7 @@ async function stopHost(name) {
   try {
     const d = await api(`/api/provision/hosts/${encodeURIComponent(name)}/stop`, { method: "POST", headers: azCsrf(), body: JSON.stringify({ via: phVia(name) }), timeout: 60000 });
     sp.jobs[name] = { id: d.id, state: d.state, msg: d.msg, cursor: d.next || 0, step: "" };
-    if (!sp.timer) sp.timer = setInterval(stopPoll, 1500);
+    watchJob(d.id, stopPoll);
   } catch (e) { sp.err[name] = e.message || "failed"; }
   sp.busy[name] = false;
   wakeRedraw();
@@ -11501,7 +11483,7 @@ async function stopPoll() {
       if (v.state === "running") open = true; else ended = true;
     } catch (e) { open = true; /* the next tick tries again */ }
   }
-  if (!open) { clearInterval(sp.timer); sp.timer = null; }
+  for (const j of Object.values(sp.jobs)) if (j.state !== "running") unwatchJob(j.id);
   sp.polling = false;
   if (ended) await loadProvHosts(true);
   wakeRedraw();
@@ -11525,7 +11507,7 @@ document.addEventListener("click", (ev) => {
 // listed as planned, and nothing is created.
 const az = {
   open: false, step: 1, type: "", spec: null, plan: null, planErr: "", planning: false, ack: false,
-  key: "", submitting: false, err: "", job: null, cursor: 0, items: [], timer: null, polling: false, acting: false,
+  key: "", submitting: false, err: "", job: null, cursor: 0, items: [], watching: "", polling: false, acting: false,
 };
 const AZ_STEPS = ["Node", "Size", "Options", "Review", "Progress"];
 const AZ_STAGES = { sandbox: "Sandbox", settings: "Settings", network: "Network", ssh_key: "ssh key", data_disk: "Data disk", instance: "Instance", ssh: "ssh reach", bootstrap: "Bootstrap", tailnet: "Tailnet", agents: "Agents", hub: "Joins the hub", destroy: "Clean up", create: "Create", config: "Config" };
@@ -11738,10 +11720,12 @@ function azTakeJob(j, reset) {
   for (const it of j.items || []) { if (it.seq > az.cursor) { az.items.push(it); az.cursor = it.seq; } }
   if (j.spec && (!az.spec || az.spec.name !== j.spec.name)) az.spec = { ...azDefaults(), ...j.spec, zone: j.spec.zone || "" };
 }
-function azStopPoll() { if (az.timer) { clearInterval(az.timer); az.timer = null; } }
+function azStopPoll() { if (az.watching) unwatchJob(az.watching); az.watching = ""; }
 function azStartPoll() {
   azStopPoll();
-  az.timer = setInterval(azPoll, 1500);
+  if (!az.job) return;
+  az.watching = az.job.id;
+  watchJob(az.job.id, azPoll);
 }
 async function azPoll() {
   if (az.polling || !az.job || !az.open) return;
@@ -11906,7 +11890,7 @@ const US_TOKEN_COLOR = { input: "--blue", output: "--orange", "cache write": "--
 const US_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const us = {
-  route: null, timer: null, seq: 0, r: 14, d: "kind", m: "fresh", p: "", h: "",
+  route: null, seq: 0, r: 14, d: "kind", m: "fresh", p: "", h: "",
   status: "loading", err: "",           // loading | ok | off | err
   main: null, prev: null, drill: null, roles: null, models: null,
   hosts: [], asOf: 0, picked: -1, prices: null, pricesMsg: "", hLabel: "",
@@ -12250,14 +12234,14 @@ function syncUsage() {
   const was = !el.hidden;
   us.route = r;
   el.hidden = !r;
-  if (!r) { clearInterval(us.timer); us.timer = null; return; }
+  if (!r) return;
   const moved = r.r !== us.r || r.d !== us.d || r.m !== us.m || r.p !== us.p || r.h !== us.h;
   Object.assign(us, r);
   // Numbers already read stay while the new ones are fetched; with none, the screen waits (srcWaitHtml).
   if (!was || moved) { if (!us.main) us.status = "loading"; us.picked = -1; usageLoad(); }
   // The Escape handler hears only keys pressed inside the screen, so focus goes in as the screen opens;
   // without it Escape worked only while focus happened to be left on Back from an earlier visit.
-  if (!was) { us.timer = setInterval(usageLoad, 60000); ($("us-back").offsetParent ? $("us-back") : $("us-body")).focus({ preventScroll: true }); }
+  if (!was) { ($("us-back").offsetParent ? $("us-back") : $("us-body")).focus({ preventScroll: true }); }
   renderUsage();
 }
 
@@ -14774,21 +14758,22 @@ async function refreshOutput(force) {
 
 function startPolling() {
   stopPolling();
-  // Poll while the agent is active. Status arrives over SSE; transcript
-  // content and pane output have no push, so refresh on a timer.
+  // A chat has no timer: the agent's host says transcript:<id> when the session file grows (onTranscriptChanged).
+  // Only a terminal agent's raw screen has no file to watch, so it alone is read on a timer while the agent is
+  // active, and for a while after anything is sent (the status can lag a send).
   state.pollTimer = setInterval(() => {
-    if (document.hidden) return; // resume() refreshes when visible again
+    if (document.hidden || !(state.chat && state.chat.terminal)) return; // resume() refreshes when visible again
     const a = agentById(state.selected);
-    if (!a) return;
-    // The status snapshot can lag a send (or SSE can be down), so also poll
-    // for a while after anything is sent; the reply must not need a re-select.
-    if (a.agent_status === "working" || a.agent_status === "blocked" || Date.now() < state.pollUntil) {
-      if (state.chat && state.chat.terminal) refreshOutput();
-      else { loadChat(false); refreshStatusLine(); } // append-only; new messages diff in by id
-    } else if (runningSubagents()) {
-      loadChat(false); // an idle agent's background subagents finishing
-    }
+    if (a && (a.agent_status === "working" || a.agent_status === "blocked" || Date.now() < state.pollUntil)) refreshOutput();
   }, 4000);
+}
+
+// onTranscriptChanged: the open agent's session file grew. Read the new messages (append-only; they diff in by
+// id), the status line, and the answer card's dialog.
+function onTranscriptChanged(id) {
+  if (document.hidden || !state.selected || state.selected !== id) return;
+  if (state.chat && !state.chat.terminal) { loadChat(false); refreshStatusLine(); }
+  answerRefresh();
 }
 
 function stopPolling() {
@@ -14820,7 +14805,7 @@ const PAD_KEYS = [
 ];
 
 const answer = {
-  timer: null,     // dialog/snapshot poll while the card is shown
+  on: false,       // the card is shown: the dialog is read again on the agent's changes
   shown: false,
   sig: "",         // last rendered card signature
   pane: null,      // pane the dialog below belongs to
@@ -15251,21 +15236,25 @@ async function refreshSnapshot() {
   el.scrollTop = el.scrollHeight; // dialogs render at the bottom of the screen
 }
 
+// The card reads the dialog when it opens, and again when the agent's record on the stream changes (a dialog
+// comes and goes with herdr's status) or its transcript grows (transcript:<id>), and after each key: no timer.
 function startAnswerPoll() {
-  if (answer.timer) return;
+  if (answer.on) return;
+  answer.on = true;
   refreshDialog();
   refreshSnapshot();
-  answer.timer = setInterval(() => {
-    if (document.hidden) return;
-    refreshDialog();
-    const more = document.querySelector("#answer details.ans-more");
-    if (more && more.open) refreshSnapshot();
-  }, 2500);
+}
+
+// answerRefresh reads the shown card's dialog again (and the screen under More keys, when that is open).
+function answerRefresh() {
+  if (!answer.on || document.hidden) return;
+  refreshDialog();
+  const more = document.querySelector("#answer details.ans-more");
+  if (more && more.open) refreshSnapshot();
 }
 
 function stopAnswerPoll() {
-  clearInterval(answer.timer);
-  answer.timer = null;
+  answer.on = false;
 }
 
 /* ---------- actions ---------- */
@@ -15688,6 +15677,69 @@ async function sendKeys(keys, label, btn) {
   }
 }
 
+/* ---------- "changed": one event per store ---------- */
+//
+// The hub says which store has new data (changed{kind} on the stream, issue #143), and the screen that shows it
+// reads it again: ledger, todos, pages, parked, releases, usage, transcript:<agent id> (the open chat) and
+// job:<id> (a job a screen follows). No screen polls for its data. One slow safety read covers an event lost on
+// the way, and a reconnect (or coming back from the background) reads everything that is open.
+const SAFETY_MS = 60000;
+
+function changed(kind) {
+  // In the background nothing is drawn: read it all when the app is back (resume()).
+  if (document.hidden) { state.streamDropped = true; return; }
+  if (kind.startsWith("transcript:")) return onTranscriptChanged(kind.slice("transcript:".length));
+  if (kind.startsWith("job:")) return jobChanged(kind.slice("job:".length));
+  switch (kind) {
+    case "ledger": fresh(ledger, loadLedger); fresh(arch, loadArchived); return; // Archived is the ledger's
+    case "todos": fresh(todos, loadTodos); return;
+    case "pages": if (pgs.route) pagesLoad(); return;
+    case "parked": loadParked(); return;
+    case "releases": if (relWanted()) fresh(rls, () => loadReleases(false)); return;
+    case "usage": uchip.at = 0; fresh(uchip, loadUsageChips); if (us.route) usageLoad(); return;
+  }
+}
+
+// fresh reads now, or once the read in flight is done: that one may have left before the change.
+function fresh(st, load) {
+  if (!st.inflight) { load(); return; }
+  if (st.again) return;
+  st.again = true;
+  const wait = () => { if (st.inflight) setTimeout(wait, 100); else { st.again = false; load(); } };
+  setTimeout(wait, 100);
+}
+
+// changedAll reads everything an open screen shows: after a reconnect, back from the background, and as the
+// safety poll.
+function changedAll() {
+  for (const k of ["ledger", "todos", "pages", "parked", "releases", "usage"]) changed(k);
+  if (state.selected) onTranscriptChanged(state.selected);
+  jobsCatchUp();
+}
+
+function startSafetyPoll() {
+  if (state.safety) return;
+  state.safety = setInterval(() => {
+    if (document.hidden) return;
+    changedAll();
+    if (prs.route) peersLoadAll(); // the provisioner's nodes and each host's settings have no kind of their own
+  }, pollMs(SAFETY_MS, SAFETY_MS)); // the same in browser tests: they check that screens follow the events
+}
+
+// One job-status helper for every job a screen follows (a host's create, start, stop and destroy, a sign-in,
+// the hub's book of host starts): the hub says job:<id> when one moves, and the screen's read runs then, after a
+// reconnect and on the safety poll. No job has a timer of its own.
+const jobWatch = new Map(); // job id -> read
+function watchJob(id, read) {
+  if (!id) return;
+  const had = jobWatch.has(id);
+  jobWatch.set(id, read);
+  if (!had) read(); // what moved between the start and now
+}
+function unwatchJob(id) { jobWatch.delete(id); }
+function jobChanged(id) { const read = jobWatch.get(id); if (read) read(); }
+function jobsCatchUp() { for (const read of new Set(jobWatch.values())) read(); }
+
 /* ---------- live updates (SSE) ---------- */
 
 const STALE_MS = 45000;
@@ -15739,10 +15791,16 @@ function connectEvents() {
     peersHostsChanged();
     renderList();
     scheduleLedger();
+    // A host's version moved (an upgrade, a restart): the Releases view shows every host's.
+    const vers = JSON.stringify((data.hosts || []).map((h) => [h.name, h.version || "", h.status]));
+    if (vers !== state.hostVers) { const first = state.hostVers === undefined; state.hostVers = vers; if (!first) changed("releases"); }
     if (state.selected) {
       const a = agentById(state.selected);
       const prev = state.lastStatus;
       state.lastStatus = a ? a.agent_status : null;
+      // The answer card's dialog comes and goes with the agent's own record (the hub sends it only when it changed).
+      const rev = a ? JSON.stringify(a) : "";
+      if (rev !== state.lastRev) { state.lastRev = rev; answerRefresh(); }
       // When the viewed agent settles (working/blocked -> anything else),
       // the 4s transcript poll stops — fetch once more so the final
       // messages are not left behind.
@@ -15757,39 +15815,47 @@ function connectEvents() {
     }
     applyPendingRoute();
   });
-  // The server's heartbeat, every 15 s. It also looks at the ledger again: a To do item the hub filed (an agent's
-  // question, a release) comes with no agents event when no agent changed, and Status and To do then showed it only
-  // at the next change (half a minute and more; statussplit's live check timed out on it).
-  es.addEventListener("ping", () => { alive(); scheduleLedger(); });
+  // The server's heartbeat, every 15 s: it only proves the stream is alive. What changed comes as "changed".
+  es.addEventListener("ping", alive);
+  // The hub names a store with new data (ledger, todos, pages, parked, releases, usage, transcript:<id>,
+  // job:<id>) and the screen that shows it reads it again: no screen polls for it (issue #143).
+  es.addEventListener("changed", (ev) => {
+    alive();
+    let kind = "";
+    try { kind = JSON.parse(ev.data).kind || ""; } catch { return; }
+    changed(kind);
+  });
   es.addEventListener("resync", () => {
     // The server's herdr stream was interrupted; refetch authoritative state.
     state.lastEventAt = Date.now();
     refreshAgents().catch(agentsFailed);
   });
-  es.onopen = alive;
+  es.onopen = () => {
+    alive();
+    // Back after a drop: "changed" events sent meanwhile are lost, so every open screen reads its data again.
+    if (state.streamDropped) { state.streamDropped = false; changedAll(); }
+  };
   es.onerror = () => {
     // Take over reconnecting so we control backoff and never stack streams.
     agentsFailed(null);
+    state.streamDropped = true;
     es.onopen = es.onerror = null;
     es.close();
     if (state.es === es) scheduleReconnect();
+    // An EventSource cannot see why it failed: one look tells a signed-out session from a network drop.
+    fetch("/api/agents", { method: "HEAD" }).then((r) => { if (r.status === 401) setUnauthorized(true); }).catch(() => {});
   };
 }
 
-// Heartbeats are SSE comments (invisible to JS), so liveness is judged by the
-// last open/agents/resync event. A silent stream is recycled (the server sends
-// a fresh snapshot on connect), and a cheap /api/agents fetch doubles as a
-// network probe so the dot reflects reality.
+// Liveness is the last event of any kind: the server's ping (every 15 s) is an SSE event, so a stream that has
+// said nothing for STALE_MS is dead even if the socket looks open, and is recycled (the server sends a fresh
+// snapshot on connect, and the reconnect makes every open screen catch up). No fetch: pings already prove the
+// hub is there.
 function startWatchdog() {
   if (state.watchdog) return;
   state.watchdog = setInterval(() => {
     if (document.hidden) return;
-    if (Date.now() - state.lastEventAt > STALE_MS) { setConn(false); connectEvents(); }
-    fetch("/api/agents").then((r) => {
-      if (r.status === 401) setUnauthorized(true);
-      if (!r.ok) throw new Error(r.status);
-      if (state.es && state.es.readyState === EventSource.OPEN) setConn(true);
-    }).catch(() => setConn(false));
+    if (Date.now() - state.lastEventAt > STALE_MS) { setConn(false); state.streamDropped = true; connectEvents(); }
   }, 15000);
 }
 
@@ -15811,6 +15877,7 @@ function resume() {
   if (now - resumeAt < 500) return; // visibilitychange + pageshow + online often fire together
   resumeAt = now;
   state.retryDelay = 1000;
+  state.streamDropped = true; // what changed while the app was away: every open screen reads it on open
   connectEvents();
   refreshAgents().catch(agentsFailed);
   if (state.selected) {
@@ -17296,6 +17363,7 @@ window.addEventListener("DOMContentLoaded", () => {
     .catch((e) => { if (e.status === 401) toast(UNAUTHORIZED_MSG, true); agentsFailed(e); })
     .finally(connectEvents);
   startWatchdog();
+  startSafetyPoll();
   setInterval(() => { if (!document.hidden && (!state.selected || isDesktop())) renderList(); }, 60000);
   document.addEventListener("visibilitychange", resume);
   // In the background nothing is shown: close the live connection and the
@@ -17534,8 +17602,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // The list's HTML says whether it is open: the next render writes it afresh with the new state.
     $("pr-items")._html = null;
   }, true);
-  loadParked();
-  setInterval(() => { if (!document.hidden) { loadParked(); loadArchived(); } }, 30000);
+  loadParked(); // later reads: changed{parked}, changed{ledger} (Archived) and the safety poll
   $("row-transcript").addEventListener("click", rowMenuTranscript);
   initPopovers();
   initHostPicker();
@@ -17580,11 +17647,8 @@ window.addEventListener("DOMContentLoaded", () => {
     if (b && !sw.busy) { sw.thinking = sw.thinking === b.dataset.think ? "" : b.dataset.think; renderSwitch(); }
   });
   $("sw-go").addEventListener("click", submitSwitch);
-  testReady.then(() => {
-    setInterval(relTick, pollMs(2000));
-    setInterval(relBackground, pollMs(15000));
-    setTimeout(relBackground, TEST_POLL_MS || 4000);
-  });
+  // The first look at the releases (for the Peers dot); later ones follow changed{releases} and the safety poll.
+  testReady.then(() => setTimeout(relBackground, TEST_POLL_MS || 4000));
   $("d-role").addEventListener("click", toggleRole);
   // The split review mode closes when the app goes somewhere else, and starts over when the layout changes.
   window.addEventListener("hashchange", () => { if (rsActive() && !(isDesktop() && location.hash === PAGE_HASH.todo) && !location.hash.startsWith("#/todo/")) { todos.openId = null; renderTodos(true); } });

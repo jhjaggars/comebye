@@ -317,6 +317,7 @@ if want testruns; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node t
 if want signin; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node signin.mjs "$out" || rc=1 ; fi
 # The rolling rollout end to end: a simulated hub and three simulated peers, the hub killed and restarted mid-rollout.
 if want rolloutlive; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node rolloutlive.mjs "$out" || rc=1 ; fi
+if want changed; then FAKE_SOCK="$tmp/h.sock" COMEBYE_BIN="$tmp/comebye" node changed.mjs "$out" || rc=1 ; fi
 # Adding hosts and waking stopped workers, one journey (#139 slice 6), each part with its own hub, peers and a stand-in
 # for the worker tool: a default provisioner and the price browser (provision); hosts built from the app, their spend
 # and Destroy… (provhosts); the same for a KubeVirt worker (provkubevirt); Start on a stopped worker with the tool's
