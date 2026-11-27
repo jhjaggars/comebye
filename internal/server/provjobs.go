@@ -92,12 +92,14 @@ type destroyReq struct {
 }
 
 type provJobs struct {
-	book *provision.HostBook // the hosts this node has built
-	mu   sync.Mutex
-	dir  string
-	jobs map[string]*pjob
-	busy string // the id of the job whose tool is running
-	now  func() time.Time
+	// onSave is told of each write of a job, by id, with the lock held (changed.go).
+	onSave func(id string)
+	book   *provision.HostBook // the hosts this node has built
+	mu     sync.Mutex
+	dir    string
+	jobs   map[string]*pjob
+	busy   string // the id of the job whose tool is running
+	now    func() time.Time
 
 	interruptedDestroy []string // destroys a restart cut short: their hosts are marked at start-up
 }
@@ -137,6 +139,9 @@ func openProvJobs(stateDir string) *provJobs {
 }
 
 func (m *provJobs) saveLocked(j *pjob) {
+	if m.onSave != nil {
+		defer m.onSave(j.ID)
+	}
 	if m.dir == "" {
 		return
 	}

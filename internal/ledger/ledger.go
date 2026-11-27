@@ -599,6 +599,8 @@ type Store struct {
 	// instance), so a lookup by agent id can tell an old entry from a reused
 	// name. Not persisted.
 	inst map[string]string
+	// onSave is told of each write (OnSave).
+	onSave func()
 }
 
 // Open loads the ledger at path, or starts an empty one if the file does
@@ -651,7 +653,22 @@ func (s *Store) save() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), s.path)
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		return err
+	}
+	if s.onSave != nil {
+		s.onSave()
+	}
+	return nil
+}
+
+// OnSave sets fn, called after each write of the ledger (with the store's
+// lock held: fn must not call back into the store). The server uses it to
+// tell open apps that the ledger changed.
+func (s *Store) OnSave(fn func()) {
+	s.mu.Lock()
+	s.onSave = fn
+	s.mu.Unlock()
 }
 
 func newID() string {

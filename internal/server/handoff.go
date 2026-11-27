@@ -831,7 +831,11 @@ func (s *Server) cachedChecks(e ledger.Entry) *worktreeChecks {
 			defer s.coord.mu.Unlock()
 			delete(s.coord.checking, e.ID)
 			if lerr == nil {
+				prev, had := s.coord.checks[e.ID]
 				s.coord.checks[e.ID] = cachedChecks{*res, time.Now()}
+				if !had || !sameChecks(prev.c, *res) {
+					s.Changed(state.ChangedLedger) // the ledger's hints (merged, pushed) have news
+				}
 			}
 		}()
 	}

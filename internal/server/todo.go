@@ -190,7 +190,9 @@ type todoStore struct {
 	path string
 	data todoFile
 	now  func() time.Time
-	rate map[string][]time.Time
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
+	rate   map[string][]time.Time
 	// rateMax is the adds per creator per minute (todoRate); 0 here means the default, -1 no limit (test mode).
 	rateMax int
 	// last and sending pace the coordinator notice; send delivers it
@@ -241,6 +243,9 @@ func openTodoStore(path string) (*todoStore, error) {
 }
 
 func (t *todoStore) save() error {
+	if t.onSave != nil {
+		defer t.onSave()
+	}
 	if t.path == "" {
 		return nil
 	}

@@ -162,12 +162,14 @@ func (w pageWho) mayChange(p Page) bool {
 
 // pageStore keeps the index and the version files.
 type pageStore struct {
-	mu    sync.Mutex
-	dir   string // "" keeps nothing on disk (an unreadable index)
-	data  pagesFile
-	now   func() time.Time
-	rate  map[string][]time.Time
-	quota int64
+	mu  sync.Mutex
+	dir string // "" keeps nothing on disk (an unreadable index)
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
+	data   pagesFile
+	now    func() time.Time
+	rate   map[string][]time.Time
+	quota  int64
 	// noRate lifts the per-publisher limit (-test-mode: a browser run publishes from one CLI faster than a person would).
 	noRate bool
 }
@@ -244,6 +246,9 @@ func (p Page) withScript() Page {
 }
 
 func (st *pageStore) saveLocked() error {
+	if st.onSave != nil {
+		defer st.onSave()
+	}
 	if st.dir == "" {
 		return nil
 	}

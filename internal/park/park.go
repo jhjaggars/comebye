@@ -102,6 +102,17 @@ type Store struct {
 	mu   sync.Mutex
 	path string
 	f    file
+	// onSave is told of each write (OnSave).
+	onSave func()
+}
+
+// OnSave sets fn, called after each write of the park records (with the
+// store's lock held: fn must not call back into the store). The server uses
+// it to tell open apps that this host's parked agents changed.
+func (s *Store) OnSave(fn func()) {
+	s.mu.Lock()
+	s.onSave = fn
+	s.mu.Unlock()
 }
 
 // Open reads (or starts) the store in dir.
@@ -149,6 +160,9 @@ func (s *Store) save() error {
 	if err := os.Rename(tmp.Name(), s.path); err != nil {
 		os.Remove(tmp.Name())
 		return err
+	}
+	if s.onSave != nil {
+		s.onSave()
 	}
 	return nil
 }

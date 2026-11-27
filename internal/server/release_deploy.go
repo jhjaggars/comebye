@@ -17,6 +17,7 @@ import (
 
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/release"
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 // Deploying a release: a second, separate click.
@@ -119,6 +120,7 @@ func (s *Server) writeDeployRecord(rec DeployRecord) {
 			log.Printf("release: deploy record: %v", err)
 		}
 	}
+	s.Changed(state.ChangedReleases)
 }
 
 // deployStatusLocal is this host's own deploy command and its last run.

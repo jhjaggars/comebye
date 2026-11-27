@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jhjaggars/comebye/internal/state"
 )
 
 // Comments on a published page.
@@ -324,6 +326,8 @@ type commentStore struct {
 	mu   sync.Mutex
 	dir  string // "" keeps nothing on disk
 	data map[string][]storedComment
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
 }
 
 func openCommentStore(dir string) *commentStore {
@@ -343,6 +347,9 @@ func openCommentStore(dir string) *commentStore {
 }
 
 func (cs *commentStore) saveLocked() error {
+	if cs.onSave != nil {
+		defer cs.onSave()
+	}
 	if cs.dir == "" {
 		return nil
 	}
@@ -409,6 +416,7 @@ func (s *Server) commentsStore() *commentStore {
 			dir = s.pages.dir
 		}
 		s.pageCmts = openCommentStore(dir)
+		s.pageCmts.onSave = func() { s.Changed(state.ChangedPages) }
 	})
 	return s.pageCmts
 }

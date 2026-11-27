@@ -85,6 +85,16 @@ type roleStore struct {
 	mu   sync.Mutex
 	path string
 	data map[string]Role
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
+}
+
+// saveLocked writes the roles (s.mu held).
+func (s *roleStore) saveLocked() error {
+	if s.onSave != nil {
+		defer s.onSave()
+	}
+	return writeFileAtomic(s.path, s.data)
 }
 
 func openRoles(path string) (*roleStore, error) {
@@ -140,7 +150,7 @@ func (s *roleStore) set(id string, r Role) error {
 		s.data[id] = r
 	}
 	s.ensureMainLocked()
-	return writeFileAtomic(s.path, s.data)
+	return s.saveLocked()
 }
 
 // ensureMainLocked keeps exactly one coordinator marked main, durably: the

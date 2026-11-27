@@ -82,6 +82,10 @@ type Snapshot struct {
 
 // Config sets the manager's limits (zero values take the defaults).
 type Config struct {
+	// OnChange, when set, is called with a sign-in's id each time its
+	// state changes (outside the manager's lock), so a page that follows
+	// it can read it again instead of polling.
+	OnChange func(id string)
 	// CodeWait is how long a sign-in waits for a code (10 minutes).
 	CodeWait time.Duration
 	// ResultWait is how long after the code the process may take (30 s).
@@ -267,6 +271,7 @@ func (m *Manager) Start(ctx context.Context, agent string) (Snapshot, error) {
 		s.timer = time.AfterFunc(m.cfg.CodeWait, func() { m.finish(s, StateFailed, ReasonTimedOut, "") })
 		snap := s.snap
 		m.mu.Unlock()
+		m.changed(s.id)
 		return snap, nil
 	case <-s.done:
 		return fail(ReasonDidNotFinish)
@@ -346,7 +351,22 @@ func (m *Manager) finish(s *session, state, reason, method string) {
 		m.mu.Unlock()
 	})
 	m.mu.Unlock()
+	m.changed(s.id)
 	m.stop(s)
+}
+
+// SetOnChange sets cfg.OnChange; call it before the first sign-in starts.
+func (m *Manager) SetOnChange(fn func(id string)) {
+	m.mu.Lock()
+	m.cfg.OnChange = fn
+	m.mu.Unlock()
+}
+
+// changed tells cfg.OnChange that a sign-in's state changed.
+func (m *Manager) changed(id string) {
+	if m.cfg.OnChange != nil {
+		m.cfg.OnChange(id)
+	}
 }
 
 // stop ends the process group and closes the terminal.
@@ -412,6 +432,7 @@ func (m *Manager) SendCode(id, code string) (Snapshot, error) {
 	snap := s.snap
 	master := s.master
 	m.mu.Unlock()
+	m.changed(s.id)
 
 	line := make([]byte, 0, len(code)+1)
 	line = append(append(line, code...), '\r')

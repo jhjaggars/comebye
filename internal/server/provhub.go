@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,6 +71,13 @@ type hubJobs struct {
 	path string
 	jobs map[string]*hubJob
 	now  func() time.Time
+	// onSave is told, by id, of each job a write changed, with the lock
+	// held (changed.go); sigs is what each job looked like at the last one.
+	onSave func(id string)
+	sigs   map[string]string
+	// refreshing holds the jobs being read from their provisioner because
+	// it said they changed; true when it said so again meanwhile.
+	refreshing map[string]bool
 }
 
 func openHubJobs(stateDir string) *hubJobs {
@@ -95,6 +103,7 @@ func openHubJobs(stateDir string) *hubJobs {
 }
 
 func (h *hubJobs) saveLocked() {
+	h.notifyLocked()
 	if h.path == "" {
 		return
 	}
@@ -116,6 +125,28 @@ func (h *hubJobs) saveLocked() {
 	tmp := h.path + ".tmp"
 	if os.WriteFile(tmp, b, 0o600) == nil {
 		os.Rename(tmp, h.path)
+	}
+}
+
+// notifyLocked tells onSave of each job that changed since the last write.
+func (h *hubJobs) notifyLocked() {
+	if h.onSave == nil {
+		return
+	}
+	if h.sigs == nil {
+		h.sigs = map[string]string{}
+	}
+	for id, j := range h.jobs {
+		sig := fmt.Sprintf("%s|%d|%d|%s|%s|%s", j.State, j.Next, j.Attempt, j.Msg, j.Class, j.Superseded)
+		if h.sigs[id] != sig {
+			h.sigs[id] = sig
+			h.onSave(id)
+		}
+	}
+	for id := range h.sigs {
+		if _, ok := h.jobs[id]; !ok {
+			delete(h.sigs, id)
+		}
 	}
 }
 

@@ -113,6 +113,7 @@ type browserHost struct {
 type browserEvent struct {
 	Type    string         `json:"type"`
 	Reason  string         `json:"reason,omitempty"`
+	Kind    string         `json:"kind,omitempty"`
 	Agents  []browserAgent `json:"agents,omitempty"`
 	Hosts   []browserHost  `json:"hosts,omitempty"`
 	Version string         `json:"version,omitempty"`
@@ -163,7 +164,7 @@ func slimHosts(hosts []state.HostStatus) []browserHost {
 }
 
 func (s *Server) slimEvent(ev state.Event) browserEvent {
-	out := browserEvent{Type: ev.Type, Reason: ev.Reason, Version: ev.Version}
+	out := browserEvent{Type: ev.Type, Reason: ev.Reason, Kind: ev.Kind, Version: ev.Version}
 	if ev.Agents != nil {
 		out.Agents = s.slimAgents(ev.Agents)
 	}

@@ -352,7 +352,7 @@ func (s *roleStore) setMain(id string) error {
 	}
 	r.Main = true
 	s.data[id] = r
-	return writeFileAtomic(s.path, s.data)
+	return s.saveLocked()
 }
 
 // poolRoute picks the coordinator for a notice nobody owns: the main

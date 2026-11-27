@@ -153,6 +153,10 @@ type Fleet struct {
 	excerpts   chan struct{}
 	// instanceEnd is told when a peer's incarnation ends (OnInstanceEnd).
 	instanceEnd func(host, instance, why string)
+	// changes fans "changed" events out to browsers (changed.go);
+	// peerChanged is told of each one a peer relays (OnPeerChanged).
+	changes     *state.Changes
+	peerChanged func(host, kind string)
 }
 
 // New builds a fleet over local (may be nil in tests) named localName.
@@ -168,6 +172,7 @@ func New(local *state.Manager, localName string, peers []Peer, opts Options) *Fl
 		opts:      opts,
 		byName:    map[string]*peer{},
 		hub:       state.NewHub(),
+		changes:   state.NewChanges(),
 		excerpts:  make(chan struct{}, opts.ExcerptConcurrency),
 	}
 	if local != nil {
@@ -651,6 +656,11 @@ func statusError(code int) error { return peerHTTPError{code} }
 
 // handle applies one event from the peer's stream.
 func (p *peer) handle(name, data string) {
+	if name == "changed" {
+		p.seen()
+		p.changed(data)
+		return
+	}
 	if name != "agents" {
 		p.seen() // ping, resync, or anything newer: the peer is alive
 		return

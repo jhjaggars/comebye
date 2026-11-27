@@ -229,11 +229,13 @@ type wakeVerdict struct {
 
 // rolloutEngine drives the job file.
 type rolloutEngine struct {
-	mu    sync.Mutex // one tick or control at a time; the file is read and written under it
-	path  string
-	ops   rolloutOps
-	now   func() time.Time
-	audit func(ledger.AuditEvent)
+	mu sync.Mutex // one tick or control at a time; the file is read and written under it
+	// onSave is told of each write of the job (changed.go).
+	onSave func()
+	path   string
+	ops    rolloutOps
+	now    func() time.Time
+	audit  func(ledger.AuditEvent)
 	// hosts is the fleet answer of the tick in progress (guarded by mu).
 	hosts []relHost
 	// Timings; tests shorten them. soakFor, when set and above 0, is the
@@ -324,7 +326,13 @@ func (e *rolloutEngine) save(j *Rollout) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, e.path)
+	if err := os.Rename(tmp, e.path); err != nil {
+		return err
+	}
+	if e.onSave != nil {
+		e.onSave()
+	}
+	return nil
 }
 
 // Get is the job as saved.

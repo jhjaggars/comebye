@@ -47,6 +47,7 @@ func (s *Server) parkStore() *park.Store {
 		s.parks, s.parkErr = park.Open(s.cfg.StateDir)
 		if s.parks != nil {
 			s.parks.Prune(parkHistory, time.Now())
+			s.wirePark()
 		}
 	})
 	return s.parks

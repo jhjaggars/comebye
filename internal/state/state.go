@@ -435,8 +435,10 @@ func (m *Manager) Agents() []herdr.AgentInfo {
 
 // Event is a message broadcast to SSE clients.
 type Event struct {
-	Type   string            `json:"type"` // "agents" | "resync"
-	Reason string            `json:"reason,omitempty"`
+	Type   string `json:"type"` // "agents" | "resync" | "changed"
+	Reason string `json:"reason,omitempty"`
+	// Kind is what a "changed" event says has new data (see changes.go).
+	Kind   string            `json:"kind,omitempty"`
 	Agents []herdr.AgentInfo `json:"agents,omitempty"`
 	// Hosts is the per-host status (this instance first) on "agents"
 	// events sent to browsers.

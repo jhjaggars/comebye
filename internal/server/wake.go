@@ -86,6 +86,8 @@ type wakeBook struct {
 	now  func() time.Time
 	m    map[string]*wakeEntry
 	auto []wakeAuto
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
 
 	busyWait, joinWait, pollGap, retryGap, sessionGrace time.Duration // tests shorten them
 }
@@ -114,6 +116,9 @@ func openWakeBook(stateDir string) *wakeBook {
 }
 
 func (b *wakeBook) saveLocked() {
+	if b.onSave != nil {
+		defer b.onSave()
+	}
 	if b.path == "" {
 		return
 	}

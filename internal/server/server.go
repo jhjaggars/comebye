@@ -240,6 +240,8 @@ type Server struct {
 	// quiet follows working workers that stopped writing (quiet.go).
 	quiet *quietMon
 	loops *loopMon
+	// twatch follows the session files open apps read (transcriptwatch.go).
+	twatch transcriptWatch
 	// parkSug suggests parking long-idle agents (parksuggest.go); nil when off.
 	parkSug *parkSuggest
 	// peerAgents replaces the fleet's agent list for peerBackground (tests).
@@ -553,6 +555,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		s.approvalPush = manager.Dispatcher().NotifyApproval
 		s.rolloutPush = manager.Dispatcher().NotifyRollout
 	}
+	s.wireChanged()
 	s.routes()
 	return s
 }
@@ -996,6 +999,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, map[string]string{"code": "no_session", "message": err.Error()})
 		return
 	}
+	s.watchTranscript(*agent, path) // the app is told when it grows (transcriptwatch.go)
 	s.serveTranscript(w, r, path, transcript.Read, s.transcriptDecorator(*agent, path))
 }
 
@@ -1212,7 +1216,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 
 // handleEvents streams agent state over SSE. The initial agents snapshot is
 // sent on connect; later events update it. On resync the client should
-// refetch /api/agents.
+// refetch /api/agents. "changed" events (Changed) name a store with new data.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1231,6 +1235,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	events, cancel := s.fleet.Hub().Subscribe()
 	defer cancel()
+	changes, cancelChanges := s.fleet.Changes().Subscribe()
+	defer cancelChanges()
 
 	full := fullRecords(r)
 	var last []byte // the last "agents" payload sent to this client
@@ -1283,8 +1289,26 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			send(ev)
+		case ev, ok := <-changes:
+			if !ok {
+				return
+			}
+			b, _ := json.Marshal(map[string]string{"kind": ev.Kind})
+			fmt.Fprintf(w, "event: changed\ndata: %s\n\n", b)
+			flusher.Flush()
 		}
 	}
+}
+
+// Changed tells every open app that kind has new data (see state.Changes:
+// ledger, todos, pages, parked, releases, usage, transcript:<id>, job:<id>),
+// so the screen that shows it fetches it again. Every write path of a store
+// the app shows calls it, through the store's save hook (changed.go).
+func (s *Server) Changed(kind string) {
+	if s == nil || s.fleet == nil {
+		return
+	}
+	s.fleet.ChangedKind(kind)
 }
 
 // resolvePane maps an agent name or pane id to a pane id using the cached

@@ -55,6 +55,7 @@ type Store struct {
 	peers    map[string]*PeerState
 	seq      int64
 	dirty    bool
+	onSave   func() // told of each write (OnSave)
 	// now is the clock (tests replace it).
 	now func() time.Time
 }
@@ -185,7 +186,21 @@ func (st *Store) Save() error {
 		st.markDirty()
 		return werr
 	}
+	st.mu.Lock()
+	fn := st.onSave
+	st.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 	return nil
+}
+
+// OnSave sets fn, called (without the store's lock) after each write that
+// changed the counts. The server uses it to tell open apps.
+func (st *Store) OnSave(fn func()) {
+	st.mu.Lock()
+	st.onSave = fn
+	st.mu.Unlock()
 }
 
 func (st *Store) markDirty() {
