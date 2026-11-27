@@ -454,6 +454,14 @@ func (f *fake) answer(method string, p map[string]any) (any, *rpcErr) {
 			return nil, &rpcErr{"agent_not_found", target}
 		}
 		return map[string]any{"prompts": a.prompts, "keys": a.keys}, nil
+	case "smoke.screen": // {target, text}: what the agent's pane shows (a half-typed input box, say); no event, as herdr sends none for a keystroke
+		a := f.agentOf(target)
+		if a == nil {
+			return nil, &rpcErr{"agent_not_found", target}
+		}
+		a.screen = strings.Split(str(p, "text"), "\n")
+		a.Revision++
+		return map[string]any{"type": "ok"}, nil
 	case "smoke.status": // {target, status}: the agent's status as herdr would report it
 		a := f.agentOf(target)
 		if a == nil {
