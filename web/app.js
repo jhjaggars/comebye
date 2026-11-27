@@ -15709,7 +15709,8 @@ function changed(kind) {
     case "usage":
       if (uchip.inflight) afterInflight(uchip, () => { uchip.at = 0; return loadUsageChips(); });
       else { uchip.at = 0; loadUsageChips(); }
-      if (us.route) usageLoad();
+      // Not while the price editor is open: the redraw would clear what is typed there (it reads again on Save).
+      if (us.route && !($("us-pricedet") && $("us-pricedet").open)) usageLoad();
       return;
   }
 }

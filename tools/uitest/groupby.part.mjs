@@ -51,7 +51,11 @@ async function open(width, dark, { hash = "", store = {}, hostNames, fleet: fl }
     for (const [k, v] of Object.entries(store)) try { localStorage.setItem(k, v); } catch {}
     state.hostFilter = null; state.listTab = null; state.listQ = null; state.listGroup = null; collapsedProjects = null;
     state.hosts = f.hosts; setAgents(f); window.setAgents = () => {};
-    for (const a of f.agents) if (a.role === "coordinator") ledger.roles.set(agentId(a), { role: "coordinator" });
+    const coords = () => { for (const a of f.agents) if (a.role === "coordinator") ledger.roles.set(agentId(a), { role: "coordinator" }); };
+    coords();
+    // The hub's own ledger (read again on any changed{ledger}) has none of these coordinators: keep them across a read.
+    const setLedger0 = setLedger;
+    window.setLedger = (d) => { setLedger0(d); coords(); };
     if (hash) location.hash = "";
     if (hash) { history.replaceState(null, "", hash); route(); } else { renderList(); route(); }
   }, [f, store, hash]);
