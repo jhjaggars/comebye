@@ -299,7 +299,8 @@ try {
       // the plan is made; now the build fails (the stand-in fails a create after the plan)
       fs.writeFileSync(path.join(wdir, "create.fail"), JSON.stringify({ v: 1, seq: 99, stage: "instance", step: "4/9", state: "failed", class: "spot_capacity", zone: "us-east-2a", msg: "no spot capacity in us-east-2a" }) + "\n");
       await next().click();
-      await page.waitForFunction(() => /no spot capacity/i.test(document.querySelector("#pr-prices").innerText), null, { timeout: 30000 });
+      // The failing item and the job's end are two writes, so they may show one read apart: wait for both.
+      await page.waitForFunction(() => { const t = document.querySelector("#pr-prices").innerText; return /no spot capacity/i.test(t) && /Failed/.test(t); }, null, { timeout: 30000 }).catch(() => {});
       const t = await page.locator("#pr-prices").innerText();
       if (!t.includes("us-east-2a") || !/Failed/.test(t)) throw new Error("failure: " + t.slice(0, 300));
       if (!(await page.locator('[data-az-act="retry"]').count()) || !(await page.locator('[data-az-act="ondemand"]').count()) || !(await page.locator('[data-az-act="cleanup"]').count())) throw new Error("no way out is offered");
