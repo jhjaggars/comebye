@@ -259,10 +259,7 @@ func (s *Server) RunWatch(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			w.mu.Lock()
-			if w.wake != nil {
-				w.wake.Stop()
-				w.wake = nil
-			}
+			w.stopWake()
 			w.mu.Unlock()
 			return
 		case ev, ok := <-events:
@@ -311,16 +308,24 @@ func (w *watcher) wakeIn(name string, d time.Duration) {
 	if w.wake != nil && !w.wakeAt.After(at) {
 		return
 	}
-	if w.wake != nil {
-		w.wake.Stop()
-	}
+	w.stopWake()
 	w.wakeAt = at
+	w.s.bg.Add(1) // counted like any background work (waitBackground)
 	w.wake = time.AfterFunc(d, func() {
+		defer w.s.bg.Done()
 		w.mu.Lock()
 		w.wake = nil
 		w.mu.Unlock()
 		w.request(whySoon, "")
 	})
+}
+
+// stopWake disarms the one-shot wake. Callers hold w.mu.
+func (w *watcher) stopWake() {
+	if w.wake != nil && w.wake.Stop() {
+		w.s.bg.Done() // it will not fire
+	}
+	w.wake = nil
 }
 
 // drain runs passes until no request is pending.

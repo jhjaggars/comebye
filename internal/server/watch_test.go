@@ -165,6 +165,16 @@ func TestEverySenderHeldWhileUserTypes(t *testing.T) {
 	s, fh, _ := coordServer(t)
 	s.typing.poll = time.Hour // no retry inside this test: only the holds
 	showScreen(fh, "w1:p1", capture(t, "claude_typed.ansi"))
+	// The retry timer counts in s.bg: disarm it so waitBackground (a cleanup
+	// registered earlier, run later) returns.
+	t.Cleanup(func() {
+		s.typing.mu.Lock()
+		defer s.typing.mu.Unlock()
+		if s.typing.timer != nil && s.typing.timer.Stop() {
+			s.bg.Done()
+		}
+		s.typing.timer, s.typing.held = nil, map[string]*heldRec{}
+	})
 	coord := cbAgent("w1:p1", "coordinator", herdr.StatusIdle)
 	if err := s.recordRole(coord.ID, "coordinator", RoleCoordinator, "me"); err != nil {
 		t.Fatal(err)

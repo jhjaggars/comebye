@@ -236,7 +236,7 @@ func (s *Server) noteHeld(agentID, sender string) <-chan struct{} {
 		h.senders[sender] = true
 	}
 	if t.timer == nil {
-		t.timer = time.AfterFunc(t.poll, s.retryHeld)
+		s.armRetry()
 	}
 	return t.wake
 }
@@ -248,6 +248,16 @@ func (s *Server) heldFor(err error, agentID, sender string) bool {
 	}
 	s.noteHeld(agentID, sender)
 	return true
+}
+
+// armRetry arms the retry timer, counted in s.bg like any background work
+// (a test's waitBackground waits for it). Callers hold t.mu.
+func (s *Server) armRetry() {
+	s.bg.Add(1)
+	s.typing.timer = time.AfterFunc(s.typing.poll, func() {
+		defer s.bg.Done()
+		s.retryHeld()
+	})
 }
 
 // retryHeld is the retry timer: it wakes the senders of what is held, and
@@ -271,7 +281,7 @@ func (s *Server) retryHeld() {
 	close(t.wake)
 	t.wake = make(chan struct{})
 	if len(t.held) > 0 {
-		t.timer = time.AfterFunc(t.poll, s.retryHeld)
+		s.armRetry()
 	}
 	t.mu.Unlock()
 	if s.watch == nil {
