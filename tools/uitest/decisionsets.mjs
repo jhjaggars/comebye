@@ -178,7 +178,12 @@ for (const dark of [false, true]) {
       await page.goto(base + (phone ? "/" : "/#/todo"), { waitUntil: "load" });
       await page.waitForSelector(L, { state: "attached" });
       id = (await post(LINKSET(`Linked set ${tag} ${w}`))).id;
-      await page.evaluate(() => { (ledger.entries = ledger.entries || []).push({ id: "hfb35bacd8016", final_report: "## Summary\nMockup is the Page. REPORT-BODY-MARK" }); });
+      // A stand-in handoff with a report, in the page only; kept across a read of the hub's own ledger (a changed{ledger}).
+      await page.evaluate(() => {
+        const add = () => { if (!(ledger.entries || []).some((e) => e.id === "hfb35bacd8016")) (ledger.entries = ledger.entries || []).push({ id: "hfb35bacd8016", final_report: "## Summary\nMockup is the Page. REPORT-BODY-MARK" }); };
+        add();
+        if (!window.__keepRep) { window.__keepRep = true; const setLedger0 = setLedger; window.setLedger = (d) => { setLedger0(d); add(); }; }
+      });
       if (phone) {
         await page.evaluate(() => { todos.loadedAt = 0; return loadTodos(); });
         await page.waitForSelector("#todo .td-toggle", { state: "visible" });

@@ -33,8 +33,14 @@ const SETUP = () => {
   ];
   state.agents = [...state.agents.filter((x) => !/^w9[123]:p1$/.test(x.pane_id)), ...rows.map((r) => r[0])];
   ledger.on = true;
-  for (const [a, e] of rows) ledger.byAgent.set(agentId(a), e);
-  ledger.entries = [...ledger.entries.filter((x) => !/^h-w9[123]/.test(x.id || "")), ...rows.map((r) => r[1])];
+  const put = () => {
+    for (const [a, e] of rows) ledger.byAgent.set(agentId(a), e);
+    ledger.entries = [...ledger.entries.filter((x) => !/^h-w9[123]/.test(x.id || "")), ...rows.map((r) => r[1])];
+  };
+  put();
+  // A read of the hub's own ledger (a changed{ledger}) would drop these stand-ins: keep them across it.
+  const setLedger0 = window.__setLedger0 || (window.__setLedger0 = setLedger);
+  window.setLedger = (d) => { setLedger0(d); put(); };
   renderList();
   return rows.map((r) => agentId(r[0]));
 };
