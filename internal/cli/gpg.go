@@ -2,16 +2,13 @@ package cli
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jhjaggars/comebye/internal/gpgunlock"
@@ -381,92 +378,16 @@ func gpgReset(e *Env, args []string) error {
 	return nil
 }
 
-// gpgWatch is the host's GPG timer, meant to run as a service (deploy/
-// comebye-gpg-watch.service). It ends an unlock at its 8 hour expiry (and at
-// start, at once if it already passed) and, while an agent is active on this
-// host and the key is locked, files the one "GPG is locked on HOST" item. It
-// withdraws that item when the key is unlocked by any means. --once does one
-// round and exits.
-func gpgWatch(e *Env, args []string) error {
-	fs := flag.NewFlagSet("gpg watch", flag.ContinueOnError)
-	once := fs.Bool("once", false, "do one round and exit")
-	every := fs.Duration("every", gpgunlock.WatchEvery, "how often to look")
-	pos, err := parse(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) > 0 {
-		return usageErr("unexpected argument %q", pos[0])
-	}
-	h := gpgHost(e)
-	if err := needGPG(h); err != nil {
-		return err
-	}
-	w := &gpgunlock.Watcher{Host: h, Every: *every}
-	w.File = func() (string, string, error) {
-		cfg, err := h.Config()
-		if err != nil {
-			return "", "", err
-		}
-		c, err := newClient(e)
-		if err != nil {
-			return "", "", err
-		}
-		id, aid, err := gpgFile(e, h, c, cfg.Host, cfg.FPR, true)
-		return aid, id, err
-	}
-	w.Withdraw = func(approval string) error {
-		c, err := newClient(e)
-		if err != nil {
-			return err
-		}
-		return c.call("POST", "/api/approvals/"+approval+"/withdraw", nil, struct{}{}, nil)
-	}
-	w.Active = func() (bool, error) {
-		cfg, err := h.Config()
-		if err != nil {
-			return false, err
-		}
-		c, err := newClient(e)
-		if err != nil {
-			return false, err
-		}
-		host := cfg.Host
-		if who, err := c.getWhoami(); err == nil && who.Host != "" {
-			host = who.Host // the hub's name for this host
-		}
-		ar, err := c.getAgents()
-		if err != nil {
-			return false, err
-		}
-		return agentActiveOn(ar.Agents, host), nil
-	}
-	if *once {
-		if _, err := h.Sweep(); err != nil {
-			return err
-		}
-		what, err := w.Check()
-		if err != nil {
-			return err
-		}
-		if what != "" {
-			fmt.Fprintln(e.Stdout, what)
-		}
-		return nil
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	w.Run(ctx, func(err error) { fmt.Fprintln(e.Stderr, "gpg watch:", err) })
+// gpgWatch is retired: the comebye server runs the GPG watcher itself
+// (-gpg-watch), driven by its own agents instead of a 30 s look at
+// /api/agents. It says so, with the steps to remove the old service, and
+// exits 0 so a unit that still runs it does not restart in a loop.
+func gpgWatch(e *Env, _ []string) error {
+	fmt.Fprint(e.Stdout, `comebye gpg watch is no longer needed: the comebye server runs the GPG watcher itself.
+Turn it on and remove the old service:
+  1. add COMEBYE_GPG_WATCH=1 to ~/.config/comebye/env (or pass -gpg-watch) and run: systemctl --user restart comebye
+  2. systemctl --user disable --now comebye-gpg-watch.service
+  3. rm ~/.config/systemd/user/comebye-gpg-watch.service && systemctl --user daemon-reload
+`)
 	return nil
-}
-
-// agentActiveOn: some agent of this host is working or waiting on someone (an
-// idle or finished one will not sign anything).
-func agentActiveOn(agents []apiAgent, host string) bool {
-	for _, a := range agents {
-		if strings.EqualFold(a.Host, host) && (a.Status == "working" || a.Status == "blocked") {
-			return true
-		}
-	}
-	return false
 }

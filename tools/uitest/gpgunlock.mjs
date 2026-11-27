@@ -258,30 +258,16 @@ for (const width of [390, 1280]) {
       .catch(async () => { throw new Error("toast: " + (await page.locator("#toast").innerText().catch(() => ""))); });
   });
 
-  // The host timer, live (before "Not now": that one snoozes the watcher on the hub for a while): `comebye gpg watch --once` against the real hub, whose fake herdr has working agents.
-  await check(`${width}px: gpg watch files one item for a locked host, none twice, and withdraws it when pinentry unlocks`, async () => {
+  // The old host timer is retired: the server runs the watcher itself (-gpg-watch; its rounds are internal/server/gpgwatch_test.go).
+  // `comebye gpg watch`, as a unit still installed runs it, says so, exits 0 and files nothing.
+  await check(`${width}px: the retired gpg watch says so and files nothing`, async () => {
     cli(["gpg", "lock"]);
-    fs.rmSync(path.join(stateDir, "gpg-filed.json"), { force: true }); // the earlier asks in this script would hold the watcher back (its cooldown)
     const open = async () => (await (await fetch(`${base}/api/todos`)).json());
     const mine = async () => ((await open()).items || (await open()).todos || []).filter((i) => /^GPG is locked on uitest/.test(i.question) && i.state === "open");
-    // Earlier scripts leave the fixture's agents idle: start a turn, which keeps one working for a couple of seconds.
-    const ag = (await fetch(base + "/api/agents").then((r) => r.json())).agents[0];
-    const pr = await fetch(`${base}/api/agents/${encodeURIComponent(ag.pane_id)}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "work" }) });
-    if (![200, 202].includes(pr.status)) throw new Error("prompt: " + pr.status);
-    let w1 = { code: 0, out: "" };
-    for (const end = Date.now() + 6000; Date.now() < end && !/filed/.test(w1.out); await sleep(250)) w1 = cli(["gpg", "watch", "--once"]);
-    if (w1.code !== 0 || !/filed/.test(w1.out)) throw new Error("first round: " + w1.code + " " + w1.out);
-    const w2 = cli(["gpg", "watch", "--once"]);
-    const u = cli(["gpg", "unlock"]);
-    if (w2.code !== 0 || /filed/.test(w2.out) || !/Already asked/.test(u.out)) throw new Error("second round: " + w2.out + " / unlock: " + u.out);
-    if ((await mine()).length !== 1) throw new Error("items: " + JSON.stringify(await mine()));
-    // Unlock without the app: sign once with the passphrase typed to the agent, as pinentry would.
-    const sg = spawnSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", PASS, "-u", FPR, "--clearsign"], { env, input: "x", encoding: "utf8" });
-    if (sg.status !== 0) throw new Error("sign: " + sg.stderr);
-    if (status().locked) throw new Error("the agent did not cache the passphrase");
-    const w3 = cli(["gpg", "watch", "--once"]);
-    if (w3.code !== 0 || !/withdrawn/.test(w3.out)) throw new Error("third round: " + w3.out);
-    if ((await mine()).length !== 0) throw new Error("the item is still open");
+    const before = (await mine()).length;
+    const w = cli(["gpg", "watch", "--once"]);
+    if (w.code !== 0 || !/no longer needed/.test(w.out) || !/disable --now comebye-gpg-watch\.service/.test(w.out)) throw new Error("gpg watch: " + w.code + " " + w.out);
+    if ((await mine()).length !== before) throw new Error("the retired gpg watch filed an item");
   });
 
   await check(`${width}px: Not now denies an unlock request`, async () => {

@@ -679,7 +679,7 @@ func (s *Server) handleApprovalGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleApprovalWithdraw: POST /api/approvals/{id}/withdraw. The host that
-// asked takes the request back, as `comebye gpg watch` does when the key was
+// asked takes the request back, as the GPG watcher (gpgwatch.go) does when the key was
 // unlocked another way (pinentry): the item closes itself instead of waiting
 // for a Face ID nobody needs. An agent may withdraw only its own host's
 // request; a settled one answers 200 as it stands (safe to call twice).

@@ -43,6 +43,16 @@ type Config struct {
 	// GPGHost is this host's GPG unlock state; nil means the state
 	// directory's files and the user's gpg (tests set it).
 	GPGHost *gpgunlock.Host
+	// GPGWatch runs this host's GPG watcher in the server (gpgwatch.go): it
+	// ends an unlock at its 8 hours and keeps the one "GPG is locked" item.
+	// For hosts that use GPG unlock; off, nothing runs.
+	GPGWatch bool
+	// GPGLifetime shortens the unlock's 8 hours (throwaway checks and
+	// tests); zero, or anything longer, is the 8 hours.
+	GPGLifetime time.Duration
+	// GPGUnitDirs are where the server looks for the old daemon's systemd
+	// unit (tests); nil means the systemd user unit directories.
+	GPGUnitDirs []string
 	// OpencodeDir is where OpenCode sessions are mirrored as files (default
 	// under the state directory); see internal/opencode.
 	OpencodeDir string
@@ -316,6 +326,8 @@ type Server struct {
 	passkeys       *passkey.Store
 	gpg            *gpgunlock.Host // this host's GPG unlock state (gpg.go)
 	gpgMu          sync.Mutex
+	gpgWake        chan struct{} // wakes the GPG watcher; nil while it is off (gpgwatch.go)
+	gpgActive      atomic.Bool   // some agent of this host is active, for the GPG watcher
 	approvals      *approvalStore
 	reg            regState
 	events         *eventStore // what the hub handled itself (events.go)
@@ -742,9 +754,9 @@ func (s *Server) routes() {
 	// Passkeys and approvals (passkeys.go, approvals.go). Filing a request and
 	// reading the public keys are open to agents and hosts (an agent only for
 	// its own host); everything else is the user's, with the CSRF token.
-	s.mux.HandleFunc("POST /api/approvals", s.authWorker(s.handleApprovalCreate))
+	s.mux.HandleFunc("POST /api/approvals", s.gpgNoted(s.authWorker(s.handleApprovalCreate)))
 	s.mux.HandleFunc("GET /api/passkeys", s.authWorker(s.handlePasskeyList))
-	s.mux.HandleFunc("POST /api/approvals/{id}/withdraw", s.authWorker(s.handleApprovalWithdraw))
+	s.mux.HandleFunc("POST /api/approvals/{id}/withdraw", s.gpgNoted(s.authWorker(s.handleApprovalWithdraw)))
 	s.mux.HandleFunc("GET /api/approvals/{id}", s.auth(s.handleApprovalGet))
 	s.mux.HandleFunc("POST /api/approvals/{id}/respond", s.auth(s.handleApprovalRespond))
 	// The hub relays an unlock answer to a peer host here (gpg.go).

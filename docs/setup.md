@@ -229,34 +229,48 @@ that signs does this once, on its own.
    card matches the one the terminal printed, type the key's passphrase
    (once; it is encrypted in the page and never stored there) and approve with
    Face ID. A wrong passphrase stores nothing.
-3. **Run the timer.** `comebye gpg watch` is a long-running service on the
-   host. It forgets the key when the 8 hours end (gpg-agent's own cache
-   alone does not guarantee the 8 hours), and while an agent is active on the
-   host and the key is locked it files **one** "GPG is locked on HOST" item.
-   When the key is unlocked by any means (Face ID, or you typed the passphrase
-   in a pinentry), it takes the item back. It files nothing for an idle host.
+3. **Turn on the server's watcher.** Add `COMEBYE_GPG_WATCH=1` to
+   `~/.config/comebye/env` (or pass `-gpg-watch`) and restart comebye
+   (`systemctl --user restart comebye`). The server then forgets the key when
+   the 8 hours end (at start too, so a restart cannot extend an unlock), and
+   while an agent of this host is working or blocked and the key is locked it
+   files **one** "GPG is locked on HOST" item. When the key is unlocked by any
+   means (Face ID, or you typed the passphrase in a pinentry), it takes the
+   item back. It files nothing for an idle host. It follows the server's own
+   agent events, so nothing polls; hosts without GPG unlock leave it off (the
+   default) and nothing runs.
+
+   **The floor.** Setup writes `max-cache-ttl 28800` to `gpg-agent.conf`:
+   gpg-agent itself then forgets a preset passphrase after 8 hours, so the
+   8 hours hold even while comebye is down. The server checks this at start
+   and logs one warning when gpg-agent's max-cache-ttl is longer (it does not
+   change `gpg-agent.conf` itself: reloading gpg-agent would forget an unlock
+   in force). To fix it by hand, set `max-cache-ttl 28800` in
+   `$(gpgconf --list-dirs homedir)/gpg-agent.conf` and run
+   `gpgconf --reload gpg-agent`, or run `comebye gpg setup` again.
+
+   **Upgrading from the `comebye-gpg-watch` service.** The separate
+   `comebye gpg watch` daemon is retired: the command now only says so and
+   exits. The server logs once at start while its unit is still installed.
+   After upgrading, on each host that ran it:
 
    ```sh
-   cp deploy/comebye-gpg-watch.service ~/.config/systemd/user/
+   echo COMEBYE_GPG_WATCH=1 >> ~/.config/comebye/env
+   systemctl --user restart comebye
+   systemctl --user disable --now comebye-gpg-watch.service
+   rm ~/.config/systemd/user/comebye-gpg-watch.service
    systemctl --user daemon-reload
-   systemctl --user enable --now comebye-gpg-watch
-   journalctl --user -u comebye-gpg-watch -f
    ```
 
-   It reads the same `~/.config/comebye/env` as the main unit and needs the
-   same state directory (a `COMEBYE_STATE_DIR` set for one is set for both).
-   The release tarball carries the unit. Without systemd (a sandbox host), run
-   `nohup comebye gpg watch >>~/.local/state/comebye/gpg-watch.log 2>&1 &` from the
-   host's startup; on a Mac, a launchd user agent running `comebye gpg watch`
-   with `KeepAlive` does the same. `comebye gpg watch --once` does one round
-   and exits (a cron job can use it); `--every 30s` changes how often it looks.
+   Without systemd, drop the `comebye gpg watch` line from the host's startup
+   (or its launchd agent) and start comebye with `-gpg-watch`.
 
 **Every day.** A worker whose signed commit fails because the key is locked
 runs `comebye gpg unlock` (the one documented path; it never files a second
 item while one waits, and says so). You get **GPG is locked on HOST** in To
 do; tap **Unlock with Face ID**; the worker retries and the commit signs. The
-item waits 2 minutes, so the watcher asks again no sooner than 10 minutes
-after the last ask while an agent is still active. `comebye gpg status` says
+item stays while an agent is active: the watcher renews its request before
+the 2 minutes run out, on the same item. `comebye gpg status` says
 `locked` or `unlocked until HH:MM`; `comebye gpg lock` forgets the key now;
 `comebye gpg reset` deletes the stored passphrase, the pinned passkeys and the
 host key (lost passkey recovery: you still know the passphrase; run setup
@@ -789,7 +803,7 @@ itself started: the kickstart would kill it.
 A binary that predates `comebye upgrade` cannot run it. On such a host,
 bootstrap once from the release tarball, then use the command from then on.
 The tarball extracts to a `comebye_<os>_<arch>/` directory (the binary,
-`comebye.service`, `comebye-gpg-watch.service`, LICENSE and README), not to a bare `./comebye`:
+`comebye.service`, LICENSE and README), not to a bare `./comebye`:
 
 ```sh
 d=$(mktemp -d) && cd "$d"

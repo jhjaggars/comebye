@@ -19,7 +19,8 @@ import (
 // setup the passphrase blob (ciphertext).
 
 // gpgHost is this host's GPG unlock state: the state directory's files. The
-// lifetime is fixed at 8 hours (Config.GPGLifetime shortens it for tests).
+// lifetime is fixed at 8 hours (Config.GPGLifetime shortens it for tests and
+// throwaway checks; it never lengthens it).
 func (s *Server) gpgHost() *gpgunlock.Host {
 	if s.cfg.GPGHost != nil {
 		return s.cfg.GPGHost
@@ -28,6 +29,9 @@ func (s *Server) gpgHost() *gpgunlock.Host {
 	defer s.gpgMu.Unlock()
 	if s.gpg == nil { // one value, so its mutex serialises the answers
 		s.gpg = &gpgunlock.Host{Dir: s.cfg.StateDir, GPG: &gpgunlock.GPG{}, AllowLocalhost: s.cfg.TestMode}
+		if d := s.cfg.GPGLifetime; d > 0 && d < gpgunlock.DefaultLifetime {
+			s.gpg.Lifetime = d
+		}
 	}
 	return s.gpg
 }
@@ -61,6 +65,7 @@ func (s *Server) relayGPG(ctx context.Context, a *approval, ans gpgunlock.Answer
 	}
 	if a.Host == "" || sameHost(a.Host, s.fleet.LocalName()) {
 		st, err := s.gpgHost().Complete(id, ans)
+		s.gpgPoke() // the watcher times the new unlock's end
 		return st.ExpiresAt, err
 	}
 	if !s.fleet.HasPeer(a.Host) {
@@ -103,6 +108,7 @@ func (s *Server) handleGPGComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.gpgHost().Complete(strings.TrimSpace(b.RequestID), b.Answer)
+	s.gpgPoke() // the watcher times the new unlock's end
 	if err != nil {
 		writeJSONStatus(w, http.StatusConflict, gpgCompleteReply{Code: "host_refused", Message: err.Error()})
 		return

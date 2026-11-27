@@ -333,7 +333,7 @@ func TestGPGPresetSignExpiryRestart(t *testing.T) {
 	h2 := &Host{Dir: r.h.Dir, GPG: r.g, Lifetime: life, Now: r.now.Now}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { h2.Run(ctx, func(err error) { t.Error(err) }); close(done) }()
+	go func() { (&Watcher{Host: h2}).Run(ctx, nil, func(err error) { t.Error(err) }); close(done) }()
 	waitFor(t, func() bool { return r.locked(t) })
 	cancel()
 	<-done
@@ -363,7 +363,7 @@ func TestGPGRealTimeExpiry(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go r.h.Run(ctx, nil)
+	go (&Watcher{Host: r.h}).Run(ctx, nil, nil)
 	if r.locked(t) {
 		t.Fatal("locked right after unlock")
 	}
@@ -509,5 +509,21 @@ func TestReset(t *testing.T) {
 	}
 	if r.g.TestSign(r.fpr) == nil {
 		t.Fatal("reset left the key unlocked")
+	}
+}
+
+func TestParseMaxCacheTTL(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"max-cache-ttl:24:2:set maximum PIN cache lifetime to N seconds:3:3:N:7200::\n":      2 * time.Hour,
+		"max-cache-ttl:24:2:set maximum PIN cache lifetime to N seconds:3:3:N:7200::28800\n": 8 * time.Hour,
+		"max-cache-ttl-ssh:24:2:x:3:3:N:7200::99\nmax-cache-ttl:24:2:x:3:3:N:7200::86400\n":  24 * time.Hour,
+	} {
+		got, err := parseMaxCacheTTL(in)
+		if err != nil || got != want {
+			t.Errorf("%q = %v %v, want %v", in, got, err, want)
+		}
+	}
+	if _, err := parseMaxCacheTTL("default-cache-ttl:24:2:x:3:3:N:600::\n"); err == nil {
+		t.Error("no max-cache-ttl line, no error")
 	}
 }

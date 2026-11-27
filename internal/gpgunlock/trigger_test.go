@@ -3,6 +3,7 @@ package gpgunlock
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -298,7 +299,6 @@ func TestWatchPasskeyUnlockClearsTheRecord(t *testing.T) {
 func TestWatchRunEnforcesTheLifetime(t *testing.T) {
 	tr := newTriggerRig(t, 2*time.Second)
 	tr.h.Now = nil
-	tr.w.Every = 100 * time.Millisecond
 	// Unlock for the (shortened) lifetime, as a passkey answer does.
 	if _, err := tr.h.armLocked(mustGrips(t, tr.h)); err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestWatchRunEnforcesTheLifetime(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go tr.w.Run(ctx, nil)
+	go tr.w.Run(ctx, nil, nil)
 	waitFor(t, func() bool { return tr.locked(t) })
 	if err := tr.g.TestSign(tr.fpr); err == nil {
 		t.Fatal("signed after the lifetime")
@@ -346,4 +346,59 @@ func TestWaitingEndsWhenTheRequestIsTaken(t *testing.T) {
 	if _, ok := tr.h.Waiting(); ok {
 		t.Fatal("still waiting on a spent request")
 	}
+}
+
+// Next: with nothing standing only the unlock's end is due; a standing item
+// is due for its renewal before its request runs out; a "Not now" is due at
+// its end. With nothing at all, nothing is due (no polling).
+func TestWatchNext(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	now := tr.h.now()
+	if at, due := tr.w.Next(now); due {
+		t.Fatalf("locked, nothing standing: due at %v", at)
+	}
+	tr.active = true
+	if got := tr.check(t); got != "filed" {
+		t.Fatalf("check = %q", got)
+	}
+	last, _ := tr.h.LastFiled()
+	if at, due := tr.w.Next(now); !due || !at.Equal(last.Exp.Add(-Refresh)) {
+		t.Fatalf("standing item: %v %v, want %v", at, due, last.Exp.Add(-Refresh))
+	}
+	tr.h.clearFiled()
+	tr.w.snoozeUntil = now.Add(10 * time.Minute)
+	if at, due := tr.w.Next(now); !due || !at.Equal(tr.w.snoozeUntil) {
+		t.Fatalf("snoozed: %v %v", at, due)
+	}
+	tr.w.snoozeUntil = time.Time{}
+	st, err := tr.h.armLocked(mustGrips(t, tr.h))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at, due := tr.w.Next(now); !due || !at.Equal(st.ExpiresAt) || !at.Equal(now.Add(8*time.Hour)) {
+		t.Fatalf("unlocked: %v %v, want %v", at, due, st.ExpiresAt)
+	}
+}
+
+// Run does a round on each wake, and none without one when nothing is due.
+func TestWatchRunWakesOnEvents(t *testing.T) {
+	tr := newTriggerRig(t, 8*time.Hour)
+	var active atomic.Bool
+	tr.w.Active = func() (bool, error) { return active.Load(), nil }
+	var filed atomic.Int32
+	file := tr.w.File
+	tr.w.File = func() (string, string, error) { filed.Add(1); return file() }
+	wake := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { tr.w.Run(ctx, wake, func(err error) { t.Error(err) }); close(done) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(150 * time.Millisecond)
+	active.Store(true) // no wake yet: nothing is filed
+	time.Sleep(150 * time.Millisecond)
+	if n := filed.Load(); n != 0 {
+		t.Fatalf("filed %d with no wake", n)
+	}
+	wake <- struct{}{}
+	waitFor(t, func() bool { return filed.Load() == 1 })
 }

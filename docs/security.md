@@ -513,13 +513,18 @@ passphrase under K and posts that blob.
 
 Two things ask for Face ID, and they share one item per host.
 
-- **The host timer, `comebye gpg watch`** (a service; see
-  [setup.md](setup.md#gpg-unlock-with-face-id)). It sweeps at start and at each
-  expiry, so an unlock ends at its fixed 8 hours even though gpg-agent's cache
-  alone would only forget on its own schedule, and a restart cannot extend it.
-  It looks every 30 seconds. If the key is locked **and an agent is working or
-  blocked on this host**, it files the request (`POST /api/approvals`, for its
-  own host only, as before). An idle host files nothing.
+- **The host's watcher, inside the comebye server** (`-gpg-watch`; see
+  [setup.md](setup.md#gpg-unlock-with-face-id); it replaced the
+  `comebye gpg watch` daemon). It sweeps at start and at each expiry, so an
+  unlock ends at its fixed 8 hours and a restart cannot extend it; under it,
+  gpg-agent's `max-cache-ttl 28800` (written by setup, checked by the server
+  at start) ends a preset passphrase even while comebye is down. It does not
+  poll: it looks when one of this host's agents starts or stops working or
+  being blocked (the server's own agent events), when an unlock or a request
+  lands, and when its standing request is due for renewal. If the key is
+  locked **and an agent is working or blocked on this host**, it files the
+  request (`POST /api/approvals`, for its own host only, in process on the
+  hub, through the hub link on a peer). An idle host files nothing.
 - **A worker**, whose signed commit failed, runs `comebye gpg unlock`.
 
 One item per host, three ways: the host remembers the request it filed

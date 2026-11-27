@@ -146,6 +146,7 @@ func main() {
 		hubOnly        = flag.Bool("hub-only", envBool("COMEBYE_HUB_ONLY", false), "run with no herdr (nothing waits for a socket) and host no agents. On a hub (no -hub): the ledger, to-dos, plans, peers, archive, push and the app all work; implies -hub-mode. With -hub and -ledger=false: a peer that only answers its hub and reports 0 agents, e.g. the in-cluster provisioner (docs/workers.md). Also implied by an explicitly empty -sock (see docs/setup.md)")
 		lockWait       = flag.Duration("lock-wait", envDuration("COMEBYE_LOCK_WAIT", 0), "when another comebye holds the state directory, retry this long before refusing to start (0 refuses at once); a Kubernetes replacement pod can set 30s")
 		healthAddr     = flag.String("health-addr", getenv("COMEBYE_HEALTH_ADDR"), "also serve /healthz and /readyz (nothing else, no login) on this address, e.g. :8743, for probes that cannot reach the loopback listener; empty (default) serves them on -addr only")
+		gpgWatch       = flag.Bool("gpg-watch", envBool("COMEBYE_GPG_WATCH", false), "on a host that uses GPG unlock with Face ID (comebye gpg setup): run the GPG watcher in the server, which ends an unlock after its 8 hours and files the one \"GPG is locked\" item while an agent here is active (it replaces the comebye-gpg-watch service); off by default")
 		showVersion    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Var(&allowedKinds, "allowed-kinds", "the only agent kinds this host starts (comma-separated, e.g. pi); a seed that settings.json overrides; empty allows every installed kind")
@@ -529,6 +530,8 @@ func main() {
 		TmpMaxAge:    *tmpMaxAge,
 		// The handoff ledger, roles and handoff-template.md.
 		StateDir:               expandHome(*stateDir),
+		GPGWatch:               *gpgWatch,
+		GPGLifetime:            envDuration("COMEBYE_GPG_LIFETIME", 0), // throwaway checks only; never longer than 8 h
 		RepoHealth:             repoHealth,
 		NoLedger:               !*ledgerOn,
 		Upstream:               upstream,
@@ -568,6 +571,7 @@ func main() {
 	go srv.RunRelease(context.Background()) // rollout (with the catch-up), auto rollout, release sweep
 	go srv.RunProvision(context.Background())
 	go srv.RunRepoHealth(context.Background())
+	go srv.RunGPGWatch(context.Background()) // -gpg-watch: the unlock's 8 h end and the "GPG is locked" item
 
 	go func() {
 		sig := make(chan os.Signal, 1)

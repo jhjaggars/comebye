@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jhjaggars/comebye/internal/gpgunlock"
 	"github.com/jhjaggars/comebye/internal/passkey"
@@ -201,48 +200,17 @@ func TestGPGCommands(t *testing.T) {
 	if code := run(e, "gpg", "unlock", "--force"); code != 0 || posts("/api/approvals") != before+1 {
 		t.Fatalf("forced unlock: %d %q", code, out)
 	}
-	// The watcher: the request waits, so it files nothing; later, with an
-	// agent active (laharl/w2 is working) it files one; it withdraws that when
-	// pinentry unlocks the key.
-	now := e.Now()
-	e.Now = func() time.Time { return now }
-	h := gpgHost(e)
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || posts("/api/approvals") != before+1 {
-		t.Fatalf("watch with a request waiting: %d", code)
-	}
-	// Idle for longer than the grace: the standing item is taken back.
-	f.answers["POST /api/approvals/ap_1/withdraw"] = answer{body: `{}`}
-	now = now.Add(gpgunlock.Grace + time.Minute)
-	f.answers["GET /api/agents"] = answer{body: strings.ReplaceAll(agentsJSON, `"agent_status":"working"`, `"agent_status":"idle"`)}
+	// The old daemon is retired: `gpg watch` (with its old flags, as a unit
+	// still runs it) says so, exits 0, and asks the hub nothing. The
+	// watcher's rounds are the server's now (server/gpgwatch_test.go).
+	nreqs := func() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.reqs) }
+	beforeGet := nreqs()
 	out.Reset()
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals") != before+1 || posts("/api/approvals/ap_1/withdraw") != 1 {
-		t.Fatalf("watch on a host idle past the grace: %d %q", code, out)
+	if code := run(e, "gpg", "watch", "--once", "--every", "30s"); code != 0 || !strings.Contains(out.String(), "no longer needed") || !strings.Contains(out.String(), "disable --now comebye-gpg-watch.service") {
+		t.Fatalf("gpg watch: %d %q", code, out)
 	}
-	// "Not now" on the hub: the ask comes back snoozed, so the round files nothing and keeps no record
-	// (this and the quiet that follows are what the browser script gpgrenew.mjs (deleted) checked over minutes of real waiting).
-	f.answers["GET /api/agents"] = answer{body: agentsJSON}
-	f.answers["POST /api/approvals"] = answer{body: `{"snoozed":true,"until":"` + now.Add(10*time.Minute).Format(time.RFC3339) + `"}`}
-	out.Reset()
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
-		t.Fatalf("watch after Not now: %d %q", code, out)
-	}
-	if _, ok := h.LastFiled(); ok {
-		t.Fatal("a snoozed ask left a record of a request that was never filed")
-	}
-	f.answers["POST /api/approvals"] = answer{body: `{"approval":{"id":"ap_1"}}`}
-	before++ // the snoozed ask above was one more POST
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "filed") || posts("/api/approvals") != before+2 {
-		t.Fatalf("watch with an agent working: %d %q", code, out)
-	}
-	cfg, _ := h.Config()
-	for _, g := range cfg.Keygrips {
-		if err := h.GPG.Preset(g, []byte(pass)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	out.Reset()
-	if code := run(e, "gpg", "watch", "--once"); code != 0 || !strings.Contains(out.String(), "withdrawn") || posts("/api/approvals/ap_1/withdraw") != 2 {
-		t.Fatalf("watch after pinentry: %d %q", code, out)
+	if posts("/api/approvals") != before+1 || nreqs() != beforeGet {
+		t.Fatal("the retired gpg watch called the hub")
 	}
 	if code := run(e, "gpg", "reset", "--yes"); code != 0 {
 		t.Fatalf("reset: %q", errb)

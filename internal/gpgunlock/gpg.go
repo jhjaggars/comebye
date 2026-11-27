@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -322,4 +323,37 @@ func SetAgentConf(conf string, lifetime time.Duration) string {
 func (g *GPG) PresetAvailable() error {
 	_, err := g.presetTool()
 	return err
+}
+
+// MaxCacheTTL is gpg-agent's max-cache-ttl as its config sets it (gpgconf
+// reads gpg-agent.conf; the value or, when the file sets none, gpg-agent's
+// default). It is the floor under the lifetime: a preset passphrase is
+// forgotten at max-cache-ttl even when comebye is not running.
+func (g *GPG) MaxCacheTTL() (time.Duration, error) {
+	out, err := g.run(nil, g.bin(g.ConfBin, "gpgconf"), "--list-options", "gpg-agent")
+	if err != nil {
+		return 0, err
+	}
+	return parseMaxCacheTTL(string(out))
+}
+
+// parseMaxCacheTTL reads the max-cache-ttl line of `gpgconf --list-options
+// gpg-agent`: name:flags:level:description:type:alt-type:argname:default:argdef:value.
+func parseMaxCacheTTL(out string) (time.Duration, error) {
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Split(strings.TrimSpace(ln), ":")
+		if len(f) < 8 || f[0] != "max-cache-ttl" {
+			continue
+		}
+		v := f[7]
+		if len(f) > 9 && f[9] != "" {
+			v = f[9]
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("gpgconf gave an unreadable max-cache-ttl %q", v)
+		}
+		return time.Duration(n) * time.Second, nil
+	}
+	return 0, errors.New("gpgconf did not list max-cache-ttl for gpg-agent")
 }

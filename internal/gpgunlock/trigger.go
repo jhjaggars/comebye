@@ -1,7 +1,6 @@
 package gpgunlock
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,15 +9,17 @@ import (
 )
 
 // The trigger side of the unlock (slice 4): who notices a locked key and asks
-// for Face ID, with one item per host. Two things ask: `comebye gpg watch`,
-// when an agent is active on the host and the key is locked, and a worker's
+// for Face ID, with one item per host. Two things ask: the server's watcher
+// (-gpg-watch, Watcher.Run), when an agent is active on the host and the key
+// is locked, and a worker's
 // `comebye gpg unlock` after a signed commit failed. Both go through the
 // record below, so a request that still waits is never filed twice, and the
 // watcher withdraws the item when the key is unlocked by any means (pinentry
 // included).
 
-// WatchEvery is how often the watcher looks at the agent. The request itself waits RequestTTL, so an item left unanswered is gone and is
-// asked again only that much later, while an agent is still active.
+// WatchEvery was how often the old `comebye gpg watch` daemon looked; the
+// server's watcher is driven by events and uses it only as the retry after
+// a failed round (RetryEvery).
 //
 // The item stays: the request behind it lives RequestTTL, but the watcher
 // renews it (Refresh before it runs out) on the same to-do item, so the user
@@ -107,7 +108,6 @@ type Watcher struct {
 	// Active says whether an agent is active on this host.
 	Active func() (bool, error)
 
-	Every   time.Duration // WatchEvery when zero
 	Grace   time.Duration // Grace when zero
 	Refresh time.Duration // Refresh when zero
 
@@ -221,36 +221,4 @@ func (w *Watcher) withdraw(last Filed) (string, error) {
 	}
 	w.Host.clearFiled()
 	return "withdrawn", nil
-}
-
-// Run enforces the lifetime and the one item until ctx ends: at start (a
-// restart after the expiry forgets at once), at each expiry and every
-// w.Every. Errors go to log.
-func (w *Watcher) Run(ctx context.Context, log func(error)) {
-	every := w.Every
-	if every <= 0 {
-		every = WatchEvery
-	}
-	for {
-		if _, err := w.Host.Sweep(); err != nil && log != nil {
-			log(err)
-		}
-		if _, err := w.Check(); err != nil && log != nil {
-			log(err)
-		}
-		wait := every
-		if at, ok := w.Host.NextExpiry(); ok {
-			if d := at.Sub(w.Host.now()); d < wait {
-				wait = d
-			}
-		}
-		if wait < 50*time.Millisecond {
-			wait = 50 * time.Millisecond
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(wait):
-		}
-	}
 }
