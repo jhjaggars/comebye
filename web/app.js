@@ -2952,7 +2952,8 @@ function isCoordinator(a) {
 }
 
 async function loadLedger() {
-  if (ledger.inflight || ledger.on === false) return;
+  if (ledger.on === false) return;
+  if (ledger.inflight) return afterInflight(ledger, loadLedger);
   ledger.inflight = true;
   try {
     setLedger(await api("/api/ledger"));
@@ -3382,7 +3383,8 @@ function todoDraft(id) { const d = todos.drafts.get(id); return d ? d.text : "";
 
 async function loadTodos() {
   // No ledger here (it answered 503): no To do either. Not read yet: wait for it (todos.on stays unknown).
-  if (todos.inflight || ledger.on !== true) { if (ledger.on === false) { todos.on = false; renderTodos(); todoDeepResolve(); } return; }
+  if (ledger.on !== true) { if (ledger.on === false) { todos.on = false; renderTodos(); todoDeepResolve(); } return; }
+  if (todos.inflight) return afterInflight(todos, loadTodos);
   todos.inflight = true;
   try {
     const d = await api("/api/todos");
@@ -4545,7 +4547,7 @@ const rls = { data: null, err: "", loadedAt: 0, inflight: false, confirm: null, 
 const rlsSrc = srcNew("releases", () => loadReleases(false), () => renderPeers(), true);
 
 async function loadReleases(refresh) {
-  if (rls.inflight) return;
+  if (rls.inflight) return afterInflight(rls, () => loadReleases(refresh));
   rls.inflight = true;
   srcStart(rlsSrc);
   try {
@@ -6696,7 +6698,8 @@ function archParkIds() {
 }
 
 async function loadArchived() {
-  if (arch.inflight || ledger.on !== true) return;
+  if (ledger.on !== true) return;
+  if (arch.inflight) return afterInflight(arch, loadArchived);
   arch.inflight = true;
   try {
     const d = await api("/api/archived");
@@ -9963,7 +9966,8 @@ function boardMarkSeen() {
 }
 
 async function loadBoard() {
-  if (board.inflight || ledger.on !== true) return;
+  if (ledger.on !== true) return;
+  if (board.inflight) return afterInflight(board, loadBoard);
   board.inflight = true;
   try {
     const d = await api("/api/board");
@@ -11127,7 +11131,10 @@ function phEnsure() {
 }
 
 async function loadProvHosts(force) {
-  if (ph.loading || ledger.on !== true || !multiHost() || !(pz.nodes && pz.nodes.enabled)) return;
+  if (ledger.on !== true || !multiHost() || !(pz.nodes && pz.nodes.enabled)) return;
+  // A read asked for while one is in flight (a job that just ended) runs after it: the one in flight may have left
+  // before the change, and no poll comes to read it later.
+  if (ph.loading) { ph.again = true; ph.againForce = ph.againForce || !!force; return; }
   ph.loading = true;
   try {
     ph.data = await api("/api/provision/hosts" + (force ? "?refresh=1" : ""), { timeout: 120000 });
@@ -11137,6 +11144,7 @@ async function loadProvHosts(force) {
   } catch (e) { ph.err = e.message || "failed"; }
   ph.loading = false;
   wakeRedraw();
+  if (ph.again) { const f = ph.againForce; ph.again = ph.againForce = false; loadProvHosts(f); }
 }
 
 function phSpendText(h) {
@@ -12889,7 +12897,8 @@ async function guGo(apid, item, a) {
 const uchip = { rows: new Map(), at: 0, inflight: false, off: false };
 
 async function loadUsageChips() {
-  if (uchip.inflight || uchip.off || ledger.on !== true || Date.now() - uchip.at < 60000) return;
+  if (uchip.off || ledger.on !== true || Date.now() - uchip.at < 60000) return;
+  if (uchip.inflight) return afterInflight(uchip, loadUsageChips);
   uchip.inflight = true;
   try {
     const d = await api("/api/usage?" + new URLSearchParams({ since: "14d", by: "kind", limit: "100", tz: String(-new Date().getTimezoneOffset()) }));
@@ -15689,24 +15698,31 @@ function changed(kind) {
   // In the background nothing is drawn: read it all when the app is back (resume()).
   if (document.hidden) { state.streamDropped = true; return; }
   if (kind.startsWith("transcript:")) return onTranscriptChanged(kind.slice("transcript:".length));
+  if (kind === "job:provision-hosts") { if (prs.route || launch.open) loadProvHosts(false); return; } // the hub dropped its copy
   if (kind.startsWith("job:")) return jobChanged(kind.slice("job:".length));
   switch (kind) {
-    case "ledger": fresh(ledger, loadLedger); fresh(arch, loadArchived); return; // Archived is the ledger's
-    case "todos": fresh(todos, loadTodos); return;
+    case "ledger": loadLedger(); loadArchived(); boardSoon(); return; // Archived is the ledger's
+    case "todos": loadTodos(); boardSoon(); return;
     case "pages": if (pgs.route) pagesLoad(); return;
     case "parked": loadParked(); return;
-    case "releases": if (relWanted()) fresh(rls, () => loadReleases(false)); return;
-    case "usage": uchip.at = 0; fresh(uchip, loadUsageChips); if (us.route) usageLoad(); return;
+    case "releases": if (relWanted()) loadReleases(false); return;
+    case "usage":
+      if (uchip.inflight) afterInflight(uchip, () => { uchip.at = 0; return loadUsageChips(); });
+      else { uchip.at = 0; loadUsageChips(); }
+      if (us.route) usageLoad();
+      return;
   }
 }
 
-// fresh reads now, or once the read in flight is done: that one may have left before the change.
-function fresh(st, load) {
-  if (!st.inflight) { load(); return; }
-  if (st.again) return;
-  st.again = true;
-  const wait = () => { if (st.inflight) setTimeout(wait, 100); else { st.again = false; load(); } };
-  setTimeout(wait, 100);
+// boardSoon reads the Status board (the ledger, the to-dos and what the hub did) again where it is on screen.
+function boardSoon() { board.at = 0; renderStatus(); }
+
+// afterInflight: a read asked for while one is in flight runs once that one ends, because the one in flight may
+// have left before the change its caller (a "changed" event, or a write that awaits the new state) wants to see.
+// Callers meanwhile share it. The loaders guarded by an inflight flag use it.
+function afterInflight(st, load) {
+  if (!st.next) st.next = (async () => { while (st.inflight) await new Promise((r) => setTimeout(r, 50)); st.next = null; return load(); })();
+  return st.next;
 }
 
 // changedAll reads everything an open screen shows: after a reconnect, back from the background, and as the

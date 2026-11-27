@@ -235,6 +235,16 @@ type HostBook struct {
 	path  string
 	hosts map[string]*Host
 	Now   func() time.Time
+	// onSave is told of each write, with the lock held (OnSave).
+	onSave func()
+}
+
+// OnSave sets fn, called after each write of the book (with its lock held:
+// fn must not call back into the book). The server tells open apps.
+func (b *HostBook) OnSave(fn func()) {
+	b.mu.Lock()
+	b.onSave = fn
+	b.mu.Unlock()
 }
 
 const maxHosts = 100
@@ -268,6 +278,9 @@ func OpenHostBook(dir string) *HostBook {
 }
 
 func (b *HostBook) saveLocked() {
+	if b.onSave != nil {
+		defer b.onSave()
+	}
 	if b.path == "" {
 		return
 	}

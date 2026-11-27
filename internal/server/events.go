@@ -65,6 +65,8 @@ type eventStore struct {
 	list []Event // oldest first
 	seq  int
 	now  func() time.Time
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, "events.json") }
@@ -107,6 +109,9 @@ func (e *eventStore) pruneLocked() {
 }
 
 func (e *eventStore) saveLocked() {
+	if e.onSave != nil {
+		defer e.onSave()
+	}
 	if e.path == "" {
 		return
 	}

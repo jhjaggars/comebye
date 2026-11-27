@@ -15,14 +15,16 @@ import (
 // one hook per store, so a screen fetches it again at once instead of polling:
 //
 //	ledger    the ledger, roles, the ledger's cached worktree checks (and so
-//	          Archived, which the ledger holds)
-//	todos     the to-do list
+//	          Archived, which the ledger holds), and what the hub did (the
+//	          Status board's lane)
+//	todos     the to-do list, and the approvals its items show
 //	pages     pages and their comments
 //	parked    this host's park records (a peer's are relayed by the hub)
 //	releases  the rollout, the deploy record, a release's to-do item
 //	usage     the token counts
 //	job:<id>  a provision job (the provisioner's and the hub's copy), a
-//	          sign-in, or job:wake for the hub's book of host starts
+//	          sign-in, job:wake for the hub's book of host starts, or
+//	          job:provision-hosts for a provisioner's book of its hosts
 //	transcript:<agent id>  a watched agent's session file (transcriptwatch.go)
 //
 // The hook is the store's own write, so a new write path needs nothing more.
@@ -53,6 +55,12 @@ func (s *Server) wireChanged() {
 		}
 		relSig = releaseItemsSig(t.data.Items)
 	}
+	if s.events != nil {
+		s.events.onSave = func() { s.Changed(state.ChangedLedger) } // the board's "the hub did" lane
+	}
+	if s.approvals != nil {
+		s.approvals.onSave = func() { s.Changed(state.ChangedTodos) } // a to-do shows its approval's state
+	}
 	if s.pages != nil {
 		s.pages.onSave = func() { s.Changed(state.ChangedPages) }
 	}
@@ -69,6 +77,9 @@ func (s *Server) wireChanged() {
 	if s.hjobs != nil {
 		s.hjobs.onSave = job
 	}
+	if s.phosts != nil {
+		s.phosts.OnSave(func() { job(provHostsJobID) }) // the hosts this provisioner built: the Peers screen's Hosts card
+	}
 	if s.wake != nil {
 		s.wake.onSave = func() { job(wakeJobID) } // the host starts the app follows
 	}
@@ -84,6 +95,11 @@ func (s *Server) wireChanged() {
 // every start the book follows (GET /api/provision/wake reads them all).
 const wakeJobID = "wake"
 
+// provHostsJobID is the job id of a provisioner's book of the hosts it built:
+// its write (a destroy that ended, a host the cloud reports stopped) tells
+// the Peers screen's Hosts card, through the hub, which drops its cached copy.
+const provHostsJobID = "provision-hosts"
+
 // wirePark connects the park store's write hook (parkStore opens it late).
 func (s *Server) wirePark() {
 	if s.parks != nil {
@@ -97,7 +113,18 @@ func (s *Server) wirePark() {
 // app.
 func (s *Server) peerChanged(host, kind string) {
 	pid, ok := strings.CutPrefix(kind, state.ChangedJobPrefix)
-	if !ok || s.hjobs == nil {
+	if !ok {
+		return
+	}
+	if pid == provHostsJobID && s.prov != nil {
+		s.prov.mu.Lock()
+		if c := s.prov.hosts[host]; c != nil {
+			c.At, c.Forced = time.Time{}, time.Time{} // the next read asks the provisioner
+		}
+		s.prov.mu.Unlock()
+		return
+	}
+	if s.hjobs == nil {
 		return
 	}
 	var ids []string

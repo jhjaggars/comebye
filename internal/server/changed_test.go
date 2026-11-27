@@ -15,6 +15,7 @@ import (
 	"github.com/jhjaggars/comebye/internal/herdr"
 	"github.com/jhjaggars/comebye/internal/ledger"
 	"github.com/jhjaggars/comebye/internal/park"
+	"github.com/jhjaggars/comebye/internal/provision"
 	"github.com/jhjaggars/comebye/internal/state"
 )
 
@@ -23,37 +24,37 @@ import (
 // says why instead, starting with "-". TestChangedEveryStoreHasAKind fails
 // for a new store missing here, so it is never silently left to a poll.
 var storeKinds = map[string]string{
-	"ledger":   state.ChangedLedger,
-	"roles":    state.ChangedLedger, // GET /api/ledger carries the roles
-	"todos":    state.ChangedTodos,
-	"pages":    state.ChangedPages,
-	"pageCmts": state.ChangedPages,
-	"parks":    state.ChangedParked,
-	"rollout":  state.ChangedReleases,
-	"usage":    state.ChangedUsage,
-	"pjobs":    state.ChangedJobPrefix + "*",
-	"hjobs":    state.ChangedJobPrefix + "*",
+	"ledger":    state.ChangedLedger,
+	"roles":     state.ChangedLedger, // GET /api/ledger carries the roles
+	"events":    state.ChangedLedger, // the Status board\'s "the hub did" lane
+	"todos":     state.ChangedTodos,
+	"approvals": state.ChangedTodos, // a to-do shows its approval's state
+	"pages":     state.ChangedPages,
+	"pageCmts":  state.ChangedPages,
+	"parks":     state.ChangedParked,
+	"rollout":   state.ChangedReleases,
+	"usage":     state.ChangedUsage,
+	"pjobs":     state.ChangedJobPrefix + "*",
+	"hjobs":     state.ChangedJobPrefix + "*",
 
-	"health":    "-a probe file that checks the state directory is writable",
-	"pq":        "-the prompt queue: read when an agent's detail opens, not on a screen that stays open",
-	"passkeys":  "-read once when Settings opens; only the user changes them, from that screen",
-	"approvals": "-read when an approval link opens",
-	"events":    "-the hub's own log for `comebye log`; no app screen follows it",
-	"typed":     "-marks on transcript lines; the transcript's own kind covers what it shows",
-	"sent":      "-the hub's memory of what it told whom",
-	"sweeps":    "-the sweep loop's schedule, read with the host's settings",
-	"phosts":    "-the provisioner's books; the hub reads them through the provision API",
-	"pseen":     "-what the hub already filed about provisioned hosts",
-	"wake":      state.ChangedJobPrefix + wakeJobID,
-	"chats":     "-a page's chat helper; the agent's own kinds cover what it shows",
-	"resets":    "-the coordinator reset record, read by `comebye coordinator status`",
-	"askers":    "-who asked what, for routing answers",
-	"kinds":     "-the agent kinds a host learned",
-	"unrec":     "-unrecognised dialogs, kept for debugging",
-	"pins":      "-Doc panel pins; the panel's own stream follows them",
-	"settings":  "-a host's agent settings: read on the screen that changes them",
-	"prop":      "-park removals already proposed",
-	"seen":      "-what the hub has seen of each agent",
+	"health":   "-a probe file that checks the state directory is writable",
+	"pq":       "-the prompt queue: read when an agent's detail opens, not on a screen that stays open",
+	"passkeys": "-read once when Settings opens; only the user changes them, from that screen",
+	"typed":    "-marks on transcript lines; the transcript's own kind covers what it shows",
+	"sent":     "-the hub's memory of what it told whom",
+	"sweeps":   "-the sweep loop's schedule, read with the host's settings",
+	"pseen":    "-what the hub already filed about provisioned hosts",
+	"phosts":   state.ChangedJobPrefix + provHostsJobID,
+	"wake":     state.ChangedJobPrefix + wakeJobID,
+	"chats":    "-a page's chat helper; the agent's own kinds cover what it shows",
+	"resets":   "-the coordinator reset record, read by `comebye coordinator status`",
+	"askers":   "-who asked what, for routing answers",
+	"kinds":    "-the agent kinds a host learned",
+	"unrec":    "-unrecognised dialogs, kept for debugging",
+	"pins":     "-Doc panel pins; the panel's own stream follows them",
+	"settings": "-a host's agent settings: read on the screen that changes them",
+	"prop":     "-park removals already proposed",
+	"seen":     "-what the hub has seen of each agent",
 }
 
 // keepsData reports whether a field's type keeps data on disk: a struct
@@ -152,8 +153,9 @@ func (r *changedRecorder) want(t *testing.T, what, kind string) {
 func TestChangedWritesEmitKind(t *testing.T) {
 	dir := t.TempDir()
 	s := newServer(t, Config{ReadLines: 100, HostName: "kube", StateDir: dir}, nil, nil)
-	if s.pjobs == nil { // a provisioner's job store: this hub has no provision tool
+	if s.pjobs == nil { // a provisioner's stores: this hub has no provision tool
 		s.pjobs = openProvJobs(dir)
+		s.phosts = provision.OpenHostBook(dir)
 		s.wireChanged()
 	}
 	rec := recordChanged(t, s)
@@ -174,6 +176,17 @@ func TestChangedWritesEmitKind(t *testing.T) {
 		{"todos (a release item)", state.ChangedReleases, func() error {
 			_, _, err := s.todos.add(Todo{Question: "Release v9.9.9?", Kind: "release", CreatedBy: "hub", Release: &TodoRelease{Version: "v9.9.9", State: relPending}})
 			return err
+		}},
+		{"events", state.ChangedLedger, func() error {
+			s.events.mu.Lock()
+			defer s.events.mu.Unlock()
+			s.events.saveLocked()
+			return nil
+		}},
+		{"approvals", state.ChangedTodos, func() error {
+			s.approvals.mu.Lock()
+			defer s.approvals.mu.Unlock()
+			return s.approvals.saveLocked()
 		}},
 		{"pages", state.ChangedPages, func() error {
 			_, _, err := s.pages.publish(pageIn{Kind: "md", Title: "A page", Body: []byte("# a")}, pageWho{user: true, by: "me"})
@@ -203,6 +216,10 @@ func TestChangedWritesEmitKind(t *testing.T) {
 			j := &pjob{ID: "pj_1", State: jobRunning}
 			s.pjobs.jobs[j.ID] = j
 			s.pjobs.saveLocked(j)
+			return nil
+		}},
+		{"phosts", state.ChangedJobPrefix + provHostsJobID, func() error {
+			s.phosts.Add("vm9", "pj_1", provision.Spec{Name: "vm9"}, "us-east-1", nil, provision.Estimate{})
 			return nil
 		}},
 		{"wake", state.ChangedJobPrefix + wakeJobID, func() error {

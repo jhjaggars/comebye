@@ -184,6 +184,8 @@ type approvalStore struct {
 	// snooze: host+action -> until when the host's own refiling is quiet,
 	// after the user closed its item with "Not now" (memory only).
 	snooze map[string]time.Time
+	// onSave is told of each write, with the lock held (changed.go).
+	onSave func()
 }
 
 // approvalSnooze is how long the watcher's refiling stays quiet after "Not now".
@@ -216,6 +218,9 @@ func openApprovals(path string) (*approvalStore, error) {
 }
 
 func (st *approvalStore) saveLocked() error {
+	if st.onSave != nil {
+		defer st.onSave()
+	}
 	if st.path == "" {
 		return nil
 	}
