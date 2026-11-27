@@ -70,7 +70,7 @@ func init() {
 		{"plan", "create --title T --size N | show ID | list [--json]", "group handoffs into one change: the user is told once when all of them are done", cmdPlan},
 		{"release", "ID [--json]", "start a handoff that is waiting for earlier steps now (e.g. a step that went idle without reporting)", cmdRelease},
 		{"cancel", "ID [--json]", "give up on a handoff that is waiting for earlier steps", cmdCancel},
-		{"loop", "set NAME [--every D] [--text T] | clear NAME  [--json]", "register a running worker (handoff id, worker name or branch) as a standing loop that runs a pass every D (e.g. a steward that wakes hourly): its pass ends are then \"between passes\", not finished, so no finished notice goes out and the sweep leaves it alone, and if a pass is overdue by a quarter of D (at least 10 minutes) the hub nudges it once, then tells you. clear takes the loop off", cmdLoop},
+		{"loop", "set NAME [--every D] [--text T] | clear NAME  [--json]", "register a running worker (handoff id, worker name or branch) as a standing loop that runs a pass every D (e.g. an hourly steward): the hub sends it the loop text as a prompt each time a pass is due, D after the last pass ended (never while one runs or is still queued), so the worker schedules nothing itself (no ScheduleWakeup or cron; pi workers can loop too). Its pass ends are \"between passes\", not finished, so no finished notice goes out and the sweep leaves it alone. clear takes the loop off and stops the passes", cmdLoop},
 		{"report", "FILE|- | --progress [--phase rebase|tests|push|ci] TEXT|-", "(workers) declare yourself done and send your final report to whoever handed you the task; --progress sends a short note on what you are doing instead, which is not a report and finishes nothing; its TEXT is the note itself (a lone - reads it from stdin, never a file name), and a failure prints an error and exits non-zero", cmdReport},
 		{"prompt", "AGENT TEXT|- [--queue] [--json]", "send an agent a message; --queue holds it until the agent can take it", cmdPrompt},
 		{"land", "AGENT --note \"<the user's OK>\" [--base main] [--branch B] [--deploy] [--queue] [--json]", "after the user OKs it, record the approval and tell a finished worker to land its own work: rebase as plain commits, test, fast-forward push, watch CI, delete its branch, report; the hub then checks it landed", cmdLand},
@@ -2395,8 +2395,8 @@ func cmdLoop(e *Env, args []string) error {
 	verb := args[0]
 	fs := flag.NewFlagSet("loop "+verb, flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	every := fs.String("every", "", "how often it runs a pass, e.g. 1h or 90m (set only); left out, the default loop nudge (10 minutes idle)")
-	text := fs.String("text", "", "what it keeps doing, typed into its nudge (set only; left out, its handoff's --loop text, else a generic line)")
+	every := fs.String("every", "", "how often the hub sends it a pass, e.g. 1h or 90m, counted from the end of the last pass (set only); left out, no passes, only the default loop nudge (10 minutes idle)")
+	text := fs.String("text", "", "what one pass does, sent as the pass prompt (set only; left out, its handoff's --loop text, else a generic line)")
 	pos, err := parse(fs, args[1:])
 	if err != nil {
 		return err

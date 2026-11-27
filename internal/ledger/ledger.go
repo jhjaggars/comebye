@@ -100,8 +100,8 @@ type Entry struct {
 	// hub nudges a worker with a loop that goes idle with nothing running
 	// (loopnudge.go). Empty: no nudge.
 	Loop string `json:"loop,omitempty"`
-	// LoopEveryMinutes is how often a loop worker is expected to run a pass
-	// (a standing loop that sleeps between passes, such as an hourly
+	// LoopEveryMinutes is how often the hub sends a loop worker a pass (a
+	// standing loop that runs a pass on a schedule, such as an hourly
 	// steward), from `comebye loop set --every`. Zero: no schedule, the
 	// nudge's default clock (a loop that should never sit idle long).
 	LoopEveryMinutes int `json:"loop_every_minutes,omitempty"`

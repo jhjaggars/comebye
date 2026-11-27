@@ -44,14 +44,18 @@ import (
 // gone from the fleet (parked) or its user is typing in its box. It lives in
 // memory: a hub restart starts the count again.
 //
-// A standing loop (`comebye loop set NAME --every 1h`: a worker that sleeps
-// between passes, such as an hourly steward) is meant to sit idle between
-// passes, so its clock is its schedule: it counts from the end of its last
-// pass (the ledger's LastPassAt, so a hub restart does not reset it), the
-// one nudge goes out when the next pass is overdue by a margin (every plus
-// loopMargin), and if it is still idle a margin after the nudge, the
-// requester (else the coordinator) is told. One nudge, not two: a pass it
-// missed by a quarter of its interval is already late.
+// A standing loop (`comebye loop set NAME --every 1h`: a worker that runs a
+// pass on a schedule, such as an hourly steward) is not nudged: the hub is
+// its scheduler. When a pass is due the hub sends the loop's text as a
+// prompt through the shared sender path (deliverOrQueue or promptNotice,
+// behind the one typing guard), and the worker runs the pass and stops; it
+// schedules nothing of its own (no ScheduleWakeup, no cron), so a pi worker
+// can run one too. A pass is due an interval after the end of the last pass
+// (the ledger's LastPassAt, so a hub restart does not reset it; before the
+// first pass, after the hub first saw it idle). Passes never stack: none
+// goes while the worker works, is blocked or has a background task, while a
+// prompt for it waits in the queue, or within an interval of the last pass
+// sent; a pass the worker did not take is sent again an interval later.
 
 const (
 	// DefaultLoopNudgeAfter is how long a looping worker may sit idle
@@ -68,13 +72,6 @@ const (
 	loopRetry   = 30 * time.Second
 	loopSpecMax = 200
 )
-
-// loopMargin is how late a standing loop's pass may be before the hub
-// nudges it, and how long after the nudge before it tells the requester: a
-// quarter of the interval, and never less than the default idle wait.
-func (l *loopMon) loopMargin(every time.Duration) time.Duration {
-	return max(every/4, l.after)
-}
 
 // loopEveryText says how often a loop worker runs its passes, for a line.
 func loopEveryText(e ledger.Entry) string {
@@ -124,6 +121,7 @@ type loopSt struct {
 	told     bool      // the requester has been told: nothing more
 	workFrom time.Time // working since, after a nudge (zero: not working)
 	tried    time.Time // last failed attempt
+	passAt   time.Time // a standing loop: when the hub last sent a pass
 }
 
 type loopMon struct {
@@ -137,9 +135,14 @@ type loopMon struct {
 	workMax time.Duration
 }
 
+// initLoopNudge starts the loop clock. after or again zero turns the nudge
+// of a loop with no schedule off; a standing loop's passes go out anyway.
 func (s *Server) initLoopNudge(after, again time.Duration) {
-	if after <= 0 || again <= 0 || s.ledger == nil {
+	if s.ledger == nil {
 		return
+	}
+	if after <= 0 || again <= 0 {
+		after, again = 0, 0
 	}
 	s.loops = &loopMon{
 		after: after, again: again, m: map[string]*loopSt{}, workMax: min(loopWorkMax, again/2),
@@ -179,23 +182,22 @@ func loopWatched(e ledger.Entry) bool {
 
 func loopNudgeText(e ledger.Entry, n int) string {
 	lead := "Comebye (hub nudge): you are idle with nothing running, but your brief says to keep this going: "
-	if e.LoopEveryMinutes > 0 {
-		lead = "Comebye (hub nudge): your next pass is overdue (you run " + loopEveryText(e) + ") and nothing is running or scheduled that the hub can see. Your loop is: "
-		return lead + cleanLoop(e.Loop) + ". Run a pass now and schedule the next one. If you are done, file your report with `comebye report -`."
-	}
 	if n == 2 {
 		lead = "Comebye (hub nudge, second): you are still idle with nothing running, and the first nudge did not restart your loop. Your brief says to keep this going: "
 	}
 	return lead + cleanLoop(e.Loop) + ". Start it again now and keep it running between checks. If you are done, file your report with `comebye report -`."
 }
 
+// loopPassLead starts every pass the hub sends a standing loop.
+const loopPassLead = "Comebye (hub, loop pass): "
+
+// loopPassText is the prompt that starts one pass of a standing loop.
+func loopPassText(e ledger.Entry) string {
+	return loopPassLead + "your next pass is due (you run " + loopEveryText(e) + "). Run one pass now: " + cleanLoop(e.Loop) +
+		". When the pass is done, just stop: the hub sends the next one, so do not schedule a wakeup or a cron. If the loop's work is over, file your report with `comebye report -`."
+}
+
 func loopDeadText(e ledger.Entry, idle time.Duration) string {
-	if e.LoopEveryMinutes > 0 {
-		return "Comebye (hub notice): the loop worker on branch " + safeText(e.Branch) + " in " + safeText(e.RepoName) + " on " + safeText(e.Host) +
-			" (handoff " + safeText(e.ID) + ") missed its pass: it runs " + loopEveryText(e) + ", but it has been idle with nothing running for " + shortDur(idle) +
-			" since its last pass and did not start one after a nudge. Its loop is: " + cleanLoop(e.Loop) + ". " +
-			"Look at it with `comebye read " + safeText(e.ID) + "`, restart it with `comebye prompt`, or stop watching it with `comebye loop clear " + safeText(e.ID) + "`. The hub sends no more nudges for it until it runs a pass again."
-	}
 	return "Comebye (hub notice): the loop of the worker on branch " + safeText(e.Branch) + " in " + safeText(e.RepoName) + " on " + safeText(e.Host) +
 		" (handoff " + safeText(e.ID) + ") is dead: it was idle with nothing running for " + idle.Round(time.Minute).String() +
 		" and did not restart after two nudges. Its loop was: " + cleanLoop(e.Loop) + ". " +
@@ -295,13 +297,9 @@ func (s *Server) loopStep(ctx context.Context, agents []herdr.AgentInfo, now tim
 			continue
 		}
 		// Idle, nothing running.
-		every := e.LoopEvery()
 		l.mu.Lock()
 		if st == nil {
 			st = &loopSt{start: now}
-			if every > 0 && e.LastPassAt != nil && e.LastPassAt.Before(now) {
-				st.start = *e.LastPassAt // the schedule counts from the pass end
-			}
 			l.m[e.ID] = st
 		}
 		st.workFrom = time.Time{}
@@ -310,15 +308,12 @@ func (s *Server) loopStep(ctx context.Context, agents []herdr.AgentInfo, now tim
 		if cp.told || now.Sub(cp.tried) < loopRetry {
 			continue
 		}
-		if every > 0 {
-			margin := l.loopMargin(every)
-			switch {
-			case cp.nudges == 0 && now.Sub(cp.start) >= every+margin:
-				s.loopNudge(ctx, l, e, a, 1, now)
-			case cp.nudges >= 1 && now.Sub(cp.last) >= margin:
-				s.loopTell(ctx, l, e, now.Sub(cp.start), now)
-			}
+		if every := e.LoopEvery(); every > 0 {
+			s.loopPass(ctx, l, e, a, every, now)
 			continue
+		}
+		if l.after <= 0 {
+			continue // the nudge is off
 		}
 		switch {
 		case cp.nudges == 0 && now.Sub(cp.start) >= l.after:
@@ -378,6 +373,54 @@ func (s *Server) loopNudge(ctx context.Context, l *loopMon, e ledger.Entry, a he
 	l.mu.Unlock()
 }
 
+// loopPass sends a standing loop its next pass when one is due (see the
+// clock above). The send-once subject is the due time, so a restarted hub
+// does not send the same pass twice.
+func (s *Server) loopPass(ctx context.Context, l *loopMon, e ledger.Entry, a herdr.AgentInfo, every time.Duration, now time.Time) {
+	l.mu.Lock()
+	st := l.m[e.ID]
+	base := st.start
+	if e.LastPassAt != nil {
+		base = *e.LastPassAt
+	}
+	if st.passAt.After(base) {
+		base = st.passAt // sent, and no pass ended since: not before another interval
+	}
+	l.mu.Unlock()
+	due := base.Add(every)
+	if now.Before(due) {
+		return
+	}
+	if s.pq != nil && len(s.pq.list(a.ID, false)) > 0 {
+		return // a prompt for it waits in the queue: it is not free for a pass yet
+	}
+	subject := "pass/" + e.ID + "/" + itoa(int(due.Unix()))
+	if !s.sent.claim(subject, a.ID) {
+		l.mu.Lock()
+		st.passAt = now // sent already (the hub restarted): count it
+		l.mu.Unlock()
+		return
+	}
+	sctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
+	if err := l.send(sctx, a, loopPassText(e)); err != nil {
+		s.sent.release(subject)
+		if s.heldFor(err, a.ID, senderLoop) {
+			return // someone is typing in its box: the shared retry sends it once it clears
+		}
+		log.Printf("loop pass to %s (%s): %v", e.Branch, a.ID, err)
+		l.mu.Lock()
+		st.tried = now
+		l.mu.Unlock()
+		return
+	}
+	s.sent.confirm(subject)
+	log.Printf("loop pass sent to %s (%s): %s, due %s", e.Branch, e.ID, loopEveryText(e), due.UTC().Format(time.RFC3339))
+	l.mu.Lock()
+	st.passAt = now
+	l.mu.Unlock()
+}
+
 func (s *Server) loopTell(ctx context.Context, l *loopMon, e ledger.Entry, idle time.Duration, now time.Time) {
 	l.mu.Lock()
 	st := l.m[e.ID]
@@ -406,11 +449,7 @@ func (s *Server) loopTell(ctx context.Context, l *loopMon, e ledger.Entry, idle 
 		return
 	}
 	s.sent.confirm(subject)
-	if e.LoopEveryMinutes > 0 {
-		log.Printf("loop missed: %s (%s) did not run its pass after a nudge; told %s", e.Branch, e.ID, to)
-	} else {
-		log.Printf("loop dead: %s (%s) did not restart after two nudges; told %s", e.Branch, e.ID, to)
-	}
+	log.Printf("loop dead: %s (%s) did not restart after two nudges; told %s", e.Branch, e.ID, to)
 	l.mu.Lock()
 	st.told = true
 	l.mu.Unlock()

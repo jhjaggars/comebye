@@ -19,6 +19,11 @@ The checks (the steward's brief):
   plus the standing watches the config lists: maintainer comments on a PR with no
   reply, and named jobs of a branch's latest workflow run.
 
+Schedule: the steward is a standing loop (`comebye loop set NAME --every 1h
+--text "run a steward pass"`). The hub sends each pass as a prompt when it is
+due; the steward runs this script, acts, and stops. It schedules no wakeup
+or cron of its own.
+
 All times are UTC; ages come from the hub's timezone-aware fields. Repos,
 watches and thresholds live in the config (see config.example.json), never
 here: this file is public.

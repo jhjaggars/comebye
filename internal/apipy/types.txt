@@ -293,7 +293,7 @@ Entry  (server.entryView)  A ledger entry with live hints.
   purpose str                     Says what the work is for when the branch is not meant to merge: one of DisposablePurposes ("research", "plan", "poc", …).
   purpose_source str              Says where Purpose came from: "flag" (the handoff's --purpose), "branch" (inferred from the branch prefix) or "none" (no purpose passed and no prefix...
   loop str                        Says the worker is meant to keep looping (a PR watcher): a short description of what it keeps doing, from `comebye handoff --loop`.
-  loop_every_minutes int          How often a loop worker is expected to run a pass (a standing loop that sleeps between passes, such as an hourly steward), from `comebye loop set --every`.
+  loop_every_minutes int          How often the hub sends a loop worker a pass (a standing loop that runs a pass on a schedule, such as an hourly steward), from `comebye loop set --every`.
   last_pass_at time?              When a loop worker last went idle after working: the end of its last pass.
   kind_source str                 Says where Kind came from: request, setting, flag or auto (empty on entries from before host settings).
   model str                       And Thinking are what the worker was started with: the handoff's request, else its host's default (empty: the agent's own default).

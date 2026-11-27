@@ -12,13 +12,14 @@ import (
 )
 
 type loopRig struct {
-	t      *testing.T
-	s      *Server
-	mu     sync.Mutex
-	nudges []string // text of each nudge
-	told   []string // text of each message to the requester
-	id     string
-	typing bool
+	t       *testing.T
+	s       *Server
+	mu      sync.Mutex
+	nudges  []string // text of each nudge
+	told    []string // text of each message to the requester
+	id      string
+	typing  bool
+	harness string // the agent's harness; "" is claude
 }
 
 func newLoopRig(t *testing.T, loop string) *loopRig {
@@ -56,6 +57,9 @@ func (r *loopRig) at(m float64, st herdr.AgentStatus, bg ...herdr.BackgroundTask
 	now := autoT0.Add(time.Duration(m * float64(time.Minute)))
 	a := rAgent("w9:p1", "pr-watch", st, now)
 	a.Background = bg
+	if r.harness != "" {
+		a.Agent = r.harness
+	}
 	r.s.loopStep(context.Background(), []herdr.AgentInfo{a}, now)
 }
 
@@ -252,48 +256,122 @@ func TestCleanLoop(t *testing.T) {
 	}
 }
 
-// A standing loop (loop set --every 1h) sits idle between passes: the hub
-// leaves it alone until its pass is overdue by the margin (a quarter of the
-// interval, at least the 10-minute default), nudges it once, and a margin
-// later tells the requester. The clock counts from the ledger's last pass
-// end, so a hub restart does not push the nudge out.
-func TestLoopNudgeStandingLoopOnSchedule(t *testing.T) {
+// A standing loop (loop set --every 1h) is scheduled by the hub: an hour
+// after its last pass ended, the hub sends the loop's text as a prompt, once.
+// A pass the worker did not take goes again an interval after the last one,
+// and nothing goes in between.
+func TestLoopPassDueIsSentOnce(t *testing.T) {
 	r := newLoopRig(t, "run a steward pass")
 	pass := autoT0
 	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
-	r.at(1, herdr.StatusIdle) // first seen a minute after the pass ended
+	r.at(1, herdr.StatusIdle)
 	r.at(30, herdr.StatusIdle)
-	r.at(74, herdr.StatusIdle)
-	r.want(0, 0, "between passes, not overdue")
-	r.at(75, herdr.StatusIdle)
-	r.want(1, 0, "an hour plus 15 minutes after the pass ended")
-	if !strings.Contains(r.nudges[0], "overdue") || !strings.Contains(r.nudges[0], "every 1h") {
-		t.Fatalf("nudge = %q", r.nudges[0])
+	r.at(59.9, herdr.StatusIdle)
+	r.want(0, 0, "between passes")
+	r.at(60, herdr.StatusIdle)
+	r.want(1, 0, "an hour after the pass ended")
+	if p := r.nudges[0]; !strings.HasPrefix(p, loopPassLead) || !strings.Contains(p, "run a steward pass") || !strings.Contains(p, "every 1h") || !strings.Contains(p, "do not schedule") {
+		t.Fatalf("pass = %q", p)
 	}
-	r.at(89, herdr.StatusIdle)
-	r.want(1, 0, "one nudge only, then the margin")
-	r.at(90, herdr.StatusIdle)
-	r.want(1, 1, "the requester is told")
-	if !strings.Contains(r.told[0], "missed its pass") || !strings.Contains(r.told[0], "loop clear "+r.id) {
-		t.Fatalf("message = %q", r.told[0])
-	}
-	r.at(300, herdr.StatusIdle)
-	r.want(1, 1, "nothing more")
+	r.at(60.2, herdr.StatusIdle)
+	r.at(61, herdr.StatusIdle)
+	r.at(119, herdr.StatusIdle)
+	r.want(1, 0, "one pass per interval, and no missed-pass notice")
+	r.at(120, herdr.StatusIdle)
+	r.want(2, 0, "not taken: sent again an interval later")
+	// A restarted hub (a fresh clock) does not send the same pass again.
+	r.s.loops.m = map[string]*loopSt{}
+	r.at(120.5, herdr.StatusIdle)
+	r.want(2, 0, "the restarted hub counts the pass it sent")
 }
 
-func TestLoopNudgeStandingLoopPassResets(t *testing.T) {
+// A pass that is running, or one not yet delivered, is never stacked: the
+// next one counts from the end of the pass that ran.
+func TestLoopPassNotStackedOnABusyAgent(t *testing.T) {
 	r := newLoopRig(t, "run a steward pass")
 	pass := autoT0
 	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
 	r.at(10, herdr.StatusIdle)
-	r.at(60, herdr.StatusWorking) // its next pass, on time
-	next := autoT0.Add(65 * time.Minute)
-	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LastPassAt = &next })
-	r.at(65, herdr.StatusIdle)
-	r.at(139, herdr.StatusIdle)
+	r.at(60, herdr.StatusWorking) // already in a pass (it was prompted by hand)
+	r.at(65, herdr.StatusWorking)
+	r.at(66, herdr.StatusBlocked)
+	r.at(67, herdr.StatusIdle, herdr.BackgroundTask{Kind: "bash", Label: "gh pr checks --watch"})
+	r.want(0, 0, "working, blocked or with a task running: no pass")
+	end := autoT0.Add(68 * time.Minute)
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LastPassAt = &end })
+	r.at(68, herdr.StatusIdle)
+	r.at(127.9, herdr.StatusIdle)
 	r.want(0, 0, "the clock counts from the new pass end")
-	r.at(140, herdr.StatusIdle)
-	r.want(1, 0, "overdue from the new pass end")
+	// A prompt that waits in the queue for it: the pass waits too.
+	if _, _, err := r.s.pq.add(QueuedPrompt{Agent: "desk/w9:p1", Name: "pr-watch", Text: "look at PR 7", From: "comebye"}); err != nil {
+		t.Fatal(err)
+	}
+	r.at(128, herdr.StatusIdle)
+	r.want(0, 0, "a queued prompt is not delivered yet")
+	for _, p := range r.s.pq.list("desk/w9:p1", false) {
+		r.s.pq.settle(p.ID, QueueDelivered, false)
+	}
+	r.at(128.5, herdr.StatusIdle)
+	r.want(1, 0, "the queue is clear: the pass goes")
+}
+
+func TestLoopPassHeldWhileTyping(t *testing.T) {
+	r := newLoopRig(t, "run a steward pass")
+	pass := autoT0
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
+	r.at(1, herdr.StatusIdle)
+	r.typing = true
+	r.at(60, herdr.StatusIdle)
+	r.at(60.5, herdr.StatusIdle)
+	r.want(0, 0, "someone is typing in its box")
+	r.s.typing.mu.Lock()
+	h := r.s.typing.held["desk/w9:p1"]
+	noted := h != nil && h.senders[senderLoop]
+	r.s.typing.mu.Unlock()
+	if !noted {
+		t.Fatal("the hold was not noted for the shared retry")
+	}
+	r.typing = false
+	r.at(60.6, herdr.StatusIdle) // the retry runs the step at once: no failed-try gap
+	r.want(1, 0, "sent once the box clears")
+	r.at(61, herdr.StatusIdle)
+	r.want(1, 0, "once")
+}
+
+// pi has no ScheduleWakeup: the hub's pass is how it loops.
+func TestLoopPassReachesAPiWorker(t *testing.T) {
+	r := newLoopRig(t, "run a steward pass")
+	r.harness = "pi"
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes = 1 })
+	r.at(0, herdr.StatusIdle) // no pass yet: the first counts from now
+	r.at(0.9, herdr.StatusIdle)
+	r.want(0, 0, "not due")
+	r.at(1, herdr.StatusIdle)
+	r.want(1, 0, "the first pass")
+	r.at(1.2, herdr.StatusWorking) // pi works inside its turn
+	r.at(1.5, herdr.StatusWorking)
+	end := autoT0.Add(2 * time.Minute)
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LastPassAt = &end })
+	r.at(2, herdr.StatusIdle)
+	r.at(2.9, herdr.StatusIdle)
+	r.want(1, 0, "between passes")
+	r.at(3, herdr.StatusIdle)
+	r.want(2, 0, "the second pass, a minute after the first ended")
+}
+
+func TestLoopPassStopsOnLoopClear(t *testing.T) {
+	r := newLoopRig(t, "run a steward pass")
+	pass := autoT0
+	r.s.ledger.Update(r.id, func(e *ledger.Entry) { e.LoopEveryMinutes, e.LastPassAt = 60, &pass })
+	r.at(60, herdr.StatusIdle)
+	r.want(1, 0, "the first pass")
+	if w := do(r.s, "POST", "/api/handoffs/"+r.id+"/loop", agentHdr("w1:p1"), `{"clear":true}`); w.Code != 200 {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	for _, m := range []float64{120, 180, 600} {
+		r.at(m, herdr.StatusIdle)
+	}
+	r.want(1, 0, "no passes after loop clear")
 }
 
 func TestLoopSetRoute(t *testing.T) {

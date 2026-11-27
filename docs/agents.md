@@ -385,14 +385,14 @@ Working again resets the clock, as does a background task (Claude Code sessions 
 
 A loop worker's pass end is not a finish. When it goes idle after working, the ledger keeps it **running, between passes** (`last_pass_at`), sends no "finished" notice, and the sweep skips it ("a loop worker between passes"); it also holds no slot of its repository's worker cap. Only its own `comebye report` finishes it.
 
-**Standing loops.** A worker that sleeps between passes (a steward that wakes hourly with `ScheduleWakeup`) is meant to sit idle, so the 10-minute clock above would nag it every pass. Register it with its interval instead:
+**Standing loops.** A worker that runs a pass on a schedule (an hourly steward) sits idle between passes, and the hub is its scheduler. Register it with its interval:
 
 ```sh
 comebye loop set NAME --every 1h [--text "run a steward pass"]   # NAME: handoff id, worker name or branch
 comebye loop clear NAME                                          # back to an ordinary worker
 ```
 
-`loop set` works on an existing handoff (`POST /api/handoffs/{id}/loop`, `{"every":"1h","loop":"..."}` or `{"clear":true}`); a worker the ledger already read as finished by a pass end, with no report of its own, goes back to running between passes and its pending finished notice is dropped. For a standing loop the clock counts from the end of its last pass (from the ledger, so a hub restart does not reset it): when the next pass is overdue by a margin (a quarter of the interval, at least `-loop-nudge-after`; for `--every 1h`, 15 minutes) the hub types **one** nudge, and if it is still idle a margin after that, it tells whoever asked for the handoff (else a coordinator) that it missed its pass. `comebye ledger` shows `loop every 1h, last pass ended 20m ago`, and the board shows it under running as *between passes*.
+`loop set` works on an existing handoff (`POST /api/handoffs/{id}/loop`, `{"every":"1h","loop":"..."}` or `{"clear":true}`); a worker the ledger already read as finished by a pass end, with no report of its own, goes back to running between passes and its pending finished notice is dropped. A standing loop gets no nudges. When its next pass is due, an interval after its last pass ended (`last_pass_at` in the ledger, so a hub restart does not reset it; before its first pass, an interval after the hub first sees it idle), the hub sends the loop text as a prompt (`Comebye (hub, loop pass): ...`) through the same sender as every hub notice, behind the same typing guard. The worker runs one pass and stops: it does not schedule a wakeup or a cron (`ScheduleWakeup`, `CronCreate`), so a pi worker can run a standing loop too. Passes never stack: none goes while the worker is working, blocked at a dialog, has a background task, or has a prompt waiting in the queue, and none within an interval of the last pass sent; a pass it did not take goes again an interval later. Each pass claims a subject in the sent record, so it goes out once. `loop clear` stops them. A steward is set up this way: its brief says the hub sends each pass, so it runs the pass (`comebye api run tools/steward/pass.py --config ...`), acts on it, and stops. `comebye ledger` shows `loop every 1h, last pass ended 20m ago`, and the board shows it under running as *between passes*.
 
 ### Damaged repositories
 
