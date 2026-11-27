@@ -17,8 +17,8 @@ import (
 //
 //   - the branch has no merge commit since its merge base with origin/<default>,
 //     and few commits (maxSuperseded) git cherry cannot match;
-//   - each of those commits has exactly one commit on origin/<default> since
-//     that merge base with the same author (email), the same author date (with
+//   - each of those commits has exactly one commit among the recent ones of
+//     origin/<default> (maxSupersededWindow) with the same author (email), the same author date (with
 //     its zone) and the same subject. A rebase keeps all three and nothing else
 //     does by chance; two branch commits never share one landed commit;
 //   - each pre-rebase commit is no newer than its landed commit (committer
@@ -78,13 +78,39 @@ func commitIDs(ctx context.Context, dir string, args ...string) ([]commitID, boo
 // to base was rebased as a commit on base (see above), and fills r's Proof and
 // Superseded when so.
 func supersededOn(ctx context.Context, dir, base, tip string, r *staleBranchResult) bool {
+	pairs, ok := rebasedOnto(ctx, dir, base, tip)
+	if !ok {
+		return false
+	}
+	r.Superseded = pairs
+	r.Proof = fmt.Sprintf("it is superseded by its rebase on %s: %s (same author, author date and subject, no newer than the land; git range-diff pairs them)",
+		r.Ref, rebasedText(pairs))
+	return true
+}
+
+// rebasedText names the pairs: "abc1234 was rebased as def5678, …".
+func rebasedText(pairs []landedCommit) string {
+	var parts []string
+	for _, p := range pairs[:min(len(pairs), 3)] {
+		parts = append(parts, short(p.SHA)+" was rebased as "+short(p.As))
+	}
+	if len(pairs) > len(parts) {
+		parts = append(parts, fmt.Sprintf("%d more", len(pairs)-len(parts)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// rebasedOnto pairs each commit of tip that git cherry cannot match to base
+// with the one commit on base it was rebased as (the rule above); ok is false
+// when any of them has no such commit, or there are none.
+func rebasedOnto(ctx context.Context, dir, base, tip string) (pairs []landedCommit, ok bool) {
 	mb, err := runGit(ctx, dir, "merge-base", "--end-of-options", base, tip)
 	if err != nil || mb == "" {
-		return false
+		return nil, false
 	}
 	cherry, err := runGit(ctx, dir, "cherry", "--end-of-options", base, tip, mb)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	var plus []string
 	for _, l := range strings.Split(cherry, "\n") {
@@ -93,15 +119,17 @@ func supersededOn(ctx context.Context, dir, base, tip string, r *staleBranchResu
 		}
 	}
 	if len(plus) == 0 || len(plus) > maxSuperseded {
-		return false
+		return nil, false
 	}
 	mine, ok := commitIDs(ctx, dir, append([]string{"--no-walk=unsorted", "--end-of-options"}, plus...)...)
 	if !ok || len(mine) != len(plus) {
-		return false
+		return nil, false
 	}
-	landed, ok := commitIDs(ctx, dir, "--no-merges", "-n", strconv.Itoa(maxSupersededWindow), "--end-of-options", mb+".."+base)
+	// The recent commits of base, not only those since the merge base: a
+	// branch that merged base after the land has its merge base past them.
+	landed, ok := commitIDs(ctx, dir, "--no-merges", "-n", strconv.Itoa(maxSupersededWindow), "--end-of-options", base)
 	if !ok {
-		return false
+		return nil, false
 	}
 	byKey := map[string][]commitID{}
 	for _, c := range landed {
@@ -110,31 +138,60 @@ func supersededOn(ctx context.Context, dir, base, tip string, r *staleBranchResu
 		}
 	}
 	used := map[string]bool{}
-	var pairs []landedCommit
 	for _, c := range mine {
 		got := byKey[c.key]
 		if c.key == "" || len(got) != 1 || used[got[0].sha] || c.ct > got[0].ct {
-			return false
+			return nil, false
 		}
 		m := got[0]
 		out, err := runGit(ctx, dir, "range-diff", "--no-color", c.sha+"^!", m.sha+"^!")
 		if err != nil || !rangeDiffPairRe.MatchString(out) {
-			return false
+			return nil, false
 		}
 		used[m.sha] = true
 		pairs = append(pairs, landedCommit{SHA: c.sha, As: m.sha})
 	}
-	var parts []string
-	for _, p := range pairs[:min(len(pairs), 3)] {
-		parts = append(parts, short(p.SHA)+" was rebased as "+short(p.As))
+	return pairs, true
+}
+
+// maxMergesChecked bounds the merge commits cleanMerges looks at.
+const maxMergesChecked = 20
+
+// cleanMerges: every merge commit of tip that base lacks is a plain merge, with
+// nothing in it that its parents did not have (git show --remerge-diff prints
+// nothing: no conflict resolved by hand, no change slipped in). Such a merge
+// carries no work of its own. No merge at all is clean too.
+func cleanMerges(ctx context.Context, dir, base, tip string) bool {
+	out, err := runGit(ctx, dir, "rev-list", "--merges", "--end-of-options", base+".."+tip)
+	if err != nil {
+		return false
 	}
-	if len(pairs) > len(parts) {
-		parts = append(parts, fmt.Sprintf("%d more", len(pairs)-len(parts)))
+	merges := strings.Fields(out)
+	if len(merges) > maxMergesChecked {
+		return false
 	}
-	r.Superseded = pairs
-	r.Proof = fmt.Sprintf("it is superseded by its rebase on %s: %s (same author, author date and subject, no newer than the land; git range-diff pairs them)",
-		r.Ref, strings.Join(parts, ", "))
+	for _, m := range merges {
+		d, err := runGit(ctx, dir, "show", "--no-color", "--remerge-diff", "--format=", "--end-of-options", m)
+		if err != nil || strings.TrimSpace(d) != "" {
+			return false
+		}
+	}
 	return true
+}
+
+// rebasedProof says how a session's own commits that git cherry cannot match
+// to base are in it anyway: each was rebased onto base (rebasedOnto) and every
+// merge on the branch is clean. "" when that is not shown.
+func rebasedProof(ctx context.Context, dir, base, baseName, tip string) string {
+	if tip == "" || base == "" {
+		return ""
+	}
+	pairs, ok := rebasedOnto(ctx, dir, base, tip)
+	if !ok || !cleanMerges(ctx, dir, base, tip) {
+		return ""
+	}
+	return fmt.Sprintf("%s %s rebased onto %s: %s (same author, author date and subject; git range-diff pairs them)",
+		itoa(len(pairs)), plural(len(pairs), "commit was", "commits were"), baseName, rebasedText(pairs))
 }
 
 // backupRefPrefix holds the tips of remote branches the hub deleted.

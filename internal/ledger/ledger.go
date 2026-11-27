@@ -248,6 +248,10 @@ type AutoRemoval struct {
 	// ParkID is the park record the host left (Recently closed), so the
 	// session can be resumed; "" when none was made.
 	ParkID string `json:"park_id,omitempty"`
+	// Followups are what the session's answer left for the user (its
+	// "followup" items, and the to-dos that stay in the To do list): they did
+	// not keep the session, so the removal keeps them.
+	Followups []string `json:"followups,omitempty"`
 	// UndoneAt is set once the user undid it (a worker was started on the
 	// branch again); UndoNote says how that went.
 	UndoneAt *time.Time `json:"undone_at,omitempty"`

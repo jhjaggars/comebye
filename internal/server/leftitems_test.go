@@ -160,7 +160,7 @@ func TestRecheckPathIssueAndFollowup(t *testing.T) {
 		{ledger.AskItem{Type: "issue", Repo: "o/r", Number: 78}, itemResolved, "was closed 1 h ago"},
 		{ledger.AskItem{Type: "issue", Repo: "o/r", Number: 79}, itemOpen, "is still open"},
 		{ledger.AskItem{Type: "issue", Number: 79}, itemUnchecked, "names no repository"},
-		{ledger.AskItem{Type: "followup", Text: "post the comment"}, itemUnchecked, "yours to do"},
+		{ledger.AskItem{Type: "followup", Text: "post the comment"}, itemResolved, "yours to do, not the session's: it is kept on the removal"},
 		{ledger.AskItem{Type: "branch", Remote: "upstream", Branch: "feat/x"}, itemUnchecked, "only at origin"},
 	} {
 		st, now, _ := s.recheck(context.Background(), it, c.item)
@@ -238,31 +238,98 @@ func TestSweepSettlesARetypedPathAndBranch(t *testing.T) {
 	}
 }
 
-// Somebody else's remote branch is only looked at: gone is resolved, there is
-// left, and it is never deleted.
-func TestBranchItemForAnotherBranch(t *testing.T) {
+// A branch the session listed as its own beside its own branch (the copy it
+// pushed to land from) is held to the own branch's proof: fully in main with no
+// open PR, the sweep deletes it, keeping a backup ref; a listed branch that was
+// never pushed is resolved; and the session's answer settles.
+func TestListedExtraBranchFullyInMainIsDeleted(t *testing.T) {
 	f := newGoneFix(t, true, "")
 	s := f.s
-	git(t, f.r.repo, "push", "-q", "origin", "main:refs/heads/feat/other")
+	git(t, f.r.repo, "push", "-q", "origin", "main:refs/heads/w-land")
+	tip := git(t, f.r.repo, "rev-parse", "main")
 	items := []ledger.AskItem{
-		{Type: ledger.ItemBranch, Remote: "origin", Branch: "feat/other"},
-		{Type: ledger.ItemBranch, Remote: "origin", Branch: "feat/never-pushed"},
+		{Type: ledger.ItemBranch, Remote: "origin", Branch: "w-land", Text: "the rebased series I landed from; all in main"},
+		{Type: ledger.ItemBranch, Remote: "origin", Branch: "w-never-pushed"},
 	}
 	if _, err := s.ledger.UpdateAsk(f.m.AgentID, f.m.At, func(k *ledger.Ask) bool { k.Items = items; return true }); err != nil {
 		t.Fatal(err)
 	}
 	ar := reviewOf(t, s, goneID).AskReview
-	if ar == nil || len(ar.Items) != 2 {
+	if ar == nil || len(ar.Items) != 2 || !ar.StaleOnly {
+		t.Fatalf("review = %+v", ar)
+	}
+	if v := ar.Items[0]; v.State != itemOpen || !v.Stale || !strings.Contains(v.Now, "safe to delete") {
+		t.Errorf("listed = %+v", v)
+	}
+	if v := ar.Items[1]; v.State != itemResolved || !strings.Contains(v.Now, "no longer has") {
+		t.Errorf("never pushed = %+v", v)
+	}
+	n, deleted := s.leftovers(ctx(), time.Now(), true)
+	if n != 1 || len(deleted) != 1 || deleted[0].Branch != "w-land" || deleted[0].Tip != tip || deleted[0].Backup != "refs/comebye/backup/w-land" {
+		t.Fatalf("settled %d deleted %+v", n, deleted)
+	}
+	if remoteHas(t, f.r, "w-land") {
+		t.Fatal("the proven listed branch is still on origin")
+	}
+	if got := git(t, f.r.repo, "rev-parse", "refs/comebye/backup/w-land"); got != tip {
+		t.Fatalf("backup = %s, want %s", got, tip)
+	}
+	if a := f.ask(t); a.State != ledger.AskSafe || a.Loop == nil || !strings.Contains(a.Loop.Text, "deleted origin/w-land") {
+		t.Fatalf("ask = %+v", a)
+	}
+	var audited bool
+	for _, a := range s.ledger.AuditLog("") {
+		audited = audited || (a.Action == "worker.stale_branch_delete" && strings.Contains(a.Detail, "origin/w-land"))
+	}
+	if !audited {
+		t.Fatal("the deletion was not audited")
+	}
+}
+
+// A listed branch is never deleted when it has a commit main lacks, when another
+// session on the ledger works on a branch of that name, or when the hub re-typed
+// the item from the session's words (it did not list it as a branch itself).
+func TestListedBranchTheHubCannotProveIsKept(t *testing.T) {
+	f := newGoneFix(t, true, "")
+	s := f.s
+	// feat/other: somebody else's (a running session works on it), all in main.
+	git(t, f.r.repo, "push", "-q", "origin", "main:refs/heads/feat/other")
+	if _, err := s.ledger.Add(ledger.Entry{Host: "desk", Repo: f.r.repo, RepoName: "proj", Branch: "feat/other", AgentID: "desk/w7:p1", PaneID: "w7:p1", AgentName: "other", Status: ledger.Running}); err != nil {
+		t.Fatal(err)
+	}
+	// w-extra: listed, with a commit main lacks.
+	git(t, f.r.repo, "branch", "w-extra", "main")
+	git(t, f.r.repo, "checkout", "-q", "w-extra")
+	f.r.edit(t, f.r.repo, 20, "work only here")
+	git(t, f.r.repo, "push", "-q", "origin", "w-extra")
+	git(t, f.r.repo, "checkout", "-q", "main")
+	items := []ledger.AskItem{
+		{Type: ledger.ItemBranch, Remote: "origin", Branch: "feat/other"},
+		{Type: ledger.ItemBranch, Remote: "origin", Branch: "w-extra"},
+	}
+	if _, err := s.ledger.UpdateAsk(f.m.AgentID, f.m.At, func(k *ledger.Ask) bool { k.Items = items; return true }); err != nil {
+		t.Fatal(err)
+	}
+	ar := reviewOf(t, s, goneID).AskReview
+	if ar == nil || len(ar.Items) != 2 || ar.StaleOnly {
 		t.Fatalf("review = %+v", ar)
 	}
 	if v := ar.Items[0]; v.State != itemOpen || v.Stale || !strings.Contains(v.Now, "still there") {
 		t.Errorf("other = %+v", v)
 	}
-	if v := ar.Items[1]; v.State != itemResolved || !strings.Contains(v.Now, "no longer has") {
-		t.Errorf("never pushed = %+v", v)
+	if v := ar.Items[1]; v.State != itemOpen || v.Stale || !strings.Contains(v.Now, "is kept") {
+		t.Errorf("unmerged = %+v", v)
 	}
-	if _, deleted := s.leftovers(ctx(), time.Now(), true); len(deleted) != 0 || !remoteHas(t, f.r, "feat/other") {
+	if _, deleted := s.leftovers(ctx(), time.Now(), true); len(deleted) != 0 || !remoteHas(t, f.r, "feat/other") || !remoteHas(t, f.r, "w-extra") {
 		t.Fatalf("deleted %+v", deleted)
+	}
+	// Re-typed from words: not listed as a branch by the session.
+	it := &removal{EntryID: f.e.ID, Branch: "w"}
+	if s.listedOwn(it, ledger.AskItem{Type: ledger.ItemBranch, Branch: "w-x", Was: ledger.ItemCleanup}, "w-x") {
+		t.Error("a re-typed item counts as listed")
+	}
+	if s.listedOwn(it, ledger.AskItem{Type: ledger.ItemBranch, Branch: "main"}, "main") {
+		t.Error("the default branch counts as listed")
 	}
 }
 

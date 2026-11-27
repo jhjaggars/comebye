@@ -20,8 +20,10 @@ import (
 // origin's default branch, deleting it loses nothing, and the hub can say so
 // from git, not from what an agent said:
 //
-//   - the branch is the session's own (its name on the ledger entry), never the
-//     default branch and never anyone else's;
+//   - the branch is the session's own (its name on the ledger entry), or one the
+//     session itself listed as its own in its answer (a "branch" item: the
+//     feat/x-land or feat/x-rebased copy it pushed to land from) that no other
+//     session on the ledger works on; never the default branch;
 //   - after a fetch, `git cherry origin/<default> <tip>` shows no "+" line and
 //     the branch has no merge commit (or its tree is identical to a commit on
 //     origin/<default>);
@@ -43,8 +45,12 @@ type staleBranchBody struct {
 	Path   string `json:"path"` // the session's worktree (may be gone)
 	Repo   string `json:"repo,omitempty"`
 	Branch string `json:"branch"` // the remote branch
-	Own    string `json:"own"`    // the session's own branch: Branch must be it
-	Delete bool   `json:"delete,omitempty"`
+	Own    string `json:"own"`    // the session's own branch: Branch must be it, unless Listed
+	// Listed: Branch is not Own, but the session listed it as its own (a
+	// "branch" item of its answer) and the hub found no other session on it.
+	// It is held to the same proof. An older host ignores it and refuses.
+	Listed bool `json:"listed,omitempty"`
+	Delete bool `json:"delete,omitempty"`
 }
 
 // Stale branch states.
@@ -103,6 +109,12 @@ var shaOnlyRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // checkStaleBranch decides, in dir (a checkout of the repository), whether the
 // remote branch may be deleted without losing anything. del: delete it when so.
 func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) staleBranchResult {
+	return checkBranch(ctx, dir, branch, own, false, del)
+}
+
+// checkBranch is checkStaleBranch for a branch that is the session's own, or
+// (listed) one it listed as its own.
+func checkBranch(ctx context.Context, dir, branch, own string, listed, del bool) staleBranchResult {
 	refuse := func(why string) staleBranchResult { return staleBranchResult{State: staleRefused, Why: why} }
 	unknown := func(why string) staleBranchResult { return staleBranchResult{State: staleUnknown, Why: why} }
 	switch {
@@ -110,7 +122,7 @@ func checkStaleBranch(ctx context.Context, dir, branch, own string, del bool) st
 		return refuse("not a branch name")
 	case protectedBranches[branch]:
 		return refuse("a default branch is never deleted")
-	case own == "" || branch != own:
+	case own == "" || (branch != own && !listed):
 		if del || own == "" {
 			return refuse("not the session's own branch")
 		}
@@ -265,7 +277,7 @@ func (s *Server) staleBranchLocal(ctx context.Context, b staleBranchBody) (*stal
 	} else {
 		return nil, lerr
 	}
-	r := checkStaleBranch(ctx, dir, b.Branch, b.Own, b.Delete)
+	r := checkBranch(ctx, dir, b.Branch, b.Own, b.Listed, b.Delete)
 	return &r, nil
 }
 

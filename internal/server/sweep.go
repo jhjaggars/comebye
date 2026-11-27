@@ -454,6 +454,7 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 	items := make([]sweepItem, len(cands))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
+	gate := s.newHostGate()
 	for i, c := range cands {
 		wg.Add(1)
 		go func() {
@@ -461,6 +462,10 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			e := c.e
+			if why := gate.down(e.Host); why != "" {
+				items[i] = sweepItem{ID: e.AgentID, EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, Class: SweepNeedsLook, Reason: why, AdHoc: c.adHoc}
+				return
+			}
 			if c.agent != nil {
 				pane := orDefault(c.agent.PaneID, e.PaneID)
 				if why := sweepHold(e, c.agent, s.pendingTasks(ctx, e.Host, e.AgentID, pane), idle, time.Now()); why != "" {
@@ -470,10 +475,16 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 			}
 			// The host's checks fetch origin first, so a branch merged
 			// upstream since the last fetch is seen as merged.
-			chk, lerr := s.checksOn(ctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true}.forEntry(e))
+			hctx, cancel := gate.ctx(ctx, e.Host)
+			chk, lerr := s.checksOn(hctx, e.Host, e.Worktree, e.Branch, e.Base, checkOpts{Detail: true}.forEntry(e))
+			cancel()
 			msg := ""
 			if lerr != nil {
 				msg = lerr.message
+				if why := gate.failed(e.Host, lerr); why != "" {
+					items[i] = sweepItem{ID: e.AgentID, EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, Class: SweepNeedsLook, Reason: why, AdHoc: c.adHoc}
+					return
+				}
 			}
 			class, reason := sweepClassify(e, c.agent, chk, msg)
 			items[i] = sweepItem{ID: e.AgentID, EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, Class: class, Reason: reason, AdHoc: c.adHoc}
@@ -519,6 +530,65 @@ func (s *Server) sweep(ctx context.Context, b sweepBody, self, by string) sweepR
 		res.Notified, res.NotifyError = s.notifySweep(ctx, res)
 	}
 	return res
+}
+
+// sweepHostWait is how long a sweep waits for one peer's checks. A host that
+// does not answer in it, or whose connection is down, is reported as "host
+// unreachable" and the sweep's other checks on it are skipped, so one stopped
+// machine does not hold up the whole sweep.
+var sweepHostWait = 30 * time.Second
+
+// hostUnreachable starts the reason a sweep gives for a host it could not reach.
+const hostUnreachable = "host unreachable"
+
+// hostGate remembers, for one sweep, the peers that could not be reached.
+type hostGate struct {
+	s    *Server
+	mu   sync.Mutex
+	gone map[string]string
+}
+
+func (s *Server) newHostGate() *hostGate { return &hostGate{s: s, gone: map[string]string{}} }
+
+// down says why host is not worth asking in this sweep ("" when it is): its
+// connection is down, or an earlier call of this sweep found it unreachable.
+func (g *hostGate) down(host string) string {
+	if host == "" || host == g.s.fleet.LocalName() {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if why, ok := g.gone[host]; ok {
+		return why
+	}
+	if d := g.s.fleet.PeerDown(host); d != "" {
+		g.gone[host] = hostUnreachable + ": " + d + "; not checked"
+		return g.gone[host]
+	}
+	return ""
+}
+
+// ctx bounds one call to a peer by sweepHostWait (the local host by ctx alone).
+func (g *hostGate) ctx(ctx context.Context, host string) (context.Context, context.CancelFunc) {
+	if host == "" || host == g.s.fleet.LocalName() {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, sweepHostWait)
+}
+
+// failed records a peer call that did not reach the host, and says so; ""
+// when the host answered (with an error of its own, which is not this).
+func (g *hostGate) failed(host string, lerr *launchError) string {
+	if lerr == nil || lerr.code != "host_unreachable" || host == g.s.fleet.LocalName() {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	why := hostUnreachable + ": " + lerr.message + "; not checked"
+	if _, ok := g.gone[host]; !ok {
+		g.gone[host] = why
+	}
+	return why
 }
 
 // sweepSummary is the text a coordinator gets.

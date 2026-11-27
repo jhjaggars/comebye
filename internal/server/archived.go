@@ -172,11 +172,17 @@ func leftOnlyOwed(ar *askReview) ([]ledger.AskItem, bool) {
 	}
 	var left []ledger.AskItem
 	for _, v := range ar.Items {
+		if v.Type == ledger.ItemFollowup {
+			// The user's to do: it holds nothing (recheck), but the archive
+			// carries it so it is not lost.
+			left = append(left, v.AskItem)
+			continue
+		}
 		if v.State == itemResolved {
 			continue
 		}
 		switch {
-		case v.Type == ledger.ItemCleanup, v.Type == ledger.ItemOther, v.Type == ledger.ItemFollowup:
+		case v.Type == ledger.ItemCleanup, v.Type == ledger.ItemOther:
 			left = append(left, v.AskItem)
 		case v.Type == ledger.ItemPath && v.State == itemOpen && isScratch(v.AskItem):
 			// Looked at and still there: a re-check will not settle it, and

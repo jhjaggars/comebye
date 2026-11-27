@@ -523,6 +523,13 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 			if item.Type == ledger.ItemDecision {
 				return itemOpen, "is answered: the session can go on", nil
 			}
+		}
+		if item.Type == ledger.ItemTodo && !todoNeedsSession(t, it.ID) {
+			// The to-do is the user's, and it stays in their list: the
+			// session is not needed to keep it.
+			return itemResolved, "stays in your To do list (" + t.State + "): the session is not needed for it", nil
+		}
+		if t.State == TodoAnswered {
 			return itemOpen, "is answered but not yet done", nil
 		}
 		return itemOpen, "is still open", nil
@@ -608,7 +615,9 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 		}
 		return unchecked(orDefault(r.Detail, "gh said "+r.State))
 	case ledger.ItemFollowup:
-		return itemUnchecked, "is yours to do, not the session's", nil
+		// The user's to do, not the session's: it does not keep the session,
+		// and the removal records it (followupsOf) so it is not lost.
+		return itemResolved, "is yours to do, not the session's: it is kept on the removal", nil
 	}
 	if item.Type == ledger.ItemCleanup || item.Type == ledger.ItemOther {
 		// "git branch -d my-branch" is not work left: the branch is checked
@@ -627,6 +636,13 @@ func (s *Server) recheck(ctx context.Context, it *removal, item ledger.AskItem) 
 		return unchecked("the session can do this itself")
 	}
 	return unchecked("free text")
+}
+
+// todoNeedsSession: an open to-do whose answer goes back to the session that
+// waits on it (a decision or an action the session acts on). A follow-up, or a
+// to-do that waits on no session or on another, is the user's alone.
+func todoNeedsSession(t Todo, agentID string) bool {
+	return t.active() && t.Kind != "followup" && t.Waiting != nil && t.Waiting.ID == agentID
 }
 
 // isCleanup: an item the session can do itself when told to go ahead (one
@@ -831,10 +847,11 @@ func itemText(v itemView) string {
 	return s
 }
 
-// staleProbe asks the session's host about one remote branch; del deletes it
-// when the proof holds there. A check is cached for a minute, a delete never.
-func (s *Server) staleProbe(ctx context.Context, it *removal, branch string, del bool) (*staleBranchResult, string) {
-	b := staleBranchBody{Path: it.Worktree, Repo: it.opts.Repo, Branch: branch, Own: it.Branch, Delete: del}
+// staleProbe asks the session's host about one remote branch (the one item
+// names); del deletes it when the proof holds there. A check is cached for a
+// minute, a delete never.
+func (s *Server) staleProbe(ctx context.Context, it *removal, item ledger.AskItem, branch string, del bool) (*staleBranchResult, string) {
+	b := staleBranchBody{Path: it.Worktree, Repo: it.opts.Repo, Branch: branch, Own: it.Branch, Listed: s.listedOwn(it, item, branch), Delete: del}
 	ask := func() any {
 		r, lerr := s.staleBranchOn(ctx, it.Host, b)
 		if lerr != nil {
@@ -846,8 +863,36 @@ func (s *Server) staleProbe(ctx context.Context, it *removal, branch string, del
 		r, _ := ask().(*staleBranchResult)
 		return r, ""
 	}
-	r, _ := s.cached("stale|"+it.Host+"|"+it.Worktree+"|"+branch, ask).(*staleBranchResult)
+	key := "stale|" + it.Host + "|" + it.Worktree + "|" + branch
+	if b.Listed {
+		key += "|listed"
+	}
+	r, _ := s.cached(key, ask).(*staleBranchResult)
 	return r, ""
+}
+
+// listedOwn: branch is not the session's own branch, but the session itself
+// listed it as one of its own in its answer (a "branch" item it typed, not one
+// the hub re-typed from its words: the feat/x-land or feat/x-rebased copy it
+// pushed to land from), and no other session on the ledger works on a branch
+// of that name. The host then holds it to the own branch's proof (every commit
+// in the default branch, no open pull request) before anything is deleted.
+func (s *Server) listedOwn(it *removal, item ledger.AskItem, branch string) bool {
+	if item.Type != ledger.ItemBranch || item.Was != "" || branch == "" || branch == it.Branch || it.Branch == "" || protectedBranches[branch] {
+		return false
+	}
+	if s.ledger == nil {
+		return false
+	}
+	for _, e := range s.ledger.Entries() {
+		if e.ID == it.EntryID || e.Status == ledger.Removed || e.Status == ledger.Lost {
+			continue
+		}
+		if e.Branch == branch {
+			return false
+		}
+	}
+	return true
 }
 
 // staleTarget is the remote branch an item is about, when the hub can check
@@ -876,7 +921,7 @@ func (s *Server) staleCheck(ctx context.Context, it *removal, v *itemView) {
 	if !ok {
 		return
 	}
-	r, _ := s.staleProbe(ctx, it, branch, false)
+	r, _ := s.staleProbe(ctx, it, v.AskItem, branch, false)
 	if r == nil {
 		return
 	}

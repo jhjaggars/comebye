@@ -88,7 +88,8 @@ func TestRecheckResolutionPerType(t *testing.T) {
 	if at := check(ledger.AskItem{Type: "todo", ID: done.ID}, itemResolved, "is done"); at == nil {
 		t.Error("a closed to-do has no time")
 	}
-	check(ledger.AskItem{Type: "todo", ID: open.ID}, itemOpen, "still open")
+	// An open to-do is the user's and stays in their list: it does not keep the session.
+	check(ledger.AskItem{Type: "todo", ID: open.ID}, itemResolved, "stays in your To do list")
 	check(ledger.AskItem{Type: "todo", ID: "t0000000000"}, itemUnchecked, "not in this hub")
 	// Resources: a pid and a k3d cluster are looked at; anything else is not.
 	check(ledger.AskItem{Type: "resource", Kind: "pid", Name: "200"}, itemResolved, "no longer running")

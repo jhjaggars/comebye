@@ -313,11 +313,14 @@ with the summary, so it can judge the "needs a look" ones.
 the hub without your tap, so the review shows only the ones that need you.
 All of these must hold, rechecked at removal time: its work is in the base
 (every commit has an equivalent on `origin/<default branch>` after a fetch
-that worked, or it has no commits, or its pull request was merged; the
-checkout's own `main` is not trusted); nothing is unpushed and the worktree
+that worked, or it has no commits, or its pull request was merged, or each
+commit was rebased onto it under another SHA with no merge carrying work of its
+own, see [lifecycle](lifecycle.md#the-scheduled-sweep); the checkout's own
+`main` is not trusted); nothing is unpushed and the worktree
 has no uncommitted or untracked files (ignored files do not count); the
 session answered SAFE (not "did not answer", UNSAFE or unchecked); no open
-to-do waits on it and it has no queued prompts; it is not a coordinator and
+to-do waits on it for an answer (a follow-up to-do is the user's and does not
+count) and it has no queued prompts; it is not a coordinator and
 is not working, blocked or running a background task. Anything else stays in
 the review as before. The removal keeps the worktree whenever anything is
 unmerged; when the worktree goes, its local branch goes with it (every commit

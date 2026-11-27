@@ -295,6 +295,7 @@ class AutoRemoval(Record):
         "worktree_removed": ("worktree_removed", "bool"),
         "kept": ("kept", "str"),
         "park_id": ("park_id", "str"),
+        "followups": ("followups", "[str]"),
         "undone_at": ("undone_at", "time?"),
         "undo_note": ("undo_note", "str"),
     }
@@ -314,6 +315,7 @@ class AutoRemovedView(Record):
         "landed": ("landed", "str"),
         "worktree_removed": ("worktree_removed", "bool"),
         "kept": ("kept", "str"),
+        "followups": ("followups", "[str]"),
         "undone_at": ("undone_at", "time?"),
         "undo_note": ("undo_note", "str"),
         "can_undo": ("can_undo", "bool"),
@@ -691,6 +693,7 @@ class OriginCheck(Record):
         "fetched": ("fetched", "bool"),
         "unmerged_commits": ("unmerged_commits", "int"),
         "merged_pr": ("merged_pr", "int"),
+        "rebased": ("rebased", "str"),
         "why": ("why", "str"),
         "records": ("records", "bool"),
     }

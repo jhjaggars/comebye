@@ -226,6 +226,25 @@ func (f *Fleet) HasPeers() bool {
 // HasPeer reports whether name is a configured peer.
 func (f *Fleet) HasPeer(name string) bool { return f.lookup(name) != nil }
 
+// PeerDown says why the peer name cannot be reached now: its connection is
+// down (with the last error). "" when it is up, still connecting, or not a
+// peer of this instance (the local host included).
+func (f *Fleet) PeerDown(name string) string {
+	p := f.lookup(name)
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.status != StatusDown {
+		return ""
+	}
+	if p.lastErr == "" {
+		return name + " is down"
+	}
+	return name + " is down: " + p.lastErr
+}
+
 // Hub is the broadcast hub for browser SSE clients: merged "agents"
 // snapshots (with host status) and the local manager's "resync" events.
 func (f *Fleet) Hub() *state.Hub { return f.hub }

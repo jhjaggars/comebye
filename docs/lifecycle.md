@@ -104,9 +104,12 @@ minutes of a hand-run sweep, because nobody is watching this one.
   when the hub itself proves there is nothing to lose: not a coordinator, not a
   proposal to discard work, marked at least 20 minutes ago, and, reviewed again
   on its host right before the removal (not from a cached result), a clean
-  tree, every commit in `origin/<default>` (or its pull request merged) and
+  tree, every commit in `origin/<default>` (or its pull request merged, or
+  each commit **rebased onto it under another SHA**, below) and
   nothing unpushed. A session whose agent is still there also needs its
-  NOTHING LEFT answer, as the automatic removal does; one whose agent is gone
+  NOTHING LEFT answer, as the automatic removal does (a NOTHING LEFT the hub
+  settled itself, below, is not held to the answer's one-hour age limit: it is
+  the hub's proof, not the session's memory, and a re-ask could not add to it); one whose agent is gone
   has nobody to ask, so the proof decides, and a LEFT answer that is not fully
   settled keeps it. The removal is the ordinary one: the session, its worktree
   and its local branch go, the worktree is kept whenever anything is not provably
@@ -125,6 +128,22 @@ minutes of a hand-run sweep, because nobody is watching this one.
   `worker.stale_branch_delete`).
 - A second run does nothing: a removed session is no longer marked, a deleted
   branch is gone, and a run that does nothing writes nothing to the log.
+- **Landed under another SHA.** A commit `git cherry` cannot match (a rebase
+  changed its patch) still counts as in `origin/<default>` when it pairs with
+  exactly one commit there by author email, author date and subject, no newer
+  than that commit, and `git range-diff` pairs the two (the superseded-branch
+  rule below), and every merge commit on the branch is a plain one (`git show
+  --remerge-diff` prints nothing: no conflict resolved by hand, nothing slipped
+  in). The checks then say "N commits were rebased onto origin/main: abc1234 was
+  rebased as def5678", the sweep marks the session, and the automatic removal's
+  proof holds. A merge with a change of its own keeps the session.
+- **An unreachable host** does not hold up a sweep. A peer whose connection is
+  down is not asked at all, and a call to a peer that does not answer in 30
+  seconds is given up; the sweep lists each of that host's sessions under
+  "needs a look" as `host unreachable: …; not checked`, asks that host nothing
+  more in the same run, and marks nothing there. The sweep loop's clean-up, the
+  automatic removal and the leftovers pass skip a down peer's sessions until it
+  is back.
 - A worker the sweep marks as "Gone" (its host left the fleet) is cleared with
   `-auto-remove` on (nothing on any host is touched), audited and logged as an
   `autoremove` event.
@@ -135,13 +154,19 @@ minutes of a hand-run sweep, because nobody is watching this one.
   - Items that have resolved since (a PR merged, a to-do closed, a branch gone
     from origin) are re-checked; when all have, the answer becomes NOTHING LEFT
     and the card says "Sweep · when: what it found".
-  - An item that is "delete the remote copy of my own branch" is **done** when
+  - An item that is "delete the remote copy of my own branch", or a `branch`
+    item for **another branch the session listed as its own** (the
+    `feat/x-land` or `feat/x-rebased` copy it pushed to land from), is **done** when
     the hub proves it is safe on the host, not on the agent's word: after a
     fetch, `git cherry origin/<default> <tip>` shows no `+` and the branch has
     no merge commit (or its tree equals a commit on `origin/<default>`, or it is
     **superseded by its own rebase**, below), the branch is the session's own
-    (never the default branch, never anyone else's), and `gh` shows no open pull
-    request from it (gh failing is "no proof").
+    or one it listed as such (never the default branch; a listed branch only
+    when the session typed it as a `branch` item itself, not one the hub
+    re-typed from its words, and when no other session on the ledger works on a
+    branch of that name), and `gh` shows no open pull request from it (gh
+    failing is "no proof"). An older host that does not know listed branches
+    refuses them, and they stay.
     With "Clean up automatically" on, the loop deletes it itself, from the host,
     with its own git credentials and a lease on the verified tip, and logs the
     branch and its tip SHA. First it keeps that tip under
@@ -170,6 +195,10 @@ minutes of a hand-run sweep, because nobody is watching this one.
     hub's own host), is **done by the removal itself**: removing the worktree
     deletes that directory (`cleanRemoved`). It counts as resolved, so the
     session can go; naming any other path keeps the item open.
+  - A `todo` item whose to-do is still open, and a `followup` item, do not
+    keep the session (see the items table): the to-do stays in the user's To do
+    list, and the removal records both (`auto_removed.followups` on the entry,
+    the audit entry, and a count on the coordinator's line).
   - Any other leftover (a process to stop, a PR to close, a backup branch the
     hub cannot prove is in main) is left alone: the agent that could do it is
     gone, and doing it from here would write outside the session's own branch and
@@ -761,7 +790,7 @@ is built, with the results cached for a minute:
 | item | looked at | resolved when |
 |---|---|---|
 | `pr` | `gh pr view` on the session's host (a peer is asked through its `probe` host op) | merged or closed |
-| `todo` | the hub's own to-do list | done or dropped |
+| `todo` | the hub's own to-do list | done or dropped; or still open and not a decision or action waiting on this session for its answer: it stays in the user's To do list, so the session is not needed for it |
 | `decision` | the same to-do | done or dropped (answered: the session can go on, still open) |
 | `cleanup` | nothing: the session does it | never by itself; it resolves when the session is asked again |
 | `commits` | the branch checks (`Unmerged`, `Equivalent`, pushed) | all in the base, squash-merged, or all on a remote |
@@ -769,7 +798,7 @@ is built, with the results cached for a minute:
 | `path` | `os.Lstat` on the host (`path` probe: absolute, no `..`, only under the home or temporary directory, through no symlink below that, never following one) | it is gone; a path in the session's own scratchpad or worktree at once, since the removal deletes both |
 | `branch` | `git ls-remote` on origin from the session's host (only `origin`) | origin no longer has it. The session's own branch, provably in the default branch with no open PR, is deleted by the sweep (see the stale branch rule); anyone else's branch is only looked at |
 | `issue` | `gh issue view` on the session's host | closed |
-| `followup` | nothing: it is the user's to do | never by the hub |
+| `followup` | nothing: it is the user's to do | at once: it does not keep the session; the removal records it (and an archive carries it) |
 | `other` | nothing | never |
 
 When **every** item has resolved, the list becomes a note, and the session

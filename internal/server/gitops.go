@@ -353,6 +353,10 @@ type originCheck struct {
 	// request whose head is the branch's tip (0: none or not asked).
 	Unmerged int `json:"unmerged_commits"`
 	MergedPR int `json:"merged_pr,omitempty"`
+	// Rebased says how the commits git cherry could not match are in Ref
+	// anyway: each was rebased onto it, and every merge on the branch is clean
+	// (rebasedProof). "" when not shown.
+	Rebased string `json:"rebased,omitempty"`
 	// Why says what stopped the comparison.
 	Why string `json:"why,omitempty"`
 	// Records: this host leaves a park record when asked to (a removal with
@@ -402,6 +406,8 @@ func checkOrigin(ctx context.Context, c *worktreeChecks) {
 	if o.Unmerged > 0 {
 		if pr := mergedPRAtTip(ctx, c.Path, c.Branch, c.Tip); pr != nil {
 			o.MergedPR = pr.Number
+		} else {
+			o.Rebased = rebasedProof(ctx, c.Path, ref, o.Ref, c.Tip)
 		}
 	}
 }

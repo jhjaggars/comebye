@@ -34,6 +34,9 @@ func (s *Server) sweepCleanPrefilter(now time.Time) []*removal {
 		if m.Ask != nil && m.Ask.State == ledger.AskAsking {
 			continue
 		}
+		if s.fleet.PeerDown(it.Host) != "" {
+			continue // its host is unreachable: nothing there can be checked now
+		}
 		out = append(out, it)
 	}
 	return out
@@ -154,7 +157,7 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 			Detail: fmt.Sprintf("%s (%s): refused: %s %s", label, it.EntryID, o.Code, o.Message)})
 		return nil
 	}
-	rec := ledger.AutoRemoval{At: now.UTC(), Reason: sweepCleanReason, Landed: how}
+	rec := ledger.AutoRemoval{At: now.UTC(), Reason: sweepCleanReason, Landed: how, Followups: followupsOf(it)}
 	if o.Result != nil {
 		rec.WorktreeRemoved, rec.Kept, rec.ParkID = o.Result.WorktreeRemoved, o.Result.Kept, o.Result.ParkID
 	}
@@ -168,8 +171,9 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 	if !rec.WorktreeRemoved && rec.Kept != "" {
 		detail += "; the worktree was kept: " + rec.Kept
 	}
+	detail += followupsText(rec.Followups)
 	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.sweep_remove", Host: it.Host, OK: true, Detail: detail})
-	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, "removed "+safeText(label)+" automatically (the sweep): "+sweepCleanReason+".")
+	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, "removed "+safeText(label)+" automatically (the sweep): "+sweepCleanReason+"."+followupsNote(rec.Followups))
 	return &sweepDone{At: now.UTC(), Kind: doneSession, Name: label, Repo: it.Repo, Host: it.Host, Branch: it.Branch, Tip: tip, Note: rec.Kept}
 }
 

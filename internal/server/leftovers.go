@@ -36,6 +36,18 @@ import (
 //     session's own branch and local copy: the session stays in the removals
 //     review, unremoved and with no to-do, and the user decides.
 
+// sweepSettledPrefix starts the reason of a NOTHING LEFT that the sweep
+// settled from the hub's own re-check (hubSettled).
+const sweepSettledPrefix = "re-checked by the sweep: "
+
+// hubSettled: a NOTHING LEFT answer that is the hub's re-check of the session's
+// list (every item resolved, or done by the sweep), not the session's own
+// word. Its age is no reason to distrust it, and asking again cannot add to
+// it: the automatic removal does not hold it to the answer's age limit.
+func hubSettled(a *ledger.Ask) bool {
+	return a != nil && a.State == ledger.AskSafe && a.Loop != nil && strings.HasPrefix(a.Reason, sweepSettledPrefix)
+}
+
 // answerSafeBySweep records that every leftover of a gone session's answer has
 // resolved: the answer becomes NOTHING LEFT, and says who changed it.
 func (s *Server) answerSafeBySweep(it *removal, what string, now time.Time) {
@@ -45,7 +57,8 @@ func (s *Server) answerSafeBySweep(it *removal, what string, now time.Time) {
 		if k.State != ledger.AskUnsafe {
 			return false
 		}
-		k.State, k.Reason, k.Items = ledger.AskSafe, clip("re-checked by the sweep: "+text, maxAskReason), nil
+		// The items stay: the follow-ups among them are recorded on the removal.
+		k.State, k.Reason = ledger.AskSafe, clip(sweepSettledPrefix+text, maxAskReason)
 		k.Loop = &ledger.LoopNote{At: now.UTC(), Text: clip(text, 300)}
 		return true
 	})
@@ -88,7 +101,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		if !ok {
 			continue
 		}
-		r, _ := s.staleProbe(ctx, it, branch, true)
+		r, _ := s.staleProbe(ctx, it, v.AskItem, branch, true)
 		switch {
 		case r != nil && r.Deleted:
 			done = append(done, did{i, branch, fmt.Sprintf("deleted origin/%s (was %s, kept on %s as %s; restore with %s): %s",
@@ -125,7 +138,7 @@ func (s *Server) deleteStaleFor(ctx context.Context, it *removal, by string, now
 		}
 		k.Loop = &ledger.LoopNote{At: now.UTC(), Text: clip(text, 300)}
 		if allDone && by == "the sweep" {
-			k.State, k.Reason = ledger.AskSafe, clip("re-checked by the sweep: "+text, maxAskReason)
+			k.State, k.Reason = ledger.AskSafe, clip(sweepSettledPrefix+text, maxAskReason)
 		}
 		return true
 	}); err != nil {
@@ -154,7 +167,7 @@ func (s *Server) leftovers(ctx context.Context, now time.Time, del bool) (settle
 	for _, it := range s.marked() {
 		a := it.Mark.Ask
 		if sessionBusy(it) || it.Coordinator || it.Mark.Discard || it.EntryID == "" || a == nil || a.State != ledger.AskUnsafe ||
-			a.ReaskedAt != nil || a.CleaningAt != nil || !s.knownHost(it.Host) {
+			a.ReaskedAt != nil || a.CleaningAt != nil || !s.knownHost(it.Host) || s.fleet.PeerDown(it.Host) != "" {
 			continue
 		}
 		ar := s.askReviewOf(ctx, it)

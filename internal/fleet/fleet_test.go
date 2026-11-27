@@ -338,6 +338,16 @@ func TestUnreachableAndHangingPeersAreIsolated(t *testing.T) {
 	if !strings.Contains(hostByName(f, "hang").Error, "no response") {
 		t.Errorf("hang error = %q", hostByName(f, "hang").Error)
 	}
+	// PeerDown names a down peer and its error; an up peer, the local host and
+	// an unknown name are not down.
+	if d := f.PeerDown("gone"); !strings.HasPrefix(d, "gone is down") {
+		t.Errorf("PeerDown(gone) = %q", d)
+	}
+	for _, n := range []string{"good", "nope", ""} {
+		if d := f.PeerDown(n); d != "" {
+			t.Errorf("PeerDown(%q) = %q", n, d)
+		}
+	}
 
 	start := time.Now()
 	if a := f.Agents(); len(a) != 1 || a[0].Host != "good" {

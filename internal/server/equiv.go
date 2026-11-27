@@ -19,7 +19,10 @@ import (
 //   - content: every file the branch changed has, in the base, exactly
 //     the branch tip's content (works offline, no PR needed);
 //   - PR: a merged pull request whose head commit is the branch tip
-//     (`gh pr list --state merged --head B`; skipped without gh).
+//     (`gh pr list --state merged --head B`; skipped without gh);
+//   - rebase: each commit git cherry cannot match was rebased onto the base
+//     (the same author, author date and subject, paired by git range-diff:
+//     rebasedOnto, supersede.go), and every merge on the branch is clean.
 //
 // Either way nothing of the branch is missing from the base.
 
@@ -110,7 +113,7 @@ func equivalence(ctx context.Context, dir, branch, tip, baseRef, baseName string
 	if pr := mergedPRAtTip(ctx, dir, branch, tip); pr != nil {
 		return fmt.Sprintf("merged as PR #%d (its head is this branch's tip)", pr.Number)
 	}
-	return ""
+	return rebasedProof(ctx, dir, baseRef, baseName, tip)
 }
 
 func plural(n int, one, many string) string {

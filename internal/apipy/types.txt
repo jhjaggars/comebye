@@ -188,6 +188,7 @@ AutoRemoval  (ledger.AutoRemoval)  Records a removal the hub made without the us
   worktree_removed bool  The worktree went, and its local branch with it (every commit was in the base; the remote branch is not touched); false means it was kept, with Kept saying why.
   kept str
   park_id str            The park record the host left (Recently closed), so the session can be resumed; "" when none was made.
+  followups [str]        What the session's answer left for the user (its "followup" items, and the to-dos that stay in the To do list): they did not keep the session, so the...
   undone_at time?        Set once the user undid it (a worker was started on the branch again); UndoNote says how that went.
   undo_note str
 
@@ -202,6 +203,7 @@ AutoRemovedView  (server.autoRemovedView)  One recent auto-removal as the review
   landed str
   worktree_removed bool
   kept str
+  followups [str]
   undone_at time?
   undo_note str
   can_undo bool          The branch can be set up again (a repository and a branch are recorded, the host is known, and it was not undone already).
@@ -464,6 +466,7 @@ OriginCheck  (server.originCheck)  Compares a branch with origin's copy of the r
   fetched bool          A fetch of origin succeeded, so Ref is as fresh as origin.
   unmerged_commits int  Counts the branch's commits with no equivalent in Ref (git cherry), -1 when unknown.
   merged_pr int
+  rebased str           Says how the commits git cherry could not match are in Ref anyway: each was rebased onto it, and every merge on the branch is clean (rebasedProof).
   why str               Says what stopped the comparison.
   records bool          This host leaves a park record when asked to (a removal with record_park); an older host does not, and the hub then removes nothing by itself there.
 

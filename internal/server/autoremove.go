@@ -24,11 +24,14 @@ import (
 //   - the work is in the base: every branch commit has an equivalent on
 //     origin/<default> (git cherry, after a fetch that worked; a checkout's
 //     own, possibly stale, main is not trusted), or the branch has no commits
-//     (a research / Page-only handoff), or its pull request was merged;
+//     (a research / Page-only handoff), or its pull request was merged, or
+//     each commit git cherry cannot match was rebased onto origin/<default>
+//     and every merge on the branch is clean (rebasedProof);
 //   - nothing is unpushed, and the worktree has no uncommitted or untracked
 //     files (ignored files do not count);
 //   - the session answered SAFE (not "did not answer", UNSAFE or unchecked);
-//   - no open to-do waits on the agent and it has no queued prompts;
+//   - no open to-do waits on the agent for an answer (a follow-up to-do is
+//     the user's and stays in their list) and it has no queued prompts;
 //   - it is not a coordinator, and is not working, blocked or running a
 //     background task.
 //
@@ -51,7 +54,8 @@ const (
 
 // autoFacts are what the verdict needs from outside the removal.
 type autoFacts struct {
-	// TodoWaiting: an open to-do waits on the agent. Queued: prompts queued
+	// TodoWaiting: an open to-do waits on the agent for its answer (a
+	// follow-up does not: it is the user's alone). Queued: prompts queued
 	// for it. Background: tasks it runs in the background.
 	TodoWaiting bool
 	Queued      int
@@ -86,7 +90,7 @@ func autoRemoveVerdict(it *removal, f autoFacts) (ok bool, why string) {
 		return false, "the mark proposes discarding the work"
 	case m.Ask == nil || m.Ask.State != ledger.AskSafe:
 		return false, "the session has not said nothing is left"
-	case f.AnswerTTL > 0 && !m.Ask.At.IsZero() && f.Now.Sub(m.Ask.At) >= f.AnswerTTL:
+	case f.AnswerTTL > 0 && !m.Ask.At.IsZero() && f.Now.Sub(m.Ask.At) >= f.AnswerTTL && !hubSettled(m.Ask):
 		return false, "the NOTHING LEFT answer is " + agoText(f.Now, m.Ask.At) + ": too old to trust"
 	case m.Ask.ReaskedAt != nil:
 		return false, "the session is being asked again"
@@ -124,14 +128,14 @@ func workProven(it *removal) (ok bool, why string) {
 		return false, "not compared with origin: " + o.Why
 	case o.Unmerged < 0:
 		return false, "could not tell whether its commits are in " + o.Ref
-	case o.Unmerged > 0 && o.MergedPR == 0:
+	case o.Unmerged > 0 && o.MergedPR == 0 && o.Rebased == "":
 		return false, fmt.Sprintf("%d commits not in %s", o.Unmerged, o.Ref)
 	}
 	d := c.Detail
 	switch {
 	case d == nil || d.Unpushed < 0:
 		return false, "could not tell whether anything is unpushed"
-	case d.Unpushed > 0 && o.MergedPR == 0:
+	case d.Unpushed > 0 && o.MergedPR == 0 && o.Rebased == "":
 		return false, fmt.Sprintf("%d commits on no remote", d.Unpushed)
 	}
 	return true, ""
@@ -179,6 +183,8 @@ func inBaseHow(c *worktreeChecks) string {
 		return "every commit is in " + o.Ref
 	case o.MergedPR > 0:
 		return fmt.Sprintf("merged as PR #%d", o.MergedPR)
+	case o.Rebased != "":
+		return o.Rebased
 	}
 	return ""
 }
@@ -190,7 +196,7 @@ func (s *Server) autoFactsOf(ctx context.Context, it *removal) autoFacts {
 	f := autoFacts{AnswerTTL: s.reaskCap, Now: time.Now()}
 	if s.todos != nil {
 		for _, t := range s.todos.list("") {
-			if t.active() && t.Waiting != nil && t.Waiting.ID == it.ID {
+			if todoNeedsSession(t, it.ID) {
 				f.TodoWaiting = true
 			}
 		}
@@ -232,7 +238,7 @@ func (s *Server) autoRemoveStep(ctx context.Context, now time.Time) []string {
 			}
 			continue
 		}
-		if !autoRemoveCandidate(it) {
+		if !autoRemoveCandidate(it) || s.fleet.PeerDown(it.Host) != "" {
 			continue
 		}
 		key := "autorm/" + it.ID
@@ -315,7 +321,7 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 			Detail: fmt.Sprintf("%s (%s): refused: %s %s", it.Name, it.EntryID, o.Code, o.Message)})
 		return false
 	}
-	rec := ledger.AutoRemoval{At: time.Now().UTC(), Reason: autoRemoveReason, Landed: how}
+	rec := ledger.AutoRemoval{At: time.Now().UTC(), Reason: autoRemoveReason, Landed: how, Followups: followupsOf(it)}
 	if o.Result != nil {
 		rec.WorktreeRemoved, rec.Kept, rec.ParkID = o.Result.WorktreeRemoved, o.Result.Kept, o.Result.ParkID
 	}
@@ -330,12 +336,13 @@ func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	if !rec.WorktreeRemoved && rec.Kept != "" {
 		detail += "; the worktree was kept: " + rec.Kept
 	}
+	detail += followupsText(rec.Followups)
 	s.auditBy(ledger.AuditEvent{By: AutoCreator, Action: "worker.auto_remove", Host: it.Host, OK: true, Detail: detail})
 	line := fmt.Sprintf("removed %s automatically: %s", safeText(label), autoRemoveReason)
 	if !rec.WorktreeRemoved && rec.Kept != "" {
 		line = fmt.Sprintf("closed %s automatically (%s) but kept its worktree: %s", safeText(label), autoRemoveReason, safeText(rec.Kept))
 	}
-	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, line+".")
+	s.queueLine("autoremove", it.EntryID, "autorm/"+it.EntryID, line+"."+followupsNote(rec.Followups))
 	return true
 }
 
@@ -358,6 +365,45 @@ func (s *Server) ttlReaskDue(it *removal, f autoFacts) bool {
 	return ok
 }
 
+// followupsOf lists what a removed session's answer left for the user: its
+// follow-up items, and the to-dos that stay in the To do list. Neither keeps
+// the session (recheck), so the removal records them.
+func followupsOf(it *removal) []string {
+	a := it.Mark.Ask
+	if a == nil {
+		return nil
+	}
+	var out []string
+	for _, item := range a.Items {
+		switch item.Type {
+		case ledger.ItemFollowup:
+			out = append(out, "follow-up: "+clip(strings.TrimSpace(item.Text), 300))
+		case ledger.ItemTodo:
+			if item.ID != "" {
+				out = append(out, "to-do "+item.ID+" (in your To do list): "+clip(strings.TrimSpace(item.Text), 200))
+			}
+		}
+	}
+	return out
+}
+
+// followupsText is the follow-ups for an audit entry or a log line ("" for none).
+func followupsText(f []string) string {
+	if len(f) == 0 {
+		return ""
+	}
+	return " Left for you: " + strings.Join(f, "; ")
+}
+
+// followupsNote is the follow-ups for a coordinator's line: only how many, since
+// their words are the session's (the audit entry and the record carry them).
+func followupsNote(f []string) string {
+	if len(f) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %d %s it left for you %s kept on the removal record.", len(f), plural(len(f), "follow-up", "follow-ups"), plural(len(f), "is", "are"))
+}
+
 // autoRemovedView is one recent auto-removal as the review lists it.
 type autoRemovedView struct {
 	EntryID         string     `json:"entry_id"`
@@ -370,6 +416,7 @@ type autoRemovedView struct {
 	Landed          string     `json:"landed,omitempty"`
 	WorktreeRemoved bool       `json:"worktree_removed"`
 	Kept            string     `json:"kept,omitempty"`
+	Followups       []string   `json:"followups,omitempty"`
 	UndoneAt        *time.Time `json:"undone_at,omitempty"`
 	UndoNote        string     `json:"undo_note,omitempty"`
 	// CanUndo: the branch can be set up again (a repository and a branch
@@ -393,7 +440,7 @@ func (s *Server) recentAutoRemovals(now time.Time) []autoRemovedView {
 		}
 		out = append(out, autoRemovedView{
 			EntryID: e.ID, Host: e.Host, Name: e.AgentName, Repo: e.RepoName, Branch: e.Branch, At: a.At,
-			Reason: a.Reason, Landed: a.Landed, WorktreeRemoved: a.WorktreeRemoved, Kept: a.Kept,
+			Reason: a.Reason, Landed: a.Landed, WorktreeRemoved: a.WorktreeRemoved, Kept: a.Kept, Followups: a.Followups,
 			UndoneAt: a.UndoneAt, UndoNote: a.UndoNote, InRecent: a.ParkID != "",
 			CanUndo: a.UndoneAt == nil && e.Repo != "" && e.Branch != "" && s.knownHost(e.Host),
 		})
