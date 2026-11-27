@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -92,24 +91,7 @@ func (s *Server) proposeParkRemoval(pr parkedRecord, reason, by string) error {
 	return err
 }
 
-// RunParkRetention follows a clock until ctx is done.
-func (s *Server) RunParkRetention(ctx context.Context) {
-	if s.cfg.ParkRetention <= 0 || s.ledger == nil {
-		return
-	}
-	tick := time.NewTicker(parkRetentionTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.parkRetentionStep(time.Now())
-		}
-	}
-}
-
-// parkRetentionStep proposes the removal of every parked agent past retention
+// parkRetentionStep is the janitor's parkretain stage (janitor.go), hourly. It proposes the removal of every parked agent past retention
 // that is not pinned and was not proposed before. It returns how many. A record
 // an automatic removal left (Recently closed) is history, not a parked agent,
 // and is never proposed: park.Store.Prune drops it after 30 days.

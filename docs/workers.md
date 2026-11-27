@@ -680,25 +680,16 @@ Only this machine uploads a given worker: a second machine is refused, because t
 archive's safety depends on one writer per host.
 
 **What this does not cover:** a VM deleted outside this tool, for example in the
-cloud console, loses whatever was not yet copied. `worker archive --all` on a timer
-limits that loss. It is not installed for you:
-
-```ini
-# ~/.config/systemd/user/comebye-worker-archive.service
-[Service]
-Type=oneshot
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
-ExecStart=%h/.local/bin/comebye-worker archive --all
-
-# ~/.config/systemd/user/comebye-worker-archive.timer
-[Timer]
-OnCalendar=hourly
-RandomizedDelaySec=300
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
+cloud console, loses whatever was not yet copied. An hourly `worker archive --all`
+limits that loss. The server does it: start comebye on the machine that runs the
+workers with `-archive-workers` (`COMEBYE_ARCHIVE_WORKERS=1`) and an archive set up,
+and its janitor pulls every running worker hourly, niced, under the archive lock, with
+a 30-minute limit ([archive.md](archive.md#one-index-for-every-host)). It is this
+machine and not each VM, because a worker holds no archive key and has no route to
+the bucket, and not the hub, because the hub has no ssh access to the workers and a
+worker's archive host belongs to the machine that first uploaded it. An older install
+ran the same command from `comebye-worker-archive.timer`; disable it once the server
+does it (`systemctl --user disable --now comebye-worker-archive.timer`).
 
 Each run sends the whole session directory, compressed, from every running worker.
 On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a day

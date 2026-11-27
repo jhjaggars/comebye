@@ -216,17 +216,7 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 		}
 	}
 	live := map[string]bool{}
-	reads, auto := 0, 0
-	p.mu.Lock()
-	cut := now.Add(-time.Hour)
-	kept := p.parked[:0]
-	for _, t := range p.parked {
-		if t.After(cut) {
-			kept = append(kept, t)
-		}
-	}
-	p.parked = kept
-	p.mu.Unlock()
+	reads := 0
 	for _, a := range agents {
 		if ctx.Err() != nil {
 			return
@@ -274,8 +264,63 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 		if since != nil {
 			st.since = *since
 		}
-		ok := st.ok
-		tryAuto := p.auto && ok && since != nil && now.Sub(*since) >= autoParkIdle && now.Sub(st.tried) >= autoParkRetry &&
+		p.mu.Unlock()
+	}
+	p.mu.Lock()
+	for k := range p.m {
+		if !live[k] {
+			delete(p.m, k)
+		}
+	}
+	p.mu.Unlock()
+}
+
+// autoParkStep is the janitor's autopark stage (janitor.go), every
+// parkSugTick: it parks the agents the suggestion found clean (parkSuggestStep,
+// in the agent-watch pass) once they have been idle for autoParkIdle, at most
+// autoParkPerStep a step and autoParkPerHour an hour. The cheap guards are
+// asked again, since the fleet may have moved since the suggestion's look.
+func (s *Server) autoParkStep(ctx context.Context, agents []herdr.AgentInfo, now time.Time) {
+	p := s.parkSug
+	if p == nil || !p.auto {
+		return
+	}
+	openTodos := map[string]bool{}
+	if s.todos != nil {
+		for _, t := range s.todos.list("") {
+			if t.State == TodoOpen && t.CreatedByID != "" && t.Source != SourceBlocked {
+				openTodos[t.CreatedByID] = true
+			}
+		}
+	}
+	p.mu.Lock()
+	cut := now.Add(-time.Hour)
+	kept := p.parked[:0]
+	for _, t := range p.parked {
+		if t.After(cut) {
+			kept = append(kept, t)
+		}
+	}
+	p.parked = kept
+	p.mu.Unlock()
+	auto := 0
+	for _, a := range agents {
+		if ctx.Err() != nil {
+			return
+		}
+		key := state.AgentKey(&a)
+		p.mu.Lock()
+		st := p.m[key]
+		p.mu.Unlock()
+		if st == nil || s.parkBlock(a, p.after, now, openTodos) != "" {
+			continue
+		}
+		since := a.StatusSince
+		if since == nil {
+			since = a.LastActive
+		}
+		p.mu.Lock()
+		tryAuto := st.ok && since != nil && now.Sub(*since) >= autoParkIdle && now.Sub(st.tried) >= autoParkRetry &&
 			auto < autoParkPerStep && len(p.parked) < autoParkPerHour
 		if tryAuto {
 			st.tried = now
@@ -286,13 +331,6 @@ func (s *Server) parkSuggestStep(ctx context.Context, agents []herdr.AgentInfo, 
 			s.autoPark(ctx, a, key, now)
 		}
 	}
-	p.mu.Lock()
-	for k := range p.m {
-		if !live[k] {
-			delete(p.m, k)
-		}
-	}
-	p.mu.Unlock()
 }
 
 // autoPark parks a for good reason: the audit entry and the digest line say so.

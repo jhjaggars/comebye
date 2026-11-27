@@ -36,7 +36,10 @@ func (r *sugRig) idleFor(pane, name string, d time.Duration) herdr.AgentInfo {
 }
 
 func (r *sugRig) hinted(agents ...herdr.AgentInfo) map[string]bool {
+	// The suggestion (the agent-watch pass), then the janitor's autopark stage
+	// acting on it.
 	r.s.parkSuggestStep(context.Background(), agents, r.now)
+	r.s.autoParkStep(context.Background(), agents, r.now)
 	out := map[string]bool{}
 	cp := append([]herdr.AgentInfo(nil), agents...)
 	r.s.stampPark(cp)

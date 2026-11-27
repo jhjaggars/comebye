@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,11 @@ import (
 type Index struct {
 	Path   string
 	Sqlite string // the sqlite3 binary; "" means "sqlite3"
+	// ReadOnly opens the file with `sqlite3 -readonly -safe` (a server
+	// answering recall questions for others); Timeout, when set, stops a
+	// query that runs longer.
+	ReadOnly bool
+	Timeout  time.Duration
 }
 
 func (ix *Index) bin() string {
@@ -92,11 +98,20 @@ func qn(n int64) string { return strconv.FormatInt(n, 10) }
 // exec runs SQL (stdin) and returns the rows as JSON when json is set.
 func (ix *Index) run(sql string, asJSON bool) ([]byte, error) {
 	args := []string{"-bail", "-cmd", ".timeout 10000"}
+	if ix.ReadOnly {
+		args = append([]string{"-readonly", "-safe"}, args...)
+	}
 	if asJSON {
 		args = append(args, "-json")
 	}
 	args = append(args, ix.Path)
-	cmd := exec.Command(ix.bin(), args...)
+	ctx := context.Background()
+	if ix.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ix.Timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, ix.bin(), args...)
 	cmd.Stdin = strings.NewReader(sql)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -871,10 +886,10 @@ func (ix *Index) Show(id string) (map[string]any, []map[string]any, error) {
 		return nil, nil, err
 	}
 	if len(rows) == 0 {
-		return nil, nil, fmt.Errorf("no session %q", id)
+		return nil, nil, fmt.Errorf("no session %q: %w", id, ErrNoSession)
 	}
 	if len(rows) > 1 {
-		return nil, nil, fmt.Errorf("%q matches several sessions; give more of the id", id)
+		return nil, nil, fmt.Errorf("%q matches several sessions; give more of the id: %w", id, ErrAmbiguous)
 	}
 	s := rows[0]
 	cs, err := ix.Query(fmt.Sprintf("SELECT sha,rel,branch,subject FROM commits WHERE host=%s AND kind=%s AND session_id=%s ORDER BY rel DESC;", q(fmt.Sprint(s["host"])), q(fmt.Sprint(s["kind"])), q(fmt.Sprint(s["id"]))))

@@ -475,23 +475,6 @@ func (s *Server) handleReask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"asking": true})
 }
 
-// RunReask looks for UNSAFE answers that have gone stale until ctx is done.
-func (s *Server) RunReask(ctx context.Context) {
-	if s.ledger == nil || s.reaskEvery <= 0 {
-		return
-	}
-	tick := time.NewTicker(s.reaskEvery)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.reaskStep(ctx, time.Now())
-		}
-	}
-}
-
 // unsafeStale says whether an UNSAFE answer should not be trusted any more: an
 // item resolved after it was given (the thing it named changed), or it is
 // older than reaskCap with something still unresolved.

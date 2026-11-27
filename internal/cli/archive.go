@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -524,106 +525,107 @@ func cmdRecall(e *Env, args []string) error {
 	default:
 		return usageErr("unknown recall subcommand %q", sub)
 	}
+	local := fs.Bool("local", false, "read this host's own index (~/.local/state/comebye/recall/index.db) instead of asking the hub")
 	pos, err := parse(fs, rest)
 	if err != nil {
 		return err
 	}
-	path := *idx
-	if path == "" {
-		path = archive.Config{}.IndexPath()
-	}
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("no index at %s: run `comebye archive index` first", path)
-	}
-	ix := &archive.Index{Path: path}
-	if ix.Outdated() {
-		return fmt.Errorf("the index at %s is in an older format: run `comebye archive index` to rebuild it", path)
-	}
 	switch sub {
-	case "ask", "threads", "todo":
-		var views []archive.ThreadView
-		switch sub {
-		case "ask":
-			if len(pos) == 0 {
-				return usageErr("usage: comebye recall ask \"what you remember about it\" [filters]")
-			}
-			views, err = ix.Ask(strings.Join(pos, " "), f, f.Limit)
-		default:
-			views, err = ix.Threads(f, sub == "todo")
+	case "ask", "search":
+		if len(pos) == 0 {
+			return usageErr("%s", map[string]string{"ask": "usage: comebye recall ask \"what you remember about it\" [filters]", "search": "usage: comebye recall search WORDS... [filters]"}[sub])
 		}
-		if err != nil {
-			return err
+	case "commit":
+		if len(pos) != 1 {
+			return usageErr("usage: comebye recall commit SHA")
 		}
-		if *asJSON {
-			return jsonOut(e, views)
-		}
-		if len(views) == 0 {
-			fmt.Fprintln(e.Stdout, "nothing found")
-		}
-		for i, v := range views {
-			printThread(e, i+1, v, sub == "ask")
-		}
-		return nil
-	case "list", "search", "commit":
-		var rows []map[string]any
-		switch sub {
-		case "list":
-			rows, err = ix.List(f)
-		case "search":
-			if len(pos) == 0 {
-				return usageErr("usage: comebye recall search WORDS... [filters]")
-			}
-			rows, err = ix.Search(strings.Join(pos, " "), f)
-		case "commit":
-			if len(pos) != 1 {
-				return usageErr("usage: comebye recall commit SHA")
-			}
-			rows, err = ix.ByCommit(pos[0])
-		}
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return jsonOut(e, rows)
-		}
-		if len(rows) == 0 {
-			fmt.Fprintln(e.Stdout, "nothing found")
-		}
-		for _, r := range rows {
-			printSession(e, r)
-		}
-		return nil
 	case "produced":
 		if len(pos) != 1 {
 			return usageErr("usage: comebye recall produced REF  (a commit SHA, pg_ id, owner/repo#N, owner/repo@tag, GitHub URL or sha256: digest)")
 		}
-		items, known, err := ix.ProducedRef(pos[0], f, max(f.Limit, 20))
-		if err != nil {
-			return err
-		}
-		if !known {
-			return usageErr("%q is not an artifact reference: give a commit SHA (7+ hex), a pg_ id, owner/repo#N, owner/repo@tag, a GitHub URL or a sha256: digest", pos[0])
-		}
-		if *asJSON {
-			return jsonOut(e, items)
-		}
-		if len(items) == 0 {
-			fmt.Fprintln(e.Stdout, "nothing found")
-		}
-		for _, it := range items {
-			printProduced(e, it, true)
-		}
-		return nil
 	case "show":
 		if len(pos) != 1 {
 			return usageErr("usage: comebye recall show THREAD|SESSION [--text N]")
 		}
-		if strings.HasPrefix(pos[0], "t-") {
-			v, err := ix.Thread(pos[0])
-			if err != nil {
-				return err
+	}
+	q := archive.RecallQuery{Op: sub, Args: pos, Filter: f, Text: *text}
+	var a *archive.RecallAnswer
+	if *idx != "" || *local {
+		// A local index, by choice.
+		path := *idx
+		if path == "" {
+			path = archive.Config{}.IndexPath()
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("no index at %s: run `comebye archive index` first", path)
+		}
+		ix := &archive.Index{Path: path}
+		if ix.Outdated() {
+			return fmt.Errorf("the index at %s is in an older format: run `comebye archive index` to rebuild it", path)
+		}
+		if a, err = ix.Recall(q); err != nil {
+			return err
+		}
+	} else {
+		// The hub's index, through this host's server.
+		c, err := newClient(e)
+		if err != nil {
+			return err
+		}
+		a = &archive.RecallAnswer{}
+		if err := c.call("POST", "/api/recall/query", nil, q, a); err != nil {
+			var ae *apiError
+			if errors.As(err, &ae) && ae.code == "no_index" {
+				return fmt.Errorf("the hub has no transcript index yet (it builds one hourly; --index FILE or --local reads a local one)")
 			}
-			if *asJSON {
+			return err
+		}
+	}
+	return printRecall(e, sub, *asJSON, a)
+}
+
+// printRecall prints one recall answer.
+func printRecall(e *Env, sub string, asJSON bool, a *archive.RecallAnswer) error {
+	switch sub {
+	case "ask", "threads", "todo":
+		if asJSON {
+			return jsonOut(e, orEmpty(a.Threads))
+		}
+		if len(a.Threads) == 0 {
+			fmt.Fprintln(e.Stdout, "nothing found")
+		}
+		for i, v := range a.Threads {
+			printThread(e, i+1, v, sub == "ask")
+		}
+		return nil
+	case "list", "search", "commit":
+		if asJSON {
+			return jsonOut(e, orEmpty(a.Rows))
+		}
+		if len(a.Rows) == 0 {
+			fmt.Fprintln(e.Stdout, "nothing found")
+		}
+		for _, r := range a.Rows {
+			printSession(e, r)
+		}
+		return nil
+	case "produced":
+		if !a.Known {
+			return usageErr("that is not an artifact reference: give a commit SHA (7+ hex), a pg_ id, owner/repo#N, owner/repo@tag, a GitHub URL or a sha256: digest")
+		}
+		if asJSON {
+			return jsonOut(e, orEmpty(a.Items))
+		}
+		if len(a.Items) == 0 {
+			fmt.Fprintln(e.Stdout, "nothing found")
+		}
+		for _, it := range a.Items {
+			printProduced(e, it, true)
+		}
+		return nil
+	case "show":
+		if v := a.Thread; v != nil {
+			if asJSON {
 				return jsonOut(e, v)
 			}
 			printThread(e, 0, *v, true)
@@ -636,22 +638,12 @@ func cmdRecall(e *Env, args []string) error {
 			}
 			return nil
 		}
-		s, cs, err := ix.Show(pos[0])
-		if err != nil {
-			return err
-		}
-		var msgs []map[string]any
-		if *text > 0 {
-			msgs, err = ix.Text(str(s["host"]), str(s["kind"]), str(s["id"]), *text)
-			if err != nil {
-				return err
-			}
-		}
-		if *asJSON {
-			return jsonOut(e, map[string]any{"session": s, "commits": cs, "messages": msgs})
+		s := a.Session
+		if asJSON {
+			return jsonOut(e, map[string]any{"session": s, "commits": a.Commits, "messages": a.Messages})
 		}
 		printSession(e, s)
-		if t := ix.ThreadOf(str(s["host"]), str(s["kind"]), str(s["id"])); t != "" {
+		if t := a.ThreadOf; t != "" {
 			fmt.Fprintf(e.Stdout, "    thread       %s  (comebye recall show %s)\n", t, t)
 		}
 		for _, k := range []string{"cwd", "first_prompt", "brief", "summary", "plan_id", "ref", "ledger_agent", "version"} {
@@ -659,16 +651,14 @@ func cmdRecall(e *Env, args []string) error {
 				fmt.Fprintf(e.Stdout, "    %-12s %s\n", k, v)
 			}
 		}
-		fmt.Fprintf(e.Stdout, "    %-12s %v messages, %v from subagents, %v bytes archived in %v files\n", "size", s["n_msgs"], s["n_sub"], s["n_bytes"], s["n_streams"])
-		if prod, err := ix.ProducedBySession(str(s["host"]), str(s["kind"]), str(s["id"])); err == nil {
-			for _, it := range prod {
-				if it.Type == "commit" && it.Rel == "seen" {
-					continue
-				}
-				printProduced(e, it, false)
+		fmt.Fprintf(e.Stdout, "    %-12s %v messages, %v from subagents, %v bytes archived in %v files\n", "size", str(s["n_msgs"]), str(s["n_sub"]), str(s["n_bytes"]), str(s["n_streams"]))
+		for _, it := range a.Produced {
+			if it.Type == "commit" && it.Rel == "seen" {
+				continue
 			}
+			printProduced(e, it, false)
 		}
-		for _, m := range msgs {
+		for _, m := range a.Messages {
 			who := str(m["role"])
 			if str(m["sub"]) != "" {
 				who += "(sub " + str(m["sub"]) + ")"
@@ -678,6 +668,14 @@ func cmdRecall(e *Env, args []string) error {
 		return nil
 	}
 	return nil
+}
+
+// orEmpty keeps a JSON answer a list ([]) when nothing was found.
+func orEmpty[T any](v []T) []T {
+	if v == nil {
+		return []T{}
+	}
+	return v
 }
 
 // printProduced prints one artifact: with its session when it answers a lookup,

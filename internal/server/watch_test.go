@@ -117,7 +117,7 @@ func TestWatchStepsKeepTheirClocks(t *testing.T) {
 		w.pass(whyTick, nil, nil)
 	}
 	want := map[string]int{
-		"report":   20, // every 30 s
+		"report":   0,  // events only: its timed part (auto-clean, auto-remove) is a janitor stage now
 		"quiet":    10, // every minute
 		"autotodo": 20, // every 30 s (and on events)
 		"relay":    61, // every tick (and every 3 s while something is blocked)

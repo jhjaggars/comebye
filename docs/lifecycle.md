@@ -225,7 +225,7 @@ included), its local and remote branches, its transcript and its scratchpad;
 its pane is parked, with a park record, so it can be resumed. Only regenerable
 build output inside the worktree is cleared, and the bytes freed are recorded.
 
-- **Who and when.** The sweep loop, after it marks and cleans, with "Clean up
+- **Who and when.** The janitor's archive stage, right after each sweep marks and cleans, with "Clean up
   automatically" on and its own setting `sweep_loop.archive_after_days`
   (default 7, 1 to 90; delivered kinds at most 3). It archives a session that is
   finished, or marked with a LEFT answer that is still unsettled (no re-ask or

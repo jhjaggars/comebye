@@ -56,6 +56,9 @@ type Config struct {
 	// are the session directories it covers. Off when nil.
 	Archive        *archive.Archiver
 	ArchiveSources []archive.Source
+	// ArchiveShip, when set, is the janitor's ship stage: copy session files
+	// to the archive, and on the hub build the recall index (archiveship.go).
+	ArchiveShip *ArchiveShip
 	// RecallIndex is the transcript index file the app searches, read-only.
 	// Empty, or no such file: the app says there is no index.
 	RecallIndex string
@@ -284,7 +287,7 @@ type Server struct {
 	signin   *signin.Manager
 	probeTTL time.Duration
 	// reaskGap, reaskCap and reaskMax pace the hub's automatic re-asks
-	// (tests change them); reaskEvery is how often RunReask looks.
+	// (tests change them); reaskEvery is how often the janitor's reask stage looks.
 	reaskGap, reaskCap time.Duration
 	openGap            time.Duration
 	reaskMax           int
@@ -390,6 +393,10 @@ type Server struct {
 	typing *typingTracker
 	// watch is the agent-watch pass (watch.go).
 	watch *watcher
+	// janitor runs the clean-up stages (janitor.go); ship is its archive
+	// stage, nil where no archive is set up (archiveship.go).
+	janitor *janitor
+	ship    *shipper
 	// usage counts tokens (usage.go); nil when off.
 	usage *usageState
 
@@ -558,6 +565,8 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		s.approvalPush = manager.Dispatcher().NotifyApproval
 		s.rolloutPush = manager.Dispatcher().NotifyRollout
 	}
+	s.ship = newShipper(s, cfg.ArchiveShip)
+	s.janitor = newJanitor(s)
 	s.wireChanged()
 	s.routes()
 	return s
@@ -581,6 +590,7 @@ func (s *Server) routes() {
 	// node) or authAgentLocal; everything wrapped in auth is the user's alone
 	// (see agentauth.go).
 	s.recallRoutes()
+	s.recallQueryRoutes()
 	s.usageRoutes()
 	s.mux.HandleFunc("GET /api/version", s.authAgentLocal(s.handleVersion))
 	s.mux.HandleFunc("GET /api/test-mode", s.auth(s.handleTestMode))

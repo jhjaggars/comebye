@@ -6,7 +6,8 @@ byte-exact, append-only, encrypted copies of the agents' own files.
 "we worked on something like this once; what was the outcome?".
 
 Nothing here changes how agents run. It only reads their session files. It
-is off until you configure it; Comebye installs no timer or service for it.
+is off until you configure it. Once it is configured, the server copies sessions
+and builds the index itself; there is no timer or service to install.
 
 ## Why a copy at all
 
@@ -62,6 +63,7 @@ comebye recall ask "a vague description of the work"   # the short answer
 comebye recall threads | todo | list | search WORDS | commit SHA
 comebye recall produced REF       # which session made a commit, Page, PR, issue, release or image
 comebye recall show THREAD|SESSION [--text N]   # a session also lists what it produced
+# recall asks the hub's index through this host's server; --local or --index FILE reads a local one
 ```
 
 Every `recall` command takes `--json` and filters `--since`, `--until`,
@@ -296,21 +298,38 @@ pointing at objects nothing keeps.
 
 ### One index for every host
 
-With a bucket, each machine builds its own index of every host from the segments, so
-`comebye recall` and the app read a local file and search finds every host's sessions.
-The index itself never leaves the machine: it is not in the bucket or its backups. A
-machine needs only its archive key, and the ledger for handoff links.
+With a bucket, the hub builds one index of every host from the segments, and
+`comebye recall` on any host asks it over the API (`POST /api/recall/query`, through
+that host's own server), so search finds every host's sessions. The index itself
+never leaves the hub: it is not in the bucket or its backups. The hub needs only its
+archive key, and its own ledger for handoff links. A local index is still possible,
+by choice: `comebye archive index --all-hosts` builds one, and `recall --local` (or
+`--index FILE`, or `COMEBYE_RECALL_INDEX`) reads it instead of asking the hub.
 
-**The timer.** Run this every 5 minutes on each machine, on a timer like
-`OnCalendar=*:0/5`:
+**No timer.** The server does this itself, as the last stage of its janitor (one
+loop that also sweeps, archives finished work, parks and prunes; see
+`internal/server/janitor.go`). On every host whose server has an archive set up
+(`-archive-dir` or `-archive-s3`, with `-archive-encryption`):
 
-```
-comebye archive run && comebye archive index --all-hosts --if-changed
-```
+- every 5 minutes it copies idle session files, as `comebye archive run` does (a
+  hub-only hub has no sessions and skips this);
+- on the hub, hourly, it builds the all-hosts index, as
+  `comebye archive index --all-hosts --if-changed` does (with `--git=false` where
+  `git` is not installed). Peers do not index;
+- with `-archive-workers` (`COMEBYE_ARCHIVE_WORKERS=1`), hourly, it pulls the worker
+  VMs' sessions, as `comebye-worker archive --all` does, on the machine that runs
+  the workers ([workers.md](workers.md#sessions-and-the-archive)).
 
-Start it under `flock -n`, so that a tick finding the last one still going exits at
-once. `flock -n -E 0` makes that exit count as success, which keeps the unit from
-reading as failed.
+Each is a child `comebye archive` (or `comebye-worker`) process with the server's
+archive settings, run under `nice -n 10` (and `ionice -c 3` where it exists) with a
+time limit: 10 minutes for a copy, 20 for an index, 30 for a worker pull. A run past
+its limit gets SIGTERM, its process group with it, and SIGKILL 15 seconds later.
+They run one at a time under `$XDG_RUNTIME_DIR/comebye-archive.lock` (else
+`comebye-archive.lock` in the state directory): the lock the old
+`comebye-archive.timer` took, so while that timer is still installed the two never
+overlap, and a tick that finds the lock held skips to the next one. The server logs
+once at start when it finds `comebye-archive.timer` or `comebye-worker-archive.timer`
+installed; disable them (`systemctl --user disable --now comebye-archive.timer`).
 
 **`--all-hosts`** finds hosts in the `v1/` listing and runs the same incremental
 per-host sync on each, tombstones included. It also covers any host the index still

@@ -609,7 +609,6 @@ func (s *Server) observeLedger(agents []herdr.AgentInfo) {
 	s.evalPlans()
 	s.rebindParked(agents)
 	defer s.deliverCallbacks(agents)
-	defer s.autoCleanup(agents)
 	defer s.deliverQueue(agents)
 	defer s.deliverTodoNotices(agents)
 	for _, e := range captures {

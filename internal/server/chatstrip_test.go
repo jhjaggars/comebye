@@ -43,12 +43,14 @@ func TestIdleChatHelperIsSuggestedAndAutoParked(t *testing.T) {
 
 	young := chatAgent(t, s, page, 5*time.Hour, now)
 	s.parkSuggestStep(context.Background(), []herdr.AgentInfo{young}, now)
+	s.autoParkStep(context.Background(), []herdr.AgentInfo{young}, now) // the janitor's stage, after the suggestion
 	if len(parked) != 0 {
 		t.Fatalf("parked a chat idle for 5h: %v", parked)
 	}
 	// Idle for a day: suggested after the hour setting, parked after a day.
 	old := chatAgent(t, s, page, 30*time.Hour, now)
 	s.parkSuggestStep(context.Background(), []herdr.AgentInfo{old}, now)
+	s.autoParkStep(context.Background(), []herdr.AgentInfo{old}, now) // the janitor's stage, after the suggestion
 	if len(parked) != 1 || parked[0] != "chat-drill" {
 		t.Fatalf("parked %v, want the idle chat", parked)
 	}
@@ -60,6 +62,7 @@ func TestIdleChatHelperIsSuggestedAndAutoParked(t *testing.T) {
 	s.parkSug.auto = false
 	parked = nil
 	s.parkSuggestStep(context.Background(), []herdr.AgentInfo{old}, now)
+	s.autoParkStep(context.Background(), []herdr.AgentInfo{old}, now) // the janitor's stage, after the suggestion
 	cp := []herdr.AgentInfo{old}
 	s.stampPark(cp)
 	if cp[0].ParkHint == nil || len(parked) != 0 {
@@ -73,6 +76,7 @@ func TestIdleChatHelperIsSuggestedAndAutoParked(t *testing.T) {
 	}
 	s.parkSug.m = map[string]*parkSugState{}
 	s.parkSuggestStep(context.Background(), []herdr.AgentInfo{old}, now)
+	s.autoParkStep(context.Background(), []herdr.AgentInfo{old}, now) // the janitor's stage, after the suggestion
 	if len(parked) != 0 {
 		t.Errorf("parked a chat with an open question: %v", parked)
 	}

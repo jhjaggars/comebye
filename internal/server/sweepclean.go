@@ -132,8 +132,9 @@ func (s *Server) sweepCleanOne(ctx context.Context, it *removal, now time.Time) 
 	}()
 	ctx, cancel := context.WithTimeout(ctx, removeTimeout+90*time.Second)
 	defer cancel()
-	it.opts.Origin = true
-	s.review(ctx, it)
+	// In a janitor pass, the automatic removal may have reviewed it a moment
+	// ago: one host review per candidate per pass.
+	it = s.reviewOnce(ctx, it)
 	if ok, _ := sweepCleanVerdict(it, s.autoFactsOf(ctx, it)); !ok {
 		return nil
 	}

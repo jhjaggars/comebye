@@ -264,27 +264,9 @@ func (l *sweepLoop) get() sweepLoopState {
 	return st
 }
 
-// RunSweepLoop checks the clock every minute until ctx is done; the sweep and
-// the item are decided in sweepLoopStep.
-func (s *Server) RunSweepLoop(ctx context.Context) {
-	if s.ledger == nil || s.sweeps == nil {
-		return
-	}
-	tick := time.NewTicker(s.sweeps.tick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.sweepLoopStep(ctx, time.Now())
-		}
-	}
-}
-
-// sweepLoopStep is one look at the clock: sweep when one is due, then, with
-// clean-up on, look at the marked sessions (after a sweep, or every sweepCleanLook).
-// It reports whether a sweep ran. One step at a time.
+// sweepLoopStep is the janitor's sweep stage (janitor.go): sweep when one is
+// due, then, with clean-up on, look at the marked sessions (after a sweep, or
+// every sweepCleanLook). It reports whether a sweep ran. One step at a time.
 func (s *Server) sweepLoopStep(ctx context.Context, now time.Time) bool {
 	l := s.sweeps
 	if l == nil || s.ledger == nil {
@@ -306,11 +288,9 @@ func (s *Server) sweepLoopStep(ctx context.Context, now time.Time) bool {
 	s.sweepCloseOldItem()
 	if conf.On {
 		s.sweepCleanStep(ctx, now, due)
-		if due || l.archiveAge > 0 {
-			// Finished work with no progress for days is put away (archived.go).
-			s.recordDone(now, s.archiveStep(ctx, now))
-		}
 	}
+	// Finished work with no progress for days is put away by the janitor's
+	// next stage, archive (janitor.go), after each sweep.
 	return due
 }
 

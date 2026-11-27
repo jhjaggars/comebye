@@ -112,6 +112,7 @@ func main() {
 		archiveRcpt    = flag.String("archive-recipient", getenv("COMEBYE_ARCHIVE_RECIPIENT"), "the archive's recipients: age1... and/or ssh-... public keys, or a file of them")
 		usageOn        = flag.Bool("usage", envBool("COMEBYE_USAGE", true), "count the tokens this host's agents spend (Claude Code and Pi transcripts: counts and labels only, never text) for the Usage screen and `comebye usage`; needs the state directory")
 		usageEvery     = flag.Duration("usage-interval", envDuration("COMEBYE_USAGE_INTERVAL", 2*time.Minute), "how often to scan the session files for token counts (and, on a hub, to gather the peers')")
+		archiveWorkers = flag.Bool("archive-workers", envBool("COMEBYE_ARCHIVE_WORKERS", false), "with an archive set up: also pull the worker VMs' sessions into it hourly (comebye-worker archive --all; the machine that runs the workers, since a worker holds no archive key)")
 		recallIndex    = flag.String("recall-index", getenv("COMEBYE_RECALL_INDEX"), "the transcript index the app searches, read-only (default ~/.local/state/comebye/recall/index.db; see `comebye archive index`)")
 		releaseRepo    = flag.String("release-repo", getenv("COMEBYE_RELEASE_REPO"), "a dedicated comebye clone this host tags releases from, with its own git and gh credentials (see docs/security.md). On a hub it backs the app's \"Approve release\" button; on a peer (-hub) it lets the hub tag through this host (-release-host there); empty: off")
 		releaseHost    = flag.String("release-host", getenv("COMEBYE_RELEASE_HOST"), "on the hub: the peer whose -release-repo the \"Approve release\" button tags through (the hub asks it to check, tag and report the build; it keeps no clone or credentials of its own); not with -release-repo")
@@ -502,6 +503,7 @@ func main() {
 		OpencodeDir:    acfg.OpencodeDir,
 		Usage:          server.UsageConfig{Off: !*usageOn, Interval: *usageEvery, Sources: usageSources(acfg.Sources())},
 		RecallIndex:    (&archive.Config{Index: *recallIndex}).IndexPath(),
+		ArchiveShip:    archiveShip(arch != nil, acfg, *archiveWorkers, *addr, expandHome(*stateDir), (&archive.Config{Index: *recallIndex}).IndexPath()),
 		Addr:           *addr,
 		AllowLogins:    logins,
 		// Checked again by ListenAndServe, so a library caller cannot
@@ -558,8 +560,8 @@ func main() {
 	if *announce {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
-	go srv.RunWatch(context.Background()) // report, quiet, auto to-do, blocked relay, loop nudge, park suggest, reset
-	go srv.RunSweepLoop(context.Background())
+	go srv.RunWatch(context.Background())   // report, quiet, auto to-do, blocked relay, loop nudge, park suggest, reset
+	go srv.RunJanitor(context.Background()) // auto-clean, auto-remove, sweep, archive, auto-park, park retention, reask, scratch, ship
 	transcript.DefaultResolver.OpencodeDir = acfg.OpencodeDir
 	go srv.RunUsage(context.Background())
 	go srv.RunOpencodeMirror(context.Background())
@@ -567,10 +569,7 @@ func main() {
 	go srv.RunRollout(context.Background())
 	go srv.RunAutoRollout(context.Background())
 	go srv.RunProvision(context.Background())
-	go srv.RunParkRetention(context.Background())
-	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
-	go srv.RunScratchPrune(context.Background())
 
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -1048,4 +1047,26 @@ func usageSources(in []archive.Source) []usage.Source {
 		out = append(out, usage.Source{Kind: s.Kind, Root: s.Root})
 	}
 	return out
+}
+
+// archiveShip is the janitor's ship stage's setup (internal/server/archiveship.go):
+// nil where no archive is set up. The child `comebye archive` gets the archive
+// settings this server was given (as flags or environment), the index this
+// server reads, and this server's address and state directory for the ledger.
+func archiveShip(on bool, c archive.Config, workers bool, addr, stateDir, index string) *server.ArchiveShip {
+	if !on {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("archive: the ship stage is off: %v", err)
+		return nil
+	}
+	env := []string{
+		"COMEBYE_ARCHIVE_ENCRYPTION=" + c.Encryption, "COMEBYE_ARCHIVE_DIR=" + c.Dir, "COMEBYE_ARCHIVE_S3=" + c.S3,
+		"COMEBYE_ARCHIVE_S3_CREDENTIALS=" + c.S3Credentials, "COMEBYE_ARCHIVE_RECIPIENT=" + c.Recipient,
+		"COMEBYE_HOST_NAME=" + c.Host, "COMEBYE_OPENCODE_MIRROR_DIR=" + c.OpencodeDir,
+		"COMEBYE_RECALL_INDEX=" + index, "COMEBYE_STATE_DIR=" + stateDir, "COMEBYE_URL=http://" + addr,
+	}
+	return &server.ArchiveShip{Bin: exe, Env: env, Workers: workers}
 }

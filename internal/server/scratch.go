@@ -145,29 +145,17 @@ func (s *Server) pruneScratch(ctx context.Context, dry bool) (scratch.Report, er
 	return scratch.Prune(s.scratchOpts(dry), scratch.PruneParams{Live: live, TmpMaxAge: s.cfg.TmpMaxAge}), nil
 }
 
-// RunScratchPrune prunes the temporary directory now and then.
-func (s *Server) RunScratchPrune(ctx context.Context) {
-	if s.cfg.ScratchDir == "" || s.cfg.ScratchEvery <= 0 || s.client == nil {
-		return
-	}
-	t := time.NewTimer(scratchFirstRun)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		rep, err := s.pruneScratch(cctx, false)
-		cancel()
-		switch {
-		case err != nil:
-			log.Printf("scratch: prune skipped: %v", err)
-		case !rep.Empty():
-			log.Printf("scratch: prune: %s", rep.Summary())
-		}
-		t.Reset(s.cfg.ScratchEvery)
+// scratchStep is the janitor's scratch stage (janitor.go): first
+// scratchFirstRun after the start, then every ScratchEvery.
+func (s *Server) scratchStep(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	rep, err := s.pruneScratch(cctx, false)
+	switch {
+	case err != nil:
+		log.Printf("scratch: prune skipped: %v", err)
+	case !rep.Empty():
+		log.Printf("scratch: prune: %s", rep.Summary())
 	}
 }
 

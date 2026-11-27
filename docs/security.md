@@ -75,13 +75,16 @@ Treat access to it like SSH access to that machine.
   by prompt, in a to-do or in its report. Its brief and any report it waits on
   are visible to it by design.
 - <a id="searching-transcripts"></a>**Searching transcripts.** `/api/recall/*` reads
-  the index: every session the host indexed, tool output included. Those routes are
-  the user's alone, with no agent level at all. The agent levels would admit a tagged
-  worker or a forwarding peer, and the plaintext index must never reach a worker;
-  keeping other agents' output out of an agent's reach also closes a prompt-injection
-  route. Agents on a host with the index keep `comebye recall`, which reads the file
-  and needs nothing from the server. The usual limit applies: a local process can
-  read the file anyway. The server opens the index with `sqlite3 -readonly -safe`, in
+  the index: every session the hub indexed, tool output included. Those routes are
+  the user's alone, with no agent level at all, except `POST /api/recall/query`, the
+  `comebye recall` CLI's one route. The plaintext index must never reach a worker, so a
+  tagged node gets 403 on every one of them, the query route included. The query route
+  admits the agent role, and on a peer it forwards an agent's question to the hub, so an
+  agent on any untagged host can search every host's sessions. Before, only an agent on a
+  host that built its own index could, by reading the file. Other agents' output is still
+  untrusted text when `recall` shows it: it is a prompt-injection route, as it was through
+  the local file. The usual limit applies: a local process on the hub can read the file
+  anyway. The server opens the index with `sqlite3 -readonly -safe`, in
   a process per query with a 3 s limit and at most two at once, and checks path values
   against an allowlist. It does not log queries. Answers are `no-store`, and the app
   keeps no query or transcript text in browser storage (it remembers filters; a query

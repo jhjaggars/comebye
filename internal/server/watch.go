@@ -18,15 +18,15 @@ import (
 // reset (10 m). Now one pass runs their steps, in this order:
 //
 //  1. report: capture finished workers' reports, and the deliveries that
-//     hang off the ledger (callbacks, queued prompts, to-do answers); every
-//     30 s also auto-clean and auto-remove;
+//     hang off the ledger (callbacks, queued prompts, to-do answers);
 //  2. quiet: the "working but silent" mark, every quietTick;
 //  3. autotodo: blocked and question to-dos, on events and every autoTick,
 //     and once when the next agent crosses its threshold before that tick;
 //  4. relay: the blocked relay, on events and the tick, and every relayTick
 //     while an agent is blocked or an episode is open;
 //  5. loop: the loop nudge, every loopTick;
-//  6. park: park suggest and auto-park, every parkSugTick;
+//  6. park: park suggest, every parkSugTick (auto-park acts on it in the
+//     janitor, janitor.go);
 //  7. reset: the coordinator reset, at start and every resetEvery.
 //
 // What starts a pass: a fleet "agents" event (the steps that ran on events
@@ -147,15 +147,8 @@ func newWatcher(s *Server) *watcher {
 			name:  "report",
 			on:    func() bool { return s.ledger != nil },
 			event: func(_ context.Context, agents []herdr.AgentInfo, _ time.Time) { s.observeLedger(agents) },
-			// Timed work that no fleet update triggers: the look at landed
-			// entries.
-			every: 30 * time.Second,
-			tick: func(ctx context.Context, agents []herdr.AgentInfo, _ time.Time) {
-				s.autoCleanup(agents)
-				if s.autoRemove {
-					s.spawn(func() { s.autoRemoveStep(ctx, time.Now()) })
-				}
-			},
+			// Auto-clean and auto-remove, its timed work before, are janitor
+			// stages now (janitor.go).
 			// A held delivery's retry (typing.go): the deliveries, not the whole
 			// ledger look.
 			retry: func(_ context.Context, agents []herdr.AgentInfo, _ time.Time) {

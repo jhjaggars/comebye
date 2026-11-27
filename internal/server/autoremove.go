@@ -293,8 +293,7 @@ func (s *Server) autoRemoveGoneOne(ctx context.Context, it *removal) bool {
 func (s *Server) autoRemoveOne(ctx context.Context, it *removal) bool {
 	ctx, cancel := context.WithTimeout(ctx, removeTimeout+90*time.Second)
 	defer cancel()
-	it.opts.Origin = true
-	s.review(ctx, it)
+	it = s.reviewOnce(ctx, it) // shared with sweep-clean in a janitor pass
 	f := s.autoFactsOf(ctx, it)
 	if ok, _ := autoRemoveVerdict(it, f); !ok {
 		if s.ttlReaskDue(it, f) {

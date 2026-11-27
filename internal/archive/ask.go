@@ -187,8 +187,11 @@ func (ix *Index) Thread(id string) (*ThreadView, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) != 1 {
-		return nil, fmt.Errorf("thread %q: %d matches", id, len(rows))
+	switch {
+	case len(rows) == 0:
+		return nil, fmt.Errorf("thread %q: %w", id, ErrNoThread)
+	case len(rows) > 1:
+		return nil, fmt.Errorf("thread %q: %d matches: %w", id, len(rows), ErrAmbiguous)
 	}
 	r := rows[0]
 	v := &ThreadView{ID: sget(r, "id"), Title: sget(r, "title"), Brief: sget(r, "brief"), Started: sget(r, "started"), Ended: sget(r, "ended"),
