@@ -182,14 +182,6 @@ func (e *rolloutEngine) verifyWithHub(j *Rollout, st *RolloutStep, h relHost, fo
 	return false
 }
 
-// peersMissing: the peers an earlier wave finished that are not up and on
-// the version now (the hub wave must not start over a peer that went away).
-func (e *rolloutEngine) peersMissing(j Rollout, hub *RolloutStep) ([]string, bool) {
-	old, away := e.peersNotBack(j)
-	missing := append(old, away...)
-	return missing, len(missing) == 0
-}
-
 // peersNotBack splits the peers an earlier wave finished that are not up and
 // on the version now: old are reachable on an older version (gone back, a
 // real sign of trouble), away are not reachable at all (a worker that
@@ -220,26 +212,39 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		e.finishStep(j, st, h, now, "already on the version")
 		return true
 	}
-	if missing, ok := e.peersMissing(*j, st); !ok {
+	// The hub wave must not start over a peer that went back to an older
+	// version: that is a sign of trouble, and it holds the step (5 minutes,
+	// then it stops). A peer of an earlier wave that is only unreachable now
+	// (a worker that powered off when idle, a laptop asleep) is treated as
+	// the rest of the engine treats an offline host: it was proven on the
+	// version when its step finished, and it does not hold the hub. A peer
+	// the rollout skipped (offline, or failed after the canary) is not
+	// counted at all (issue #141).
+	old, away := e.peersNotBack(*j)
+	if len(old) > 0 {
 		if st.OfflineSince == nil {
 			t := now
 			st.OfflineSince = &t
 		}
 		if now.Sub(*st.OfflineSince) >= e.backWait {
-			e.fail(j, st, now, "peers of the earlier waves are not back: "+strings.Join(missing, ", "), "")
+			e.fail(j, st, now, "peers of the earlier waves went back to an older version: "+strings.Join(old, ", "), "")
 			return false
 		}
-		st.Detail = "waiting for the peers to be back: " + strings.Join(missing, ", ")
+		st.Detail = "waiting for the peers to be back on " + j.Version + ": " + strings.Join(old, ", ")
 		j.Note = st.Detail
 		return false
 	}
 	st.OfflineSince = nil
+	awayNote := ""
+	if len(away) > 0 {
+		awayNote = "peers not reachable now (upgraded earlier in this rollout): " + strings.Join(away, ", ")
+	}
 	cctx, cancel := context.WithTimeout(ctx, rolloutHostCallWait)
 	defer cancel()
 	// A deploy already running for this version is adopted, not started twice
 	// (the hub went down between the start and the save).
 	if ds, err := e.ops.DeployStatus(cctx); err == nil && ds.Record != nil && ds.Record.Version == j.Version && ds.Record.State == depRunning {
-		e.hubStarted(j, st, ds.Record.Started, now, "adopted the deploy already running")
+		e.hubStarted(j, st, ds.Record.Started, now, joinNote("adopted the deploy already running", awayNote))
 		return false
 	}
 	// The hub's own restart would cut short what it is busy with (a sign-in
@@ -268,9 +273,17 @@ func (e *rolloutEngine) beginHub(ctx context.Context, j *Rollout, st *RolloutSte
 		j.Note = st.Detail
 		return false
 	}
-	e.hubStarted(j, st, parseDeployStart(started), now, how)
+	e.hubStarted(j, st, parseDeployStart(started), now, joinNote(how, awayNote))
 	st.BusyNote = how
 	return false
+}
+
+// joinNote joins two notes of a step with " · ", either of them maybe empty.
+func joinNote(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + " · " + b
 }
 
 func parseDeployStart(s string) time.Time {

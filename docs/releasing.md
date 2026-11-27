@@ -144,7 +144,11 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
 
 - **Order:** the canary first, alone, then a soak, then the other peers one at a time (fleet order), then the hub
   last. The hub wave is the deploy command (Bump hub) when one is set, else the hub's own upgrade; it changes what
-  is running in the cluster and has no automatic undo, so it only follows peers that came back healthy. Its own
+  is running in the cluster and has no automatic undo, so it only follows peers that came back healthy. Before the
+  deploy it waits (up to 5 minutes, then it stops) only for a peer of an earlier wave that is reachable on an older
+  version (it went back). A peer that is unreachable by then (a worker that powered off when idle) does not hold it,
+  the same as everywhere else in the rollout: it was proven on the version when its step finished, and the deploy's
+  step names it; a peer the rollout skipped (offline, or failed after the canary) is not counted at all. Its own
   gate is the hub: once the deploy's record is ok and the hub (the new one, after the restart the deploy causes)
   runs the version, the step passes. A peer of an earlier wave that is unreachable by then (a worker that powered
   off when idle) does not hold it, since it was proven on the version when its step finished; the step names it.
@@ -186,9 +190,20 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
 - **Hosts the app may not upgrade** (no `-release-upgrade`) are listed as skipped, with why; they do not hold up
   the others.
 - **Gates:** a host's own upgrade record says ok (its smoke check ran, and it put the old binary back if not), then
-  the hub sees it back online on the version (5 minutes). Any failure stops the whole rollout at once: the rest are
-  not touched, hosts already done stay done. **Retry** runs the failed step again; **Cancel** ends it and reverts
-  nothing.
+  the hub sees it back online on the version (5 minutes). A failure on the canary, on the hub's wave, or in a
+  rollout with no canary that proved the release (none set, a lone host, the canary skipped while offline) stops the
+  whole rollout at once: the rest are not touched, hosts already done stay done. **Retry** runs the failed step
+  again; **Cancel** ends it and reverts nothing.
+- **A host that fails after the canary:** once the canary has upgraded, been verified and soaked, a later peer whose
+  upgrade or verify fails (its run failed or rolled back, it could not be started, it did not come back on the
+  version) is skipped with the reason and its output (`rollout.skip`, ok=false), and the rollout goes on to the
+  others; one broken host no longer holds the fleet, or every later release, back. The rollout files **one** To do
+  for all such hosts ("The v0.5.70 rollout skipped wk1, wk2: the upgrade failed", each with its reason and the last
+  lines of its output), rewritten as more fail, never one per host or per retry; the host's own "upgrade of HOST
+  failed" item is not filed for them. It closes with the release item, or when a newer release supersedes it. The
+  rollout finishes `not ok: … K skipped (…)`. **Retrying:** such a host is not caught up by this release (that would
+  try a broken host again and again); **Roll out again** on the Fleet card retries it now, and the next release's
+  rollout tries it once more, like any host behind (and skips it again, with its own one To do, if it fails again).
 - **Offline hosts** are skipped after 2 minutes and listed. The loop keeps looking (once a minute): when a skipped
   host is back, it upgrades it through the same gates (`rollout.catchup`), and the job is done again after it. While
   the automatic rollout is on there is no time limit; with it off, it looks for a week after the rollout finished.
@@ -204,6 +219,10 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   names the hosts left behind (audited `release.done-skip-offline`), and the catch-up above still upgrades the ones
   the rollout skipped when they are back. A plain done is refused while any host is behind, and the hub or a
   reachable host behind is never skipped.
+- **A stuck rollout is always reachable:** there is one rollout at a time, and a live one (running, paused or
+  stopped) of an older release than the one the Releases tab shows still shows its band there, saying which release
+  it is (with a link to its item), with **Retry** and **Cancel** (or Pause / Resume); the tab's badge is on while it
+  is stopped or paused, and the per-host buttons are locked meanwhile, as for the shown release's own rollout.
 - **Pause** takes effect when the step in flight ends; it never interrupts an install or a restart. While a rollout
   is live the per-host Upgrade, Roll back and Bump hub buttons are locked.
 - **State:** `<state-dir>/release/rollout.json`, written atomically and read by a loop on the ledger host every few
@@ -240,7 +259,10 @@ restarting the hub loses nothing. The confirm names the version, the commit, the
   starts nothing. A rollout of an older release that **stopped** does not hold a newer one back: once the newer
   release's build is green, the stopped job is ended (`rollout.supersede`, "superseded by v…"), its release item
   is closed with that line (`release.superseded`) and its rollout alarm with it, and the newer rollout starts; it
-  goes through the same hosts and gates. A paused rollout, or a running one, is still waited for. It starts once per release: the item keeps the job's id (`auto_rollout`), and the job on file
+  goes through the same hosts and gates. A paused rollout, or a running one, is still waited for. Whenever a
+  release's rollout starts (automatic or tapped), every older release item that never started one (a release the
+  stop held back, then a newer one overtook) is closed too, with "vX was never rolled out: superseded by vY"
+  (`release.superseded`); an item being tagged right now is left alone. It starts once per release: the item keeps the job's id (`auto_rollout`), and the job on file
   names its item, so a hub restart between the tag and the start, or between the start and that mark, neither
   misses the release nor starts it twice. An automatic rollout never wakes a stopped worker: it is listed as skipped
   and upgraded when it next starts. Turn it off with **Roll out automatically** in the hub's settings (Peers, the
@@ -288,7 +310,8 @@ knows nothing about what it does.
   HOST failed") with the phase, the reason, the last lines of the cleaned output and
   a link to the release item. There is one open item per release and target: a
   second failure while it is open adds nothing, and a later run that succeeds closes
-  it. A new failure after it closed files a new one.
+  it. A new failure after it closed files a new one. A host a rollout skipped because it failed after the canary is
+  named in that rollout's one To do instead (see "A host that fails after the canary" above).
 - `-release-dry-run` runs nothing and records a dry run.
 
 ### Simple setup: your own comebye holds the clone

@@ -167,6 +167,7 @@ func (s *Server) autoRolloutTick(ctx context.Context) string {
 	s.markAuto(it.ID, j.ID)
 	s.auditBy(ledger.AuditEvent{By: "comebye", Action: "rollout.auto", Todo: it.ID, OK: true,
 		Detail: it.Release.Version + ": approved by " + oneLine(it.Release.ApprovedBy, 80) + ", build green: started " + j.ID})
+	s.closeOlderUnstarted(it)
 	return "started " + j.ID
 }
 
@@ -204,6 +205,65 @@ func (s *Server) supersedeItem(old Rollout, version string) {
 			log.Printf("auto rollout: close alarm %s: %v", a.ID, err)
 		}
 	}
+}
+
+// closeOlderUnstarted closes every older release item that never started a
+// rollout, now that a newer release's rollout (it) has started: an older
+// release the hub never got to (a stopped rollout held it back, then a newer
+// one superseded that) would otherwise stay open for good, since nothing
+// rolls it out any more and the hosts move past it. Its note says what
+// replaced it (release.superseded). An item whose rollout ever started is
+// left to its own close (sweepReleasesWith, supersedeItem), and so is one
+// being tagged right now.
+func (s *Server) closeOlderUnstarted(it Todo) {
+	if s.todos == nil || it.Release == nil {
+		return
+	}
+	v := it.Release.Version
+	for _, o := range s.todos.list("") {
+		r := o.Release
+		if r == nil || o.ID == it.ID || !o.active() || r.Dismissed || !newerVersion(v, r.Version) || s.tagInFlight(o.ID) {
+			continue
+		}
+		if r.AutoRollout != "" && !strings.HasPrefix(r.AutoRollout, "none") {
+			continue // the automatic rollout started one
+		}
+		if s.rolloutEverStarted(o.ID) {
+			continue
+		}
+		note := r.Version + " was never rolled out: superseded by " + v + ", which rolls out instead"
+		closed, err := s.todos.mutate(o.ID, func(t *Todo) error {
+			if !t.active() {
+				return errTodoClosed
+			}
+			now := time.Now().UTC()
+			t.State, t.ClosedBy, t.ClosedAt, t.Notice = TodoDone, "comebye", &now, nil
+			if t.Release != nil {
+				rel := *t.Release
+				rel.RolloutNote = note
+				t.Release = &rel
+			}
+			return nil
+		})
+		if err != nil {
+			continue
+		}
+		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: closed.ID, Action: "release.superseded", OK: true,
+			Detail: r.Version + ": no rollout had started; superseded by " + v + ": the item was closed"})
+	}
+}
+
+// rolloutEverStarted: the audit log has a rollout.start for the item.
+func (s *Server) rolloutEverStarted(id string) bool {
+	if s.ledger == nil {
+		return false
+	}
+	for _, ev := range s.ledger.AuditLog(id) {
+		if ev.Action == "rollout.start" {
+			return true
+		}
+	}
+	return false
 }
 
 // markAuto records on the release item that its automatic rollout is

@@ -299,9 +299,12 @@ func TestRolloutHappyPath(t *testing.T) {
 	}
 }
 
+// With no canary to prove the release, any failure stops the rollout (after
+// a canary, a peer's failure is skipped: rollout_skipfail_test.go).
 func TestRolloutStopsAtFirstFailureAndRetries(t *testing.T) {
 	for _, state := range []string{upgrade.RecRolledBack, upgrade.RecFailed} {
 		r := newRolloutRig(t, "a", "b", "c")
+		r.canary = ""
 		r.start()
 		r.tick()
 		r.f.finish("a", upgrade.RecOK, "v0.6.4")
@@ -806,7 +809,11 @@ func TestHubWaveStopsWhenTheHubComesBackOnTheOldVersion(t *testing.T) {
 	}
 }
 
-func TestHubWaveWaitsForAPeerThatWentAway(t *testing.T) {
+// A peer of an earlier wave that is unreachable before the deploy (a
+// worker that powered off when idle) does not hold the hub: it was proven on
+// the version when its step finished (issue #141). One that is reachable on
+// an older version went back: the hub waits for it, then stops.
+func TestHubWaveGoesOnOverAPeerThatWentAwayButWaitsForOneThatWentBack(t *testing.T) {
 	r := newHubRig(t, "a", "b")
 	r.startWithHub("a", "b")
 	r.e.soak = 0
@@ -816,26 +823,32 @@ func TestHubWaveWaitsForAPeerThatWentAway(t *testing.T) {
 	r.f.set("a", func(h *relHost) { h.Status = "down" })
 	r.f.finish("b", upgrade.RecOK, "v0.6.4")
 	r.tick()
-	r.want("running a=ok b=ok hub=pending")
-	if r.f.deploys != 0 {
-		t.Fatal("deployed over a missing peer")
-	}
-	r.f.set("a", func(h *relHost) { h.Status = "ok" })
-	r.tick()
 	r.want("running a=ok b=ok hub=upgrading")
-	// and it does not wait forever
+	j, _ := r.e.Get()
+	if d := j.Plan[2].Detail; !strings.Contains(d, "not reachable now") || !strings.Contains(d, "a") {
+		t.Fatalf("hub detail = %q", d)
+	}
+
 	r2 := newHubRig(t, "a", "b")
 	r2.startWithHub("a", "b")
 	r2.e.soak = 0
 	r2.tick()
 	r2.f.finish("a", upgrade.RecOK, "v0.6.4")
 	r2.tick()
-	r2.f.set("a", func(h *relHost) { h.Status = "down" })
+	r2.f.set("a", func(h *relHost) { h.Version = "v0.6.3" })
 	r2.f.finish("b", upgrade.RecOK, "v0.6.4")
 	r2.tick()
+	r2.want("running a=ok b=ok hub=pending")
+	if r2.f.deploys != 0 {
+		t.Fatal("deployed over a peer that went back")
+	}
 	r2.f.advance(6 * time.Minute)
 	r2.tick()
 	r2.want("stopped a=ok b=ok hub=failed")
+	j2, _ := r2.e.Get()
+	if !strings.Contains(j2.Stop.Reason, "went back to an older version: a (v0.6.3)") {
+		t.Fatalf("reason = %q", j2.Stop.Reason)
+	}
 }
 
 func TestHubWaveStillRunsWhenAPeerWasSkipped(t *testing.T) {

@@ -638,7 +638,7 @@ func TestAppRolloutToAllCoversTheHubAndItsPeers(t *testing.T) {
 	var js strings.Builder
 	js.WriteString("const rls = { confirm: null, busy: false };\n")
 	for _, name := range []string{"esc", "escAttr", "cpOut", "relShort", "relRecordText", "relDeployText", "relDeployOut", "relWhen",
-		"roJob", "roLive", "RO_PHASE", "roAgain", "roSkipOfflineHtml", "roSoakLeft", "roDur", "roSoakText", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
+		"roJob", "roLive", "roOther", "RO_PHASE", "roAgain", "roSkipOfflineHtml", "roSoakLeft", "roDur", "roSoakText", "roStepText", "roGatesHtml", "roBandHtml", "rlPreviewTag", "roConfirmHtml", "roButtonHtml", "relRowHtml"} {
 		b := regexp.MustCompile(`\n(function ` + name + `\(.*\}|const ` + name + ` = .*;)\n`).Find(src) // a one-liner
 		if b == nil {
 			b = regexp.MustCompile(`(?s)\nfunction ` + name + `\(.*?\n\}\n`).Find(src)

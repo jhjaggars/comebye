@@ -4752,6 +4752,10 @@ function relDeployConfirmHtml(d) {
 // d.rollout_plan the order the confirm offers.
 function roJob(d) { return d && d.todo && d.rollout_job && d.rollout_job.todo === d.todo.id ? d.rollout_job : null; }
 function roLive(j) { return !!j && (j.state === "running" || j.state === "paused" || j.state === "stopped"); }
+// d.rollout_other is a live job of another release than the one shown (a
+// stopped rollout of an older release): its band, with Retry and Cancel, is
+// shown too, or nothing on the page could end it.
+function roOther(d) { const j = d && d.rollout_other; return roLive(j) && !roJob(d) ? j : null; }
 function roState(d) { const j = roJob(d); return j ? j.state : ""; }
 const RO_WAVE = { canary: "Canary", peers: "Other peers", hub: "Hub" };
 const roWaveName = (w, plan) => (w === "peers" && !(plan || []).some((st) => st.wave === "canary") ? "Peers" : RO_WAVE[w]);
@@ -4769,7 +4773,7 @@ function roStepText(st, job) {
     case "verifying": return wh ? st.detail || "upgraded with the hub: waiting for it to be back" : (st.mode === "deploy" ? "deploy ok · " : "upgrade ok · ") + (st.detail || "waiting for it to be back");
     case "soaking": return roSoakText(st);
     case "ok": return (st.detail || "") + (st.woke ? (st.detail ? " · " : "") + "woke it" : "");
-    case "skipped": return "skipped · " + (st.detail || "") + (st.catch_up ? " · upgrades when it is back" : "");
+    case "skipped": return "skipped · " + (st.detail || "") + (st.catch_up ? " · upgrades when it is back" : st.failed ? " · the others went on" : "");
     default: return st.detail || "failed";
   }
 }
@@ -4814,7 +4818,9 @@ function roGatesHtml(st, version) {
 }
 
 function roBandHtml(d, job) {
-  const cur = d.todo.release, hosts = job.plan || [];
+  const cur = { version: job.version }, hosts = job.plan || [];
+  // Another release's job: say which, and link its item.
+  const other = !roJob(d) ? `<div class="rl-band-s" data-rollout-other>This is the rollout of ${esc(job.version)}, not of the release shown here. <a href="#/todo/${encodeURIComponent(job.todo)}">Open the ${esc(job.version)} release</a></div>` : "";
   const doneN = hosts.filter((x) => x.phase === "ok").length;
   const skipped = hosts.filter((x) => x.phase === "skipped");
   const busy = rls.busy ? " disabled" : "";
@@ -4836,7 +4842,7 @@ function roBandHtml(d, job) {
       title = `Stopped at ${job.stop ? job.stop.host : "a host"}`;
       acts = b("ro-resume", "Retry", "rel-go") + b("ro-cancel", "Cancel");
       cls = "stopped"; role = "alert";
-      return `<div class="rl-band rl-band-${cls}" role="${role}" data-rollout="${escAttr(job.state)}"><div class="rl-band-t">${esc(title)}</div>
+      return `<div class="rl-band rl-band-${cls}" role="${role}" data-rollout="${escAttr(job.state)}"><div class="rl-band-t">${esc(title)}</div>${other}
         <div class="rl-band-s">${esc(job.stop ? job.stop.reason : "")}</div>
         <div class="rl-band-s">${left.length ? "Not touched: " + esc(left.join(", ")) + "." : "Nothing else was left."} Hosts already done stay on ${esc(cur.version)}.</div>
         <div class="td-acts">${acts}</div></div>`;
@@ -4849,7 +4855,7 @@ function roBandHtml(d, job) {
     default:
       title = "Rollout cancelled · hosts keep the version they have";
   }
-  return `<div class="rl-band rl-band-${cls}" role="${role}" data-rollout="${escAttr(job.state)}"><div class="rl-band-t">${esc(title)}</div>
+  return `<div class="rl-band rl-band-${cls}" role="${role}" data-rollout="${escAttr(job.state)}"><div class="rl-band-t">${esc(title)}</div>${other}
     ${job.state === "running" || job.state === "paused" ? `<div class="rl-band-s">${esc(job.note || "")}</div>` : ""}
     ${acts ? `<div class="td-acts">${acts}</div>` : ""}</div>`;
 }
@@ -4889,7 +4895,7 @@ function roConfirmHtml(d) {
   const soakFor = roDur(d.rollout_soak_s || 600);
   const soak = canary ? (c.skip_soak ? ` ${esc(canary)} goes first and does not soak; the rest follow one at a time.` : ` ${esc(canary)} goes first, alone, and soaks for ${esc(soakFor)}; the rest follow one at a time only if it stays healthy (no restart, no failed health check, still on ${esc(rl.version)}).`) : order.length > 1 ? " The peers go one at a time." : "";
   const skipBox = canary ? `<label class="pr-check rl-skip-soak"><input type="checkbox" data-rel-skip-soak${c.skip_soak ? " checked" : ""}> Skip the soak (an urgent fix)</label>` : "";
-  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} The first failure stops everything and leaves the rest alone; a host that fails rolls itself back. Offline hosts are skipped and upgraded when they are back; a stopped worker is started first.</div>
+  return `<div class="rel-confirm" role="group" aria-label="Confirm the rollout"><div>Roll out <b>${esc(rl.version)}</b> (<code>${esc(relShort(rl.commit))}</code>, the build passed) to ${total} host${total === 1 ? "" : "s"}${hubStep ? ", the hub last" : ""}, in this order?${soak} ${canary ? `A failure on ${esc(canary)} stops everything and leaves the rest alone; after it, a host whose upgrade fails is skipped and the others go on.` : "The first failure stops everything and leaves the rest alone."} A host that fails rolls itself back. Offline hosts are skipped and upgraded when they are back; a stopped worker is started first.</div>
     <ol class="rl-order">${li}${hubLi}${whLi}</ol>${skipBox}
     <div class="td-acts"><button type="button" class="rel-go" data-rel="confirm-rollout"${rls.busy ? " disabled" : ""}>Confirm: roll out ${esc(rl.version)} to ${total} host${total === 1 ? "" : "s"}</button>
     <button type="button" data-rel="cancel"${rls.busy ? " disabled" : ""}>Cancel</button></div></div>`;
@@ -4941,7 +4947,7 @@ function relRowHtml(x, d, job, step) {
   const rc = x.record && cur && x.record.version === cur.version ? x.record : null;
   const drec = isDeploy && dp.record && dp.record.version === cur.version ? dp.record : null;
   const running = !!(x.record && x.record.state === "running") || !!(isDeploy && dp.record && dp.record.state === "running");
-  const locked = roLive(job);
+  const locked = roLive(job) || !!roOther(d);
   const btn = (act, label, cls) => `<button type="button" class="${cls}" data-rel="${act}" data-host="${escAttr(x.name)}"${rls.busy || locked ? " disabled" : ""}>${esc(label)}</button>`;
   let act = "", sub = "", err = false, out = "", rowcls = "";
   if (tagged) {
@@ -5012,6 +5018,8 @@ function relFleetHtml(d) {
   const showJob = !!job && (roLive(job) || (job.state === "done" && !(ro && ro.complete)) || job.state === "cancelled");
   if (tagged) h += roButtonHtml(d, green) + roSkipOfflineHtml(d, job);
   if (tagged && showJob) h += roBandHtml(d, job);
+  const other = roOther(d);
+  if (other) h += roBandHtml(d, other);
   if (tagged && d.rollout_plan_error && d.rollout_enabled && green && !roLive(job) && !(ro && ro.complete)) h += `<div class="rel-note" data-rollout-plan-error>Roll out to all is not available: ${esc(d.rollout_plan_error)}</div>`;
   if (!hosts.length) h += `<div class="rel-note">${rls.data ? "No hosts." : "Loading…"}</div>`;
   if (tagged && roLive(job)) {
@@ -5179,8 +5187,8 @@ async function relPost(path, body) {
 
 async function relClick(act, host) {
   const d = rls.data;
-  if (!d || !d.todo) { if (act === "refresh") loadReleases(true); return; }
-  const t = d.todo, id = encodeURIComponent(t.id);
+  if (!d || (!d.todo && !(roOther(d) && act.startsWith("ro-")))) { if (act === "refresh") loadReleases(true); return; }
+  const t = d.todo || {}, id = encodeURIComponent(t.id || "");
   switch (act) {
     case "refresh": loadReleases(true); return;
     case "approve": rls.confirm = { k: "tag" }; break;
@@ -5216,7 +5224,7 @@ async function relClick(act, host) {
       return;
     }
     case "ro-pause": case "ro-resume": case "ro-cancel": case "ro-skip-soak": {
-      const job = roJob(d);
+      const job = roJob(d) || roOther(d);
       if (!job) return;
       const verb = act.slice(3);
       if (await relPost(`/api/release/rollout/${verb}`, { id: job.id })) toast({ pause: "Pausing after the step in flight…", resume: "Resuming…", cancel: "Rollout cancelled. Nothing was reverted.", "skip-soak": "Soak skipped: the other hosts follow." }[verb]);

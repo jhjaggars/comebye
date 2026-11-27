@@ -136,6 +136,7 @@ func (s *Server) handleRolloutStart(w http.ResponseWriter, r *http.Request) {
 		relErr(w, http.StatusInternalServerError, "rollout_error", err.Error())
 		return
 	}
+	s.closeOlderUnstarted(it)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"rollout": job})
 }
 

@@ -475,6 +475,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 			s.rollout.onState = s.noteRollout
 			s.rollout.onHubTrouble = s.alarmHubStep
 			s.rollout.onSoakFail = s.alarmSoak
+			s.rollout.onSkipFail = s.alarmSkipFail
 			s.rollout.onEnd = s.tellRollout
 			s.rollout.catchUpAlways = s.autoRolloutOn
 			s.rollout.soakFor = s.rolloutSoakSetting // the setting; unset: the engine's own (10 min, shorter below)

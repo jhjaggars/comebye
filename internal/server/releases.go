@@ -263,6 +263,22 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out["history"] = s.releaseHistory(items, cur.ID)
+	// A live job of another release (a stopped older one, say) is shown too,
+	// with its Retry and Cancel: otherwise nothing on the page could end it.
+	if s.rollout != nil {
+		if j, has := s.rollout.Get(); has && j.live() && (!ok || j.Todo != cur.ID) {
+			out["rollout_other"] = j
+			if j.State == roStopped || j.State == roPaused {
+				why := " is paused"
+				if j.Stop != nil {
+					why = " stopped at " + j.Stop.Host + ": " + oneLine(j.Stop.Reason, 120)
+				} else if j.State == roStopped {
+					why = " stopped"
+				}
+				out["needs_you"], out["needs_text"] = true, "Rollout of "+j.Version+why
+			}
+		}
+	}
 	writeJSON(w, out)
 }
 
@@ -307,6 +323,7 @@ func (s *Server) sweepReleasesWith(hosts []relHost) {
 			detail = fmt.Sprintf("%s runs on the hub and every reachable host: the item was closed; behind: %s", it.Release.Version, strings.Join(behind, ", "))
 		}
 		s.auditBy(ledger.AuditEvent{By: "comebye", Todo: closed.ID, Action: "release.complete", OK: true, Detail: detail})
+		s.closeSkipAlarm(closed.ID, it.Release.Version+" is done")
 	}
 }
 

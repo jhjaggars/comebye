@@ -235,6 +235,9 @@ func (s *Server) alarmUpgrade(host string, rec upgrade.Record) {
 	case upgrade.RecOK:
 		s.rolloutSucceeded(rel, host)
 	case upgrade.RecFailed, upgrade.RecRolledBack:
+		if s.rolloutSkipsHost(host, rec.Version) {
+			return // the rollout skipped it and went on: its one To do names it (alarmSkipFail)
+		}
 		why := rec.Error
 		if why == "" {
 			why = rec.State
@@ -274,4 +277,110 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rolloutAlarmTargetSkipped is the target of a rollout's one To do for the
+// peers it skipped because their upgrade failed after the canary. A host
+// name has no "~", so it is no host's own target.
+const rolloutAlarmTargetSkipped = "~skipped"
+
+// rolloutSkipsHost: the rollout on file for version skips host's failure
+// and goes on (skipsFailure), or already did. Its upgrade alarm is then the
+// rollout's one To do, not one of its own.
+func (s *Server) rolloutSkipsHost(host, version string) bool {
+	if s.rollout == nil {
+		return false
+	}
+	j, ok := s.rollout.Peek() // without the lock: the loop may be settling this record inside a tick
+	if !ok || j.Version != version {
+		return false
+	}
+	for i := range j.Plan {
+		if st := &j.Plan[i]; st.Host == host && st.Mode == "" {
+			return st.Failed || ((st.Phase == roUpgrading || st.Phase == roVerifying) && skipsFailure(j, st))
+		}
+	}
+	return false
+}
+
+// alarmSkipFail keeps the rollout's one To do for the peers it skipped
+// because their upgrade failed after the canary: filed with the first, and
+// rewritten, not filed again, as more fail in the same rollout. It closes
+// with the release (sweepReleasesWith) or when a newer release supersedes
+// it; a later rollout that fails a host files its own.
+func (s *Server) alarmSkipFail(j Rollout) {
+	if s.todos == nil || j.Todo == "" {
+		return
+	}
+	rel, ok := s.todos.get(j.Todo)
+	if !ok || rel.Release == nil || rel.Release.Version != j.Version {
+		return
+	}
+	failed := failedHosts(j)
+	if len(failed) == 0 {
+		return
+	}
+	names := make([]string, len(failed))
+	for i, st := range failed {
+		names[i] = st.Host
+	}
+	version := rel.Release.Version
+	title := fmt.Sprintf("The %s rollout skipped %s: the upgrade failed", version, strings.Join(names, ", "))
+	plural := "s"
+	if len(failed) == 1 {
+		plural = ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The canary proved %s, so the rollout went on without the host%s whose upgrade failed:\n\n", mdSafe(version), plural)
+	for _, st := range failed {
+		fmt.Fprintf(&b, "- **%s**: %s\n", mdSafe(st.Host), mdSafe(oneLine(strings.TrimPrefix(st.Detail, "failed: "), 300)))
+	}
+	for _, st := range failed {
+		if tail := lastLines(cleanDeployOutput(st.Output), 6); tail != "" {
+			fmt.Fprintf(&b, "\nThe last lines of %s's output:\n\n```\n%s\n```\n", mdSafe(st.Host), strings.ReplaceAll(tail, "```", "'''"))
+		}
+	}
+	b.WriteString("\nA host whose upgrade fails keeps the version it ran (its smoke check puts the old binary back). " +
+		"This release does not try it again by itself. Fix the cause, then use **Roll out again** on the release; " +
+		"otherwise the next release tries it once more.")
+	it := Todo{
+		Question:  oneLine(title, todoMaxQuestion),
+		Context:   block(b.String(), todoMaxContext),
+		Kind:      "action",
+		Links:     []TodoLink{{Label: "Open the " + oneLine(version, 20) + " release", URL: "/#/todo/" + rel.ID}},
+		CreatedBy: AutoCreator,
+		Source:    SourceRollout,
+		AutoKey:   rolloutAlarmPrefix(rel.ID, rolloutAlarmTargetSkipped) + j.ID,
+	}
+	out, err := s.todos.addAuto(it)
+	switch {
+	case err == nil:
+		log.Printf("rollout alarm: %s for %s: skipped %s", out.ID, version, strings.Join(names, ", "))
+	case errors.Is(err, errAutoDup):
+		if !out.active() || out.Question == it.Question {
+			return // the user closed it, or it already names them all
+		}
+		if _, err := s.todos.mutate(out.ID, func(t *Todo) error {
+			t.Question, t.Context = it.Question, it.Context
+			return nil
+		}); err != nil {
+			log.Printf("rollout alarm: update %s: %v", out.ID, err)
+		}
+	default:
+		log.Printf("rollout alarm: %s skipped hosts: %v", version, err)
+	}
+}
+
+// closeSkipAlarm closes a release's To do for the hosts its rollout skipped
+// (alarmSkipFail), once the release itself is done.
+func (s *Server) closeSkipAlarm(relID, why string) {
+	prefix := rolloutAlarmPrefix(relID, rolloutAlarmTargetSkipped)
+	for _, a := range s.todos.list("") {
+		if !a.active() || a.Source != SourceRollout || !strings.HasPrefix(a.AutoKey, prefix) {
+			continue
+		}
+		if _, err := s.todos.close(a.ID, TodoDone, AutoCreator, why); err != nil && !errors.Is(err, errTodoClosed) {
+			log.Printf("rollout alarm: close %s: %v", a.ID, err)
+		}
+	}
 }

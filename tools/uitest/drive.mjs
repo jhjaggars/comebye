@@ -4542,7 +4542,7 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     const fleet = "#pr-releases [data-fleet]";
     // reload(st): the hub's answer becomes st. A poll already in flight was answered with the old state: wait for it to
     // land (settled) before asking again, so the old answer cannot be drawn over the new one.
-    const reload = async (st) => { state = st; await idle(); await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
+    const reload = async (st) => { state = st; await idle(); await page.evaluate(() => loadReleases(false)); await page.waitForFunction((v) => rls.data && document.querySelector("#pr-releases [data-fleet]") && (v === "ro-before" ? !rls.data.rollout_job : v === "ro-older" ? rls.data.rollout_other && !rls.data.rollout_job : rls.data.rollout_job), st); await idle(); };
     await openReleases(width);
     await reload("ro-before");
     // before: the button sits with the per-host Upgrade buttons, which stay usable
@@ -4611,6 +4611,22 @@ await check(`releases rolling rollout at ${width}: Roll out to all confirms vers
     await page.locator(band + " [data-rel=ro-resume]").click();
     await waitUntil(() => posts.length && posts[posts.length - 1].url === "/api/release/rollout/resume");
     if (posts[posts.length - 1].url !== "/api/release/rollout/resume") throw new Error("retry request");
+
+    // an older release's rollout stopped: its band shows on the release shown, with Retry and Cancel for that job
+    await reload("ro-older");
+    bt = await page.locator(band).innerText();
+    if ((await page.locator(band).count()) !== 1 || !/Stopped at kubevirt-1/.test(bt) || !/rollout of v0\.5\.21, not of the release shown/.test(bt) || !(await page.locator(band + " [data-rollout-other] a[href='#/todo/t0ld0000021']").count())) throw new Error("older band: " + bt);
+    if ((await page.locator(band + " button").allInnerTexts()).join() !== "Retry,Cancel") throw new Error("older controls: " + (await page.locator(band + " button").allInnerTexts()));
+    if (await page.locator(fleet + " .rel-roll").count()) throw new Error("Roll out to all while an older rollout is stuck");
+    if (await page.locator(fleet + " .rl-host button:not(.cpb):not(:disabled)").filter({ hasText: /Upgrade|Retry|Roll back/ }).count()) throw new Error("a host button is usable while an older rollout is stuck");
+    await page.screenshot({ path: `${out}/rollout-older-${width}.png` });
+    await page.locator(band + " [data-rel=ro-resume]").click();
+    await waitUntil(() => posts.length && posts[posts.length - 1].url === "/api/release/rollout/resume");
+    if (posts[posts.length - 1].body.id !== "r0ld21") throw new Error("older retry request " + JSON.stringify(posts[posts.length - 1]));
+    await reload("ro-older");
+    await page.locator(band + " [data-rel=ro-cancel]").click();
+    await waitUntil(() => posts.length && posts[posts.length - 1].url === "/api/release/rollout/cancel");
+    if (posts[posts.length - 1].body.id !== "r0ld21") throw new Error("older cancel request " + JSON.stringify(posts[posts.length - 1]));
 
     // done with one skipped: the release stays open, Roll out again for just that host
     await reload("ro-skipped");

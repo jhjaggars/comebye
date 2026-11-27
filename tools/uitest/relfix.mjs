@@ -21,6 +21,7 @@
 //   ro-paused   paused after the canary
 //   ro-failed   stopped at the second peer (its upgrade was rolled back); the third was not touched
 //   ro-skipped  done, one peer skipped (offline): "Roll out again"
+//   ro-older    v0.5.22 is tagged with no rollout of its own; the rollout of v0.5.21 stopped at kubevirt-1 (rollout_other)
 
 const V = "v0.5.22", PREV = "v0.5.21";
 const SHA = "a3f9c1e5d2b7480cf6e1a9b34d70c8e2f15a6b09";
@@ -30,7 +31,7 @@ const HIST = [
   ["v0.5.19", 6, "Answered box readable in light mode"], ["v0.5.18", 9, "Mark button reads Unmark"], ["v0.5.17", 12, "Briefings skip a slot when nothing changed"],
 ];
 
-export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed", "ro-before", "ro-before-canary", "ro-running", "ro-running-canary", "ro-waking", "ro-paused", "ro-failed", "ro-skipped"];
+export const RELEASE_STATES = ["none", "ci", "green", "red", "tagged", "partial", "partial3", "failed", "rollout", "done", "dismissed", "ro-before", "ro-before-canary", "ro-running", "ro-running-canary", "ro-waking", "ro-paused", "ro-failed", "ro-skipped", "ro-older"];
 
 // The v0.5.24 rollout as the user saw it. The deploy ran from laharl for the hub (comebye-hub);
 // laharl itself is on v0.5.23 and the Mac was upgraded by hand after its app upgrade failed.
@@ -71,6 +72,16 @@ function rolloutJobView(full) {
   out.rollout_plan = plan;
   out.rollout_hub_label = "Bump hub";
   if (name === "ro-before") return out;
+  if (name === "ro-older") {
+    // The job on file is an older release's, stopped: the shown release has none (no plan either: one job at a time).
+    delete out.rollout_plan;
+    const why = "rolled_back: smoke check failed: journal has errors";
+    out.rollout_other = { id: "r0ld21", todo: "t0ld0000021", version: PREV, commit: SHA, state: "stopped", by: "me", plan: [
+      step("peerbox", "peers", "ok", { from: "v0.5.20", to: PREV, done: ago(900000) }), step("kubevirt-1", "peers", "failed", { detail: why }), step("mac-mini", "peers", "pending"), hub()],
+      stop: { host: "kubevirt-1", reason: why, at: ago(600000) }, started: ago(1200000), updated: ago(600000), rev: 9, note: "stopped at kubevirt-1" };
+    out.needs_you = true; out.needs_text = `Rollout of ${PREV} stopped at kubevirt-1: ${why}`;
+    return out;
+  }
   delete out.rollout_plan;
   const job = { id: "r7f3a1", todo: out.todo.id, version: V, commit: SHA, state: "running", by: "me", ...(canary ? { canary: "peerbox" } : {}), plan, started: ago(300000), updated: ago(2000), rev: 4, note: "" };
   out.rollout_job = job;

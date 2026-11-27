@@ -34,9 +34,10 @@ import (
 // The gates are the ones that already exist: the host's own upgrade record
 // says ok (its smoke check ran, and it put the old binary back if it did
 // not), and then the hub sees the host back, online, on the target version.
-// The first failure stops the whole rollout and leaves the rest untouched; a
-// host that stays offline is skipped and listed, so "Roll out again" can
-// finish it later.
+// A failure stops the whole rollout and leaves the rest untouched, until the
+// canary has proven the release: after that, a peer whose upgrade fails is
+// skipped (Failed) and the others go on (issue #141). A host that stays
+// offline is skipped and listed, so "Roll out again" can finish it later.
 
 // Rollout states.
 const (
@@ -118,6 +119,11 @@ type RolloutStep struct {
 	// stopped worker could not be started); the loop upgrades it when it is
 	// back, while the job is done (catchUp).
 	CatchUp bool `json:"catch_up,omitempty"`
+	// Failed: the step was skipped because its upgrade or verify failed after
+	// the canary proved the release (skipsFailure): the rest went on. It is
+	// not caught up by this release (that would loop on a broken host); Roll
+	// out again retries it now, and the next release tries it once more.
+	Failed bool `json:"failed,omitempty"`
 	// Reask: the hub step stopped because the release host could not be
 	// asked to start the deploy, or said it has no command; the loop asks it
 	// again and retries the step once it answers with one (retryHub).
@@ -251,6 +257,10 @@ type rolloutEngine struct {
 	// onSoakFail is told when the canary's soak failed: the hub files its
 	// To do (alarmSoak).
 	onSoakFail func(Rollout, RolloutStep)
+	// onSkipFail is told when a peer was skipped because its upgrade failed
+	// after the canary (skipFailed): the hub keeps one To do per rollout
+	// naming every such host (alarmSkipFail).
+	onSkipFail func(Rollout)
 	// onEnd is told once per job, after the file was written, the first time
 	// it finished or stopped (Told): the user gets one note (issue #141,
 	// slice 5).
@@ -1386,6 +1396,10 @@ func (e *rolloutEngine) skip(j *Rollout, st *RolloutStep, now time.Time, why str
 }
 
 func (e *rolloutEngine) fail(j *Rollout, st *RolloutStep, now time.Time, why, output string) {
+	if skipsFailure(*j, st) {
+		e.skipFailed(j, st, now, why, output)
+		return
+	}
 	st.Phase, st.Detail, st.Output = roFailed, oneLine(why, 400), output
 	j.State, j.Note = roStopped, "stopped at "+st.Host
 	j.Stop = &RolloutStop{Host: st.Host, Reason: oneLine(why, 400), At: now}
@@ -1405,4 +1419,46 @@ func (e *rolloutEngine) emit(j Rollout, host, action string, ok bool, detail, by
 		d = strings.TrimSpace(d + " id=" + j.ID)
 	}
 	e.audit(ledger.AuditEvent{By: by, Action: action, Todo: j.Todo, Host: host, OK: ok, Detail: d})
+}
+
+// skipsFailure: st is a peer's step after the canary, and the canary has
+// upgraded, been verified and soaked in this job. The release is proven
+// then, and a peer that fails is the peer's trouble: it is skipped, and the
+// rest go on. A failure on the canary, on the hub's wave, or in a job with
+// no canary that proved it (none set, a lone host, the canary skipped while
+// offline) still stops the rollout.
+func skipsFailure(j Rollout, st *RolloutStep) bool {
+	if st.Wave != wavePeers || st.Mode != "" || j.Canary == "" || st.Host == j.Canary {
+		return false
+	}
+	for _, p := range j.Plan {
+		if p.Wave == waveCanary && p.Host == j.Canary {
+			return p.Phase == roOK && p.Started != nil
+		}
+	}
+	return false
+}
+
+// skipFailed is fail for a step skipsFailure lets go: the step is skipped,
+// with what failed and its output, and the job carries on.
+func (e *rolloutEngine) skipFailed(j *Rollout, st *RolloutStep, now time.Time, why, output string) {
+	t := now
+	st.Phase, st.Done, st.Failed, st.CatchUp, st.Output = roSkipped, &t, true, false, output
+	st.Detail = oneLine("failed: "+why, 400)
+	j.Note = st.Host + " failed: skipped it, going on"
+	e.emit(*j, st.Host, "rollout.skip", false, "failed after the canary: "+why+": skipped it, the rollout goes on", "comebye")
+	if e.onSkipFail != nil {
+		e.onSkipFail(*j)
+	}
+}
+
+// failedHosts are the job's steps skipped by skipFailed.
+func failedHosts(j Rollout) []RolloutStep {
+	var out []RolloutStep
+	for _, st := range j.Plan {
+		if st.Phase == roSkipped && st.Failed {
+			out = append(out, st)
+		}
+	}
+	return out
 }
