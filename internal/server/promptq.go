@@ -503,9 +503,9 @@ func (s *Server) sendQueued(it QueuedPrompt, target herdr.AgentInfo) {
 	err := send(ctx, target, queueText(it))
 	if isInputBusy(err) {
 		// Not a failure: the user is typing in that pane. Held, and tried
-		// again every few seconds (typing.go).
+		// again once it clears (typing.go).
 		s.pq.setHeld(it.ID, errInputBusy.Message)
-		s.noteHeld(target.ID)
+		s.noteHeld(target.ID, senderLedger)
 		return
 	}
 	if err == nil {

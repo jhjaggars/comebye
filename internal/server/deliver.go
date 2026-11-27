@@ -94,13 +94,18 @@ func (s *Server) deliverPrompt(ctx context.Context, name, text string) error {
 			if derr == nil {
 				break
 			}
-			if !isInputBusy(derr) {
+			if !isInputBusy(derr) || noTypingWait(ctx) {
 				return derr
 			}
+			key := info.ID
+			if key == "" {
+				key = info.PaneID
+			}
+			retry := s.noteHeld(key, "")
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("not delivered: held while the user is typing in that pane: %w", ctx.Err())
-			case <-time.After(s.typing.poll):
+			case <-retry:
 			}
 		}
 		a, err := s.client.Prompt(ctx, name, text, herdr.PromptOptions{
@@ -146,6 +151,20 @@ func (s *Server) deliverPrompt(ctx context.Context, name, text string) error {
 		}
 	}
 	return fmt.Errorf("the agent did not take it after %d tries: %v", s.briefTries, last)
+}
+
+type noTypingWaitKey struct{}
+
+// withNoTypingWait makes deliverPrompt return the input_busy hold at once
+// instead of waiting in place, for a sender whose retry is the watch pass's
+// (typing.go).
+func withNoTypingWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noTypingWaitKey{}, true)
+}
+
+func noTypingWait(ctx context.Context) bool {
+	v, _ := ctx.Value(noTypingWaitKey{}).(bool)
+	return v
 }
 
 // deliverOrQueue is deliverPrompt, except that a prompt refused because the

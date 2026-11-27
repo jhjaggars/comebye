@@ -616,31 +616,30 @@ func (s *Server) handleCoordinatorReset(w http.ResponseWriter, r *http.Request) 
 
 // ---- the automatic reset ----
 
-// RunReset looks at the coordinators every resetEvery until ctx is done
-// (the hub only; resetTick returns at once elsewhere).
-func (s *Server) RunReset(ctx context.Context) {
-	t := time.NewTicker(resetEvery)
-	defer t.Stop()
-	for {
-		s.resetTick(ctx, time.Now())
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
+// The reset is step 7 of the agent-watch pass (watch.go): resetTick runs at
+// start and every resetEvery, and a reset held because the user was typing
+// in the coordinator's box is tried again (resetDue only) by the held
+// delivery's retry (typing.go).
 
 // resetTick looks at each coordinator's context size (marking its reset due
 // when it is over the threshold) and runs a due reset as soon as the
-// coordinator can take it. The hub only; RunReset calls it every tick.
+// coordinator can take it. The hub only.
 func (s *Server) resetTick(ctx context.Context, now time.Time) {
 	if s.resets == nil || s.cfg.CoordinatorResetTokens <= 0 {
 		return
 	}
-	f := s.resets.get()
 	agents := s.coordinatorAgents()
+	if !s.resetCheck(ctx, now, agents) {
+		return
+	}
+	s.resetDue(ctx, now, agents)
+}
+
+// resetCheck reads each coordinator's context and marks the resets that are
+// due; false when the store could not be written.
+func (s *Server) resetCheck(ctx context.Context, now time.Time, agents []herdr.AgentInfo) bool {
 	{
+		f := s.resets.get()
 		due := map[string]resetDue{}
 		for _, a := range agents {
 			ci, err := s.coordinatorContext(ctx, a)
@@ -668,10 +667,18 @@ func (s *Server) resetTick(ctx context.Context, now time.Time) {
 			}
 		}); err != nil {
 			log.Printf("coordinator reset: %v", err)
-			return
+			return false
 		}
-		f = s.resets.get()
 	}
+	return true
+}
+
+// resetDue runs each due reset whose coordinator can take it now.
+func (s *Server) resetDue(ctx context.Context, now time.Time, agents []herdr.AgentInfo) {
+	if s.resets == nil || s.cfg.CoordinatorResetTokens <= 0 {
+		return
+	}
+	f := s.resets.get()
 	for id, d := range f.Due {
 		var a *herdr.AgentInfo
 		for i := range agents {
@@ -696,19 +703,30 @@ func (s *Server) resetTick(ctx context.Context, now time.Time) {
 		case "below_threshold":
 			// It shrank by itself (a manual compaction): nothing to do.
 			_ = s.resets.update(func(f *resetFile) { delete(f.Due, id) })
+		case "input_busy":
+			// The user is typing in its box: tried again once it clears
+			// (typing.go), not at the next resetEvery.
+			s.noteHeld(id, senderReset)
+			s.resetWhy(id, d, why)
 		case "hook_not_installed", "reset_unsupported":
 			// Will not change by waiting: say so once, and stop.
 			log.Printf("coordinator reset: %s: %s", id, why)
 			_ = s.resets.update(func(f *resetFile) { delete(f.Due, id) })
 		default:
-			if d.Why != why {
-				_ = s.resets.update(func(f *resetFile) {
-					if cur, ok := f.Due[id]; ok {
-						cur.Why = why
-						f.Due[id] = cur
-					}
-				})
-			}
+			s.resetWhy(id, d, why)
 		}
 	}
+}
+
+// resetWhy records why a due reset waits.
+func (s *Server) resetWhy(id string, d resetDue, why string) {
+	if d.Why == why {
+		return
+	}
+	_ = s.resets.update(func(f *resetFile) {
+		if cur, ok := f.Due[id]; ok {
+			cur.Why = why
+			f.Due[id] = cur
+		}
+	})
 }

@@ -158,32 +158,9 @@ func (a *autoTodo) isMuted(id string) bool {
 	return a.muted[id]
 }
 
-// RunAutoTodo follows the fleet and a clock until ctx is done: the clock is
-// what notices that ten minutes passed with no status change.
-func (s *Server) RunAutoTodo(ctx context.Context) {
-	if s.auto == nil || s.todos == nil {
-		return
-	}
-	events, cancel := s.fleet.Hub().Subscribe()
-	defer cancel()
-	tick := time.NewTicker(autoTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-events:
-			if !ok {
-				return
-			}
-			if ev.Type == "agents" {
-				s.autoTodoStep(ctx, ev.Agents, time.Now())
-			}
-		case <-tick.C:
-			s.autoTodoStep(ctx, s.fleet.Agents(), time.Now())
-		}
-	}
-}
+// Auto to-do is step 3 of the agent-watch pass (watch.go): autoTodoStep runs
+// on every fleet update and every autoTick, which is what notices that ten
+// minutes passed with no status change.
 
 // autoSince is when the agent's current status began, as far as known.
 func autoSince(a herdr.AgentInfo) *time.Time {

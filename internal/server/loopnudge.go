@@ -65,10 +65,8 @@ const (
 	// counts as the nudge's own answer; a longer one is real work.
 	loopWorkMax = 2 * time.Minute
 	// loopRetry spaces the attempts to send one message.
-	loopRetry = 30 * time.Second
-	// loopTypingWindow: a pane whose box held text this recently is left alone.
-	loopTypingWindow = 30 * time.Second
-	loopSpecMax      = 200
+	loopRetry   = 30 * time.Second
+	loopSpecMax = 200
 )
 
 // loopMargin is how late a standing loop's pass may be before the hub
@@ -136,7 +134,6 @@ type loopMon struct {
 	// seams, replaced by tests
 	send    func(ctx context.Context, a herdr.AgentInfo, text string) error
 	notify  func(ctx context.Context, e ledger.Entry, text string) (string, error)
-	typing  func(a herdr.AgentInfo) bool
 	workMax time.Duration
 }
 
@@ -148,34 +145,19 @@ func (s *Server) initLoopNudge(after, again time.Duration) {
 		after: after, again: again, m: map[string]*loopSt{}, workMax: min(loopWorkMax, again/2),
 		send: func(ctx context.Context, a herdr.AgentInfo, text string) error {
 			if s.isLocalAgent(a) {
-				_, err := s.deliverOrQueue(ctx, a.ID, a.Name, text)
+				// Held for typing comes back at once (the pass does not
+				// wait in place): the shared retry sends it (typing.go).
+				_, err := s.deliverOrQueue(withNoTypingWait(ctx), a.ID, a.Name, text)
 				return err
 			}
 			return s.promptNotice(ctx, a, text)
 		},
 		notify: s.loopNotifyRequester,
-		typing: func(a herdr.AgentInfo) bool {
-			return s.typing != nil && s.isLocalAgent(a) && s.typing.recentlyBusy(a.PaneID, loopTypingWindow)
-		},
 	}
 }
 
-// RunLoopNudge follows a clock until ctx is done.
-func (s *Server) RunLoopNudge(ctx context.Context) {
-	if s.loops == nil {
-		return
-	}
-	tick := time.NewTicker(loopTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.loopStep(ctx, s.fleet.Agents(), time.Now())
-		}
-	}
-}
+// The loop nudge is step 5 of the agent-watch pass (watch.go): loopStep runs
+// every loopTick.
 
 // loopWatched says whether the clock runs for e: a handoff with a loop whose
 // worker has not said it is done. A worker whose turn ended without a
@@ -256,7 +238,9 @@ func (s *Server) loopNotifyRequester(ctx context.Context, e ledger.Entry, text s
 	if target == nil {
 		return "", nil
 	}
-	return target.ID, s.promptNotice(ctx, *target, text+goneNote(gone))
+	err := s.promptNotice(ctx, *target, text+goneNote(gone))
+	s.heldFor(err, target.ID, senderLoop)
+	return target.ID, err
 }
 
 // loopStep applies one fleet snapshot.
@@ -323,7 +307,7 @@ func (s *Server) loopStep(ctx context.Context, agents []herdr.AgentInfo, now tim
 		st.workFrom = time.Time{}
 		cp := *st
 		l.mu.Unlock()
-		if cp.told || l.typing(a) || now.Sub(cp.tried) < loopRetry {
+		if cp.told || now.Sub(cp.tried) < loopRetry {
 			continue
 		}
 		if every > 0 {
@@ -376,6 +360,11 @@ func (s *Server) loopNudge(ctx context.Context, l *loopMon, e ledger.Entry, a he
 	defer cancel()
 	if err := l.send(sctx, a, loopNudgeText(e, n)); err != nil {
 		s.sent.release(subject)
+		if s.heldFor(err, a.ID, senderLoop) {
+			// Someone is typing in its box: the clock pauses, and the
+			// nudge goes once the box clears (typing.go), not a failed try.
+			return
+		}
 		log.Printf("loop nudge %d to %s (%s): %v", n, e.Branch, a.ID, err)
 		l.mu.Lock()
 		st.tried = now
@@ -405,6 +394,9 @@ func (s *Server) loopTell(ctx context.Context, l *loopMon, e ledger.Entry, idle 
 	to, err := l.notify(sctx, e, loopDeadText(e, idle))
 	if err != nil || to == "" {
 		s.sent.release(subject)
+		if isInputBusy(err) {
+			return // held for typing: loopNotifyRequester noted it (typing.go)
+		}
 		if err != nil {
 			log.Printf("loop dead notice for %s: %v", e.ID, err)
 		}

@@ -326,11 +326,11 @@ func (s *Server) sendCallback(j cbJob, target herdr.AgentInfo, standIn bool, gon
 		s.sent.release(j.subject)
 		if isInputBusy(err) {
 			// The user is typing in that pane: hold the notice and try
-			// again in a few seconds (typing.go); not a failed attempt.
+			// again once it clears (typing.go); not a failed attempt.
 			s.coord.mu.Lock()
 			delete(s.coord.calling, j.key)
 			s.coord.mu.Unlock()
-			s.noteHeld(target.ID)
+			s.noteHeld(target.ID, senderLedger)
 			return
 		}
 		log.Printf("callback for %s to %s: %v", j.key, target.ID, err)

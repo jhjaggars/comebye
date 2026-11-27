@@ -558,25 +558,19 @@ func main() {
 	if *announce {
 		go announceToHub(upstream, localAPI, *hostName, *announceURL)
 	}
-	go srv.RunLedger(context.Background())
+	go srv.RunWatch(context.Background()) // report, quiet, auto to-do, blocked relay, loop nudge, park suggest, reset
 	go srv.RunSweepLoop(context.Background())
 	transcript.DefaultResolver.OpencodeDir = acfg.OpencodeDir
 	go srv.RunUsage(context.Background())
 	go srv.RunOpencodeMirror(context.Background())
-	go srv.RunAutoTodo(context.Background())
 	go srv.RunReleaseSweep(context.Background())
 	go srv.RunRollout(context.Background())
 	go srv.RunAutoRollout(context.Background())
 	go srv.RunProvision(context.Background())
-	go srv.RunBlockedRelay(context.Background())
-	go srv.RunQuiet(context.Background())
-	go srv.RunLoopNudge(context.Background())
-	go srv.RunParkSuggest(context.Background())
 	go srv.RunParkRetention(context.Background())
 	go srv.RunReask(context.Background())
 	go srv.RunRepoHealth(context.Background())
 	go srv.RunScratchPrune(context.Background())
-	go srv.RunReset(context.Background())
 
 	go func() {
 		sig := make(chan os.Signal, 1)

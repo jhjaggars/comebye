@@ -30,6 +30,9 @@ func newLoopRig(t *testing.T, loop string) *loopRig {
 	s.loops.send = func(_ context.Context, a herdr.AgentInfo, text string) error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		if r.typing { // the shared input guard holds it (typing.go)
+			return errInputBusy
+		}
 		r.nudges = append(r.nudges, text)
 		return nil
 	}
@@ -39,7 +42,6 @@ func newLoopRig(t *testing.T, loop string) *loopRig {
 		r.told = append(r.told, text)
 		return "desk/w1:p1", nil
 	}
-	s.loops.typing = func(herdr.AgentInfo) bool { return r.typing }
 	e, err := s.ledger.Add(ledger.Entry{Host: "desk", RepoName: "proj", Branch: "pr-watch", AgentID: "desk/w9:p1", PaneID: "w9:p1", AgentName: "pr-watch", Status: ledger.Running, Loop: loop})
 	if err != nil {
 		t.Fatal(err)

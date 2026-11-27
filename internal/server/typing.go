@@ -35,9 +35,8 @@ const (
 	// typingQuiet is how long the box must stay empty after the user last
 	// had text in it.
 	typingQuiet = 5 * time.Second
-	// typingPoll spaces the retries of held messages: this often, while any
-	// message is held, the hub tries its waiting deliveries again (each
-	// try reads the box).
+	// typingPoll spaces the retries of held messages: while any message is
+	// held, one timer wakes the senders this often (each try reads the box).
 	typingPoll = 2 * time.Second
 	// typingMemory is how long a pane is remembered after the last time a
 	// delivery looked at it.
@@ -68,12 +67,19 @@ func isInputBusy(err error) bool {
 type typingTracker struct {
 	mu     sync.Mutex
 	panes  map[string]*typingPane
-	held   map[string]time.Time // agent id -> last time a delivery was held
-	polls  bool                 // a poller goroutine is running
-	warned map[string]bool      // kinds already logged as unreadable
+	held   map[string]*heldRec // agent id -> its held deliveries
+	timer  *time.Timer         // the one retry wake, armed while anything is held
+	wake   chan struct{}       // closed at each retry: wakes the senders that wait in place
+	warned map[string]bool     // kinds already logged as unreadable
 	quiet  time.Duration
 	poll   time.Duration
 	now    func() time.Time
+}
+
+// heldRec is what was held for one agent.
+type heldRec struct {
+	at      time.Time       // the last time a delivery was held
+	senders map[string]bool // the watch steps that re-send (watch.go)
 }
 
 type typingPane struct {
@@ -83,8 +89,8 @@ type typingPane struct {
 }
 
 func newTypingTracker() *typingTracker {
-	return &typingTracker{panes: map[string]*typingPane{}, held: map[string]time.Time{}, warned: map[string]bool{},
-		quiet: typingQuiet, poll: typingPoll, now: time.Now}
+	return &typingTracker{panes: map[string]*typingPane{}, held: map[string]*heldRec{}, warned: map[string]bool{},
+		wake: make(chan struct{}), quiet: typingQuiet, poll: typingPoll, now: time.Now}
 }
 
 // recentlyBusy reports that the pane's box held text within window (a pane
@@ -187,61 +193,100 @@ func inputBusyError(in dialog.Input) error {
 	return &herdr.Error{Code: "input_busy", Message: "held: the input box in that pane was emptied a moment ago; wait a few seconds, or send anyway"}
 }
 
-// noteHeld records that a delivery to agentID was held because of typing
-// and makes sure held deliveries are retried every typingPoll. The hub
+// One sender path for held messages (#143, slice 3).
+//
+// Everything the hub types into a pane on its own — callbacks, queued
+// prompts, to-do answers, blocked relays, loop nudges, the coordinator
+// reset, and the asks and briefs that wait in place — goes through one
+// typing guard (inputGuard, run by promptAgent and guardPrompt here and by
+// the same code on a peer), and when that guard holds a message the sender
+// calls noteHeld. Each sender keeps its own "send once" tag (the sent
+// claims, a callback's notice key, a to-do's notice state, a relay
+// episode's flags, a loop's spell): a held message is not counted as sent
+// or as a failed try, so it goes once the box clears.
+//
+// The retry is event-driven: no poller runs. noteHeld arms one timer
+// (typingPoll) while anything is held; when it fires, the watch pass
+// (watch.go) re-runs the steps whose messages were held, and every sender
+// waiting in place (promptHeld, a brief) tries again. A fleet update runs
+// the event-driven steps as well. A delivery that is not held again within
+// a few polls has gone out (or stopped waiting), and the timer is not armed
+// again.
+
+// noteHeld records that a delivery to agentID was held because of typing,
+// by the watch step sender ("" for a sender that waits in place), and arms
+// the retry. It returns a channel that is closed at that retry. The hub
 // calls it for panes on any host (a peer's own guard does the check).
-func (s *Server) noteHeld(agentID string) {
+func (s *Server) noteHeld(agentID, sender string) <-chan struct{} {
 	t := s.typing
 	if t == nil {
-		return
+		ch := make(chan struct{})
+		time.AfterFunc(typingPoll, func() { close(ch) })
+		return ch
 	}
 	t.mu.Lock()
-	t.held[agentID] = t.now()
-	start := !t.polls
-	t.polls = true
-	t.mu.Unlock()
-	if start {
-		s.spawn(s.retryHeld)
+	defer t.mu.Unlock()
+	h := t.held[agentID]
+	if h == nil {
+		h = &heldRec{senders: map[string]bool{}}
+		t.held[agentID] = h
 	}
+	h.at = t.now()
+	if sender != "" {
+		h.senders[sender] = true
+	}
+	if t.timer == nil {
+		t.timer = time.AfterFunc(t.poll, s.retryHeld)
+	}
+	return t.wake
 }
 
-// retryHeld re-runs the hub's waiting deliveries every typingPoll while any
-// was recently held, so a message goes out within seconds of the box
-// clearing instead of waiting for the next unrelated fleet update.
+// heldFor calls noteHeld when err is a typing hold, and reports it.
+func (s *Server) heldFor(err error, agentID, sender string) bool {
+	if !isInputBusy(err) {
+		return false
+	}
+	s.noteHeld(agentID, sender)
+	return true
+}
+
+// retryHeld is the retry timer: it wakes the senders of what is held, and
+// arms itself again while anything was held lately.
 func (s *Server) retryHeld() {
 	t := s.typing
-	for {
-		time.Sleep(t.poll)
-		t.mu.Lock()
-		now := t.now()
-		for id, at := range t.held {
-			if now.Sub(at) > 3*t.poll+time.Second { // nothing was held lately: nobody is waiting
-				delete(t.held, id)
-			}
+	t.mu.Lock()
+	t.timer = nil
+	now := t.now()
+	senders := map[string]bool{}
+	for id, h := range t.held {
+		if now.Sub(h.at) > 3*t.poll+time.Second { // nothing was held lately: nobody is waiting
+			delete(t.held, id)
+			continue
 		}
-		if len(t.held) == 0 {
-			t.polls = false
-			t.mu.Unlock()
-			return
+		for k := range h.senders {
+			senders[k] = true
 		}
-		t.mu.Unlock()
-		agents := s.fleet.Agents()
-		s.deliverQueue(agents)
-		if s.ledger != nil {
-			s.deliverCallbacks(agents)
-			s.deliverTodoNotices(agents)
-		}
+		h.senders = map[string]bool{}
+	}
+	close(t.wake)
+	t.wake = make(chan struct{})
+	if len(t.held) > 0 {
+		t.timer = time.AfterFunc(t.poll, s.retryHeld)
+	}
+	t.mu.Unlock()
+	if s.watch == nil {
+		return
+	}
+	for k := range senders {
+		s.watch.request(whyRetry, k)
 	}
 }
 
 // promptHeld is promptAgent that waits out a typing user, for senders with
 // nowhere else to wait (a handoff's brief, a mark's ask, a sweep's notice):
-// it retries until the box is clear or ctx ends, and then reports the hold.
+// it tries again at each retry until the box is clear or ctx ends, and then
+// reports the hold.
 func (s *Server) promptHeld(ctx context.Context, a herdr.AgentInfo, text string) error {
-	poll := typingPoll
-	if s.typing != nil {
-		poll = s.typing.poll
-	}
 	const heldMsg = "held: the user was typing in that pane the whole time and the message was not sent"
 	wasBusy := false
 	for {
@@ -256,10 +301,11 @@ func (s *Server) promptHeld(ctx context.Context, a herdr.AgentInfo, text string)
 			return err
 		}
 		wasBusy = true
+		retry := s.noteHeld(a.ID, "")
 		select {
 		case <-ctx.Done():
 			return errors.New(heldMsg)
-		case <-time.After(poll):
+		case <-retry:
 		}
 	}
 }

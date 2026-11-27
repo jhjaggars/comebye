@@ -670,38 +670,9 @@ func (s *Server) latestOf(ctx context.Context, host, pane string) *transcript.La
 	return s.fleet.FetchLatest(ctx, host, pane)
 }
 
-// RunLedger follows agent updates for the ledger (finished workers) until
-// ctx is done. Ledger reads observe too, so this only makes it prompt.
-func (s *Server) RunLedger(ctx context.Context) {
-	if s.ledger == nil {
-		return
-	}
-	events, cancel := s.fleet.Hub().Subscribe()
-	defer cancel()
-	tick := time.NewTicker(30 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			// Timed work that no fleet update triggers: the look at landed
-			// entries.
-			agents := s.fleet.Agents()
-			s.autoCleanup(agents)
-			if s.autoRemove {
-				s.spawn(func() { s.autoRemoveStep(ctx, time.Now()) })
-			}
-		case ev, ok := <-events:
-			if !ok {
-				return
-			}
-			if ev.Type == "agents" {
-				s.observeLedger(ev.Agents)
-			}
-		}
-	}
-}
+// The ledger's look at the fleet is step 1 of the agent-watch pass
+// (watch.go): observeLedger on every fleet update, auto-clean and auto-remove
+// every 30 s. Ledger reads observe too.
 
 // liveInfo is an entry's agent as the fleet sees it now.
 type liveInfo struct {

@@ -142,22 +142,8 @@ func (s *Server) stampPark(agents []herdr.AgentInfo) {
 	}
 }
 
-// RunParkSuggest follows a clock until ctx is done.
-func (s *Server) RunParkSuggest(ctx context.Context) {
-	if s.parkSug == nil {
-		return
-	}
-	tick := time.NewTicker(parkSugTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.parkSuggestStep(ctx, s.fleet.Agents(), s.parkSug.now())
-		}
-	}
-}
+// Park suggest is step 6 of the agent-watch pass (watch.go):
+// parkSuggestStep runs every parkSugTick.
 
 // parkBlock says why a is not a candidate right now ("" when it is). The
 // worktree check comes after, since it asks the host.

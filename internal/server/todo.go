@@ -1124,9 +1124,17 @@ func (s *Server) deliverTodoNotices(agents []herdr.AgentInfo) {
 			texts = append(texts, g.early...)
 			err := send(ctx, g.target, strings.Join(texts, "\n\n")+goneNote(g.gone))
 			cancel()
-			if err != nil {
+			switch {
+			case s.heldFor(err, g.target.ID, senderLedger):
+				// The user is typing in that pane: not a failed try, and
+				// sent once the box clears (typing.go), not after
+				// callbackRetry.
+				t.mu.Lock()
+				t.last = time.Time{}
+				t.mu.Unlock()
+			case err != nil:
 				t.noticeTried(g.ids)
-			} else {
+			default:
 				// Settled before the guard is released, or a pass between
 				// the two would send the same notice again.
 				t.settleNotices(g.ids, todoNoticeSent)

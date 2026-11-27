@@ -87,22 +87,8 @@ func (s *Server) stampQuiet(agents []herdr.AgentInfo) {
 	}
 }
 
-// RunQuiet follows a clock until ctx is done.
-func (s *Server) RunQuiet(ctx context.Context) {
-	if s.quiet == nil || s.todos == nil {
-		return
-	}
-	tick := time.NewTicker(quietTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			s.quietStep(ctx, s.fleet.Agents(), s.quiet.now())
-		}
-	}
-}
+// The quiet mark is step 2 of the agent-watch pass (watch.go): quietStep
+// runs every quietTick.
 
 func quietKey(id string, since time.Time) string {
 	return SourceQuiet + ":" + id + "@" + since.UTC().Format(time.RFC3339)

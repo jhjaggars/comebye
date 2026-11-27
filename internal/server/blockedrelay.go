@@ -155,30 +155,17 @@ func (s *Server) initBlockedRelay(delay time.Duration) {
 	}
 }
 
-// RunBlockedRelay follows the fleet and a short clock until ctx is done.
-func (s *Server) RunBlockedRelay(ctx context.Context) {
-	if s.relay == nil {
-		return
+// relayLive says the relay has something on a short clock: an agent
+// blocked, or an episode open. The watch pass (watch.go) then wakes it every
+// relayTick, as its own ticker did.
+func (s *Server) relayLive() bool {
+	r := s.relay
+	if r == nil {
+		return false
 	}
-	events, cancel := s.fleet.Hub().Subscribe()
-	defer cancel()
-	tick := time.NewTicker(relayTick)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-events:
-			if !ok {
-				return
-			}
-			if ev.Type == "agents" {
-				s.relayStep(ev.Agents, time.Now())
-			}
-		case <-tick.C:
-			s.relayStep(s.fleet.Agents(), time.Now())
-		}
-	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.eps) > 0 || len(r.dialogs) > 0
 }
 
 // blockedOnOf is the cached blocked-on of an agent, nil unless it is
@@ -486,6 +473,12 @@ func (s *Server) relaySend(ep *relayEp, to herdr.AgentInfo, text string, clearin
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ep.inFlight = false
+	if s.heldFor(err, to.ID, senderRelay) {
+		// The user is typing in the coordinator's box: tried again once it
+		// clears (typing.go), not after relayRetry.
+		ep.tries = time.Time{}
+		return
+	}
 	if err != nil {
 		if !relayQuiet(err) {
 			log.Printf("blocked relay: notice for %s to %s: %v", ep.id, to.ID, err)

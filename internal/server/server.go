@@ -388,6 +388,8 @@ type Server struct {
 	coord      coord
 	// typing holds messages for panes whose user is typing (typing.go).
 	typing *typingTracker
+	// watch is the agent-watch pass (watch.go).
+	watch *watcher
 	// usage counts tokens (usage.go); nil when off.
 	usage *usageState
 
@@ -430,6 +432,7 @@ func New(cfg Config, client *herdr.Client, manager *state.Manager) *Server {
 		s.landTurn = cfg.LandTurnTimeout
 	}
 	s.typing = newTypingTracker()
+	s.watch = newWatcher(s)
 	s.initParkMode(cfg.ParkSuggestAfter, cfg.ParkMode)
 	s.rel = newRelState()
 	s.viewerKey = openViewerKey(cfg.StateDir)
