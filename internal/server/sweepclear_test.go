@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,9 +192,9 @@ func TestCommitLandedUnderAnotherSHA(t *testing.T) {
 // is reported as "host unreachable" within the short per-host wait, the others
 // on the same host are not asked again, and nothing is marked.
 func TestSweepSkipsAnUnreachableHost(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		<-r.Context().Done() // accepts, never answers
 	}))
 	defer hang.Close()
@@ -223,6 +224,9 @@ func TestSweepSkipsAnUnreachableHost(t *testing.T) {
 		if !strings.HasPrefix(it.Reason, hostUnreachable) || it.Marked {
 			t.Errorf("%s: %q marked %v", it.ID, it.Reason, it.Marked)
 		}
+	}
+	if n := calls.Load(); n < 1 || n > 3 {
+		t.Fatalf("the hanging host was asked %d times", n)
 	}
 	if e, _ := s.ledger.ByAgent("stopped/w1:p1"); e.Status != ledger.Finished {
 		t.Fatalf("marked: %s", e.Status)
