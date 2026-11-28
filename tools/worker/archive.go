@@ -289,29 +289,124 @@ func (e *env) archiveOne(ctx context.Context, name string) error {
 	return e.saveSessions(ctx, inst, false)
 }
 
-// archiveAll saves every running worker. It never starts a stopped one: its boot
-// disk still holds the sessions, and starting it would cost money.
+// archiveAll saves every running worker of every worker setup on this machine:
+// the config it was given and each other worker config beside it (see
+// workerSetups). It never starts a stopped worker: its boot disk still holds the
+// sessions, and starting it would cost money.
 func (e *env) archiveAll(ctx context.Context) error {
-	insts, err := e.prov().Instances(ctx)
-	if err != nil {
-		return err
+	setups, notes := e.workerSetups()
+	for _, n := range notes {
+		e.printf("%s\n", n)
 	}
-	var failed []string
-	for _, i := range insts {
-		if i.State != stateRunning {
-			e.printf("%s: %s, skipped\n", i.Name, i.State)
+	save := func(s *env, i Inst) error { return s.archiveOne(ctx, i.Name) }
+	if e.DryRun {
+		save = func(*env, Inst) error { e.printf("  would copy (dry run)\n"); return nil }
+	}
+	return e.archiveSetups(ctx, setups, save)
+}
+
+// setupName is how the output names a setup: its config file's name.
+func setupName(s *env) string {
+	if s.Cfg.path == "" {
+		return s.Cfg.Provider
+	}
+	return filepath.Base(s.Cfg.path) + " (" + s.Cfg.Provider + ")"
+}
+
+// archiveSetups saves the running workers each setup lists. A setup that cannot
+// list its workers (an expired cloud sign-in, a cluster that does not answer) is
+// skipped with one line and the rest still run; so is a worker an earlier setup
+// already listed (two configs for the same cluster list the same VMs). A worker
+// that fails to copy does not stop the others, and makes the run fail at the end.
+func (e *env) archiveSetups(ctx context.Context, setups []*env, save func(*env, Inst) error) error {
+	seen := map[string]bool{}
+	var failed, unlisted []string
+	copied := 0
+	for _, s := range setups {
+		insts, err := s.prov().Instances(ctx)
+		if err != nil {
+			e.printf("%s: skipped, cannot list its workers: %s\n", setupName(s), firstLine(err.Error()))
+			unlisted = append(unlisted, setupName(s))
 			continue
 		}
-		e.printf("%s:\n", i.Name)
-		if err := e.archiveOne(ctx, i.Name); err != nil {
-			e.printf("  failed: %v\n", err)
-			failed = append(failed, i.Name)
+		for _, i := range insts {
+			key := s.Cfg.Provider + "\x00name:" + i.Name
+			if i.ID != "" {
+				key = s.Cfg.Provider + "\x00id:" + i.ID
+			}
+			if seen[key] {
+				continue // copied (or tried) under an earlier setup
+			}
+			seen[key] = true
+			if i.State != stateRunning {
+				e.printf("%s: %s, skipped\n", i.Name, i.State)
+				continue
+			}
+			e.printf("%s:\n", i.Name)
+			if err := save(s, i); err != nil {
+				e.printf("  failed: %v\n", err)
+				failed = append(failed, i.Name)
+				continue
+			}
+			copied++
 		}
 	}
+	// The last line is what the server's log shows of a run that succeeded.
+	verb := "copied"
+	if e.DryRun {
+		verb = "to copy (dry run)"
+	}
+	sum := fmt.Sprintf("archive --all: %d workers %s from %d setups", copied, verb, len(setups))
+	if len(unlisted) > 0 {
+		sum += "; could not list: " + strings.Join(unlisted, ", ")
+	}
+	e.printf("%s\n", sum)
 	if len(failed) > 0 {
 		return fmt.Errorf("could not archive: %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// workerSetups is e's own setup followed by each other worker config in its
+// config's directory: a file named config (the default) or *.conf that sets
+// provider= and loads as a worker config. Backups (*.bak*) and the directory's other files (keys,
+// kubeconfigs, test-pool files) are not configs and are passed over; a *.conf
+// that does not load is reported in notes and skipped.
+func (e *env) workerSetups() (setups []*env, notes []string) {
+	setups = []*env{e}
+	if e.Cfg.path == "" {
+		return setups, nil
+	}
+	self, _ := filepath.Abs(e.Cfg.path)
+	dir := filepath.Dir(self)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return setups, []string{fmt.Sprintf("other worker configs: %v", err)}
+	}
+	for _, d := range ents {
+		n := d.Name()
+		p := filepath.Join(dir, n)
+		if p == self || !d.Type().IsRegular() || !isWorkerConfigName(n) {
+			continue
+		}
+		if kv, err := parseKV(p); err != nil || kv["provider"] == "" {
+			continue // not a worker config
+		}
+		c, err := LoadConfig(p)
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("%s: skipped, %s", n, firstLine(err.Error())))
+			continue
+		}
+		s := *e
+		s.Cfg, s.P, s.stages, s.Events = c, nil, nil, nil
+		setups = append(setups, &s)
+	}
+	return setups, notes
+}
+
+// isWorkerConfigName: config (the default's name) or *.conf, and not a backup.
+func isWorkerConfigName(n string) bool {
+	return n == "config" || strings.HasSuffix(n, ".conf") && !strings.HasPrefix(n, ".") && !strings.Contains(n, ".bak")
 }
 
 // ---- destroy ----

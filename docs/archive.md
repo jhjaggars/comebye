@@ -318,7 +318,7 @@ loop that also sweeps, archives finished work, parks and prunes; see
   `git` is not installed). Peers do not index;
 - with `-archive-workers` (`COMEBYE_ARCHIVE_WORKERS=1`), hourly, it pulls the worker
   VMs' sessions, as `comebye-worker archive --all` does, on the machine that runs
-  the workers ([workers.md](workers.md#sessions-and-the-archive)).
+  the workers, for every worker config there (the default and each `*.conf`) ([workers.md](workers.md#sessions-and-the-archive)).
 
 Each is a child `comebye archive` (or `comebye-worker`) process with the server's
 archive settings, run under `nice -n 10` (and `ionice -c 3` where it exists) with a

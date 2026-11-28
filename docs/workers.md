@@ -24,7 +24,7 @@ go run ./tools/worker <command>      # or: go build -o ~/.local/bin/comebye-work
 | `create NAME [--dry-run] [--comebye-version vX.Y.Z] [--spec FILE\|-] [--events]` | Builds the VM, enrols it, bootstraps it, waits for the hub. Safe to re-run: it resumes where it stopped and never mints a second key for a node that is already enrolled. `--dry-run` prints the plan and touches nothing. `--spec` and `--events` are for a caller that is a program: see [Driving the tool from a program](#driving-the-tool-from-a-program). |
 | `status [NAME]` | One worker: GCE state, tailnet address, comebye version and units, the tailnet device, the hub's view (with a version-mismatch warning). Without a name: every labelled instance and disk and every `tag:worker` device. |
 | `stop NAME` / `start NAME` | Stop or start the VM. The tailnet node and the hub's peer entry stay (the hub shows it unreachable). `start` re-reads the host key from GCE (the external IP changes) and waits for comebye. |
-| `archive NAME` / `archive --all` | Copies a running worker's sessions to the transcript archive, and verifies them. Safe to repeat, and leaves the agents running. `--all` covers every running worker and skips stopped ones. See [Sessions and the archive](#sessions-and-the-archive). |
+| `archive NAME` / `archive --all` | Copies a running worker's sessions to the transcript archive, and verifies them. Safe to repeat, and leaves the agents running. `--all` covers every running worker of every worker setup on this machine (below) and skips stopped ones; `--all --dry-run` lists them and copies nothing. See [Sessions and the archive](#sessions-and-the-archive). |
 | `destroy NAME [--delete-data-disk] [--no-archive] [--yes]` | Asks you to type the name (`--yes`: the caller has already confirmed, so it does not ask). Saves the worker's sessions to the archive, and **refuses** if it cannot. Then signs the agents out, `tailscale logout`, deletes the tailnet device (only one with the exact hostname **and** the tag), removes the hub's peer entry, deletes the VM. The data disk is kept unless you pass the flag. `--no-archive` skips the save, and the sessions are lost. |
 | `preflight [--json]` | Read-only. Are the credentials this config needs usable: `aws`, `gcp`, `tailnet`, `openshell`, `ssh`, each `ok`, `missing`, `expired` or `error` with a one-line note (a profile or gateway name, never a key, token or account id). |
 | `catalog [--kind aws] [--region R] [--families f1,f2] [--types t1,t2] [--score t1,t2] [--refresh] [--json]` | Read-only. The instance table: vCPU, memory, arch, GPUs, spot price per zone, on-demand price, AWS Spot Advisor interruption band, and an estimate (price + $0.005/h IPv4 + disks at $0.08/GB-month). Arm rows are listed but `selectable: false`. See [Prices](#prices-and-the-read-only-commands). |
@@ -690,6 +690,17 @@ the bucket, and not the hub, because the hub has no ssh access to the workers an
 worker's archive host belongs to the machine that first uploaded it. An older install
 ran the same command from `comebye-worker-archive.timer`; disable it once the server
 does it (`systemctl --user disable --now comebye-worker-archive.timer`).
+
+`archive --all` goes through every worker setup on the machine, not just the config
+it is given: that config, then each other worker config in the same directory
+(`config`, the default, and every `*.conf`, such as `kubevirt.conf` or a per-VM
+`kv-NAME.conf`, that sets `provider=`). Backups (`*.bak*`) and the directory's other
+files (keys, kubeconfigs, `test-pool`) are passed over. A setup that cannot list its
+workers, such as an expired AWS sign-in, is skipped with one line and the others are
+still copied; a worker two configs both list (two configs for one cluster) is copied
+once. A running worker that fails to copy, such as one whose ssh is down, does not
+stop the rest, and makes the run end with an error naming it. The last line is a
+summary, which is what the server's log shows of a run that succeeded.
 
 Each run sends the whole session directory, compressed, from every running worker.
 On AWS, at $0.09/GB egress, a worker with 200 MB of sessions costs about $0.09 a day

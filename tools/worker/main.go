@@ -34,9 +34,11 @@ Commands:
   status [NAME]       one worker, or (no NAME) every worker, disk and tagged node
   stop NAME           stop the VM; the tailnet node and peer entry stay
   start NAME          start it again and re-verify
-  archive NAME | --all
+  archive NAME | --all [--dry-run]
         copy a running worker's sessions to the transcript archive (--all: every
-        running worker; stopped ones are skipped)
+        running worker of every worker config in the config's directory, the
+        default config and each *.conf; stopped ones are skipped; --dry-run
+        lists them and copies nothing)
   destroy NAME [--delete-data-disk] [--no-archive] [--yes] [--events]
         asks you to type NAME (--yes: the caller has confirmed, do not ask); saves the sessions to the archive, then removes the
         VM, tailnet node and hub peer entry. It refuses if the sessions cannot be
@@ -150,7 +152,7 @@ func run(args []string, e *env) int {
 
 	cf := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	cf.SetOutput(e.Err)
-	dry := cf.Bool("dry-run", false, "create: print the plan only")
+	dry := cf.Bool("dry-run", false, "create: print the plan only; archive --all: list what it would copy")
 	ver := cf.String("comebye-version", "", "create: a release tag instead of the hub's version")
 	delData := cf.Bool("delete-data-disk", false, "destroy: also delete the data disk")
 	prune := cf.Bool("prune", false, "keys: delete worker keys whose VM is gone")
@@ -267,8 +269,8 @@ func run(args []string, e *env) int {
 	}
 	e.Cfg = cfg
 	e.DryRun = *dry
-	if *dry && cmd != "create" {
-		fmt.Fprintln(e.Err, "worker: --dry-run is only for create")
+	if *dry && cmd != "create" && !(cmd == "archive" && *all) {
+		fmt.Fprintln(e.Err, "worker: --dry-run is only for create and archive --all")
 		return 2
 	}
 

@@ -715,3 +715,137 @@ func TestGCEInstanceIDIsTheCloudsNotTheName(t *testing.T) {
 		t.Errorf("created = %v", i.Created)
 	}
 }
+
+// fakeSetupProv is a provider that only lists.
+type fakeSetupProv struct {
+	Provider
+	list []Inst
+	err  error
+}
+
+func (f fakeSetupProv) Instances(context.Context) ([]Inst, error) { return f.list, f.err }
+
+func fakeSetup(e *env, path, provider string, p Provider) *env {
+	s := *e
+	s.Cfg = &Config{Provider: provider, path: path}
+	s.P = p
+	return &s
+}
+
+func TestArchiveAllEverySetup(t *testing.T) {
+	var out strings.Builder
+	e := &env{Out: &out, Err: &out}
+	aws := fakeSetup(e, "/x/config", "aws", fakeSetupProv{list: []Inst{{Name: "a1", ID: "i-1", State: stateRunning}, {Name: "a2", ID: "i-2", State: stateStopped}}})
+	kv := fakeSetup(e, "/x/kubevirt.conf", "kubevirt", fakeSetupProv{list: []Inst{{Name: "kv-etna", ID: "u-1", State: stateRunning}, {Name: "kv-zetta", ID: "u-2", State: stateRunning}}})
+	// A second config for the same cluster lists the same VMs: each is copied once.
+	kv2 := fakeSetup(e, "/x/kv-etna.conf", "kubevirt", fakeSetupProv{list: []Inst{{Name: "kv-etna", ID: "u-1", State: stateRunning}, {Name: "kv-zetta", ID: "u-2", State: stateRunning}}})
+	var got []string
+	save := func(s *env, i Inst) error { got = append(got, s.Cfg.Provider+"/"+i.Name); return nil }
+	if err := e.archiveSetups(context.Background(), []*env{aws, kv, kv2}, save); err != nil {
+		t.Fatalf("%v\n%s", err, &out)
+	}
+	if want := "aws/a1,kubevirt/kv-etna,kubevirt/kv-zetta"; strings.Join(got, ",") != want {
+		t.Errorf("copied %v, want %s\n%s", got, want, &out)
+	}
+	if !strings.Contains(out.String(), "a2: STOPPED, skipped") || !strings.HasSuffix(out.String(), "archive --all: 3 workers copied from 3 setups\n") {
+		t.Errorf("%s", &out)
+	}
+	// The same name under another provider is another VM.
+	got = nil
+	gcp := fakeSetup(e, "/x/gcp.conf", "gcp", fakeSetupProv{list: []Inst{{Name: "kv-etna", ID: "u-1", State: stateRunning}}})
+	if err := e.archiveSetups(context.Background(), []*env{kv, gcp}, save); err != nil || len(got) != 3 {
+		t.Errorf("%v %v", err, got)
+	}
+}
+
+func TestArchiveAllSkipsASetupThatCannotList(t *testing.T) {
+	var out strings.Builder
+	e := &env{Out: &out, Err: &out}
+	aws := fakeSetup(e, "/x/config", "aws", fakeSetupProv{err: errors.New("the SSO session has expired\naws sso login")})
+	kv := fakeSetup(e, "/x/kubevirt.conf", "kubevirt", fakeSetupProv{list: []Inst{{Name: "kv-etna", ID: "u-1", State: stateRunning}, {Name: "kv-down", ID: "u-3", State: stateRunning}}})
+	var got []string
+	save := func(s *env, i Inst) error {
+		if i.Name == "kv-down" {
+			return errors.New("ssh: connection timed out")
+		}
+		got = append(got, i.Name)
+		return nil
+	}
+	err := e.archiveSetups(context.Background(), []*env{aws, kv}, save)
+	if strings.Join(got, ",") != "kv-etna" {
+		t.Errorf("copied %v\n%s", got, &out)
+	}
+	if !strings.Contains(out.String(), "config (aws): skipped, cannot list its workers: the SSO session has expired\n") || strings.Contains(out.String(), "aws sso login") {
+		t.Errorf("not one short line:\n%s", &out)
+	}
+	// The VM that failed is reported; the setup that could not list is not a failure.
+	if err == nil || !strings.Contains(err.Error(), "kv-down") || strings.Contains(err.Error(), "aws") {
+		t.Errorf("err = %v", err)
+	}
+	if !strings.Contains(out.String(), "1 workers copied from 2 setups; could not list: config (aws)") {
+		t.Errorf("%s", &out)
+	}
+	got = nil
+	if err := e.archiveSetups(context.Background(), []*env{aws, fakeSetup(e, "/x/b.conf", "kubevirt", fakeSetupProv{list: []Inst{{Name: "kv-etna", ID: "u-1", State: stateRunning}}})}, save); err != nil || len(got) != 1 {
+		t.Errorf("an unlisted setup failed the run: %v %v", err, got)
+	}
+}
+
+func TestWorkerSetupsReadsOnlyWorkerConfigs(t *testing.T) {
+	dir := t.TempDir()
+	write := func(n, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := "ts_allow_login=a@b.co\nhub_url=https://h.t.ts.net\nhub_peer_url=https://h.t.ts.net\n"
+	kvConf := "provider=kubevirt\n" + base
+	write("config", "provider=aws\naws_region=us-east-1\naws_az=us-east-1a\nssh_source_cidr=198.51.100.1/32\n"+base)
+	write("kubevirt.conf", kvConf)
+	write("kv-etna.conf", kvConf)
+	write("kubevirt.conf.bak-20261121-idle30", kvConf)
+	write("kv-old.bak.conf", kvConf)
+	write(".hidden.conf", kvConf)
+	write("kubeconfig-worker-tool", "apiVersion: v1\nkind: Config\n")
+	write("test-pool", "prometheus=http://x\n")
+	write("test-vm", "host=x\nworker_config=kv-etna.conf\n")
+	write("tailscale-oauth", "secret\n")
+	write("notes.conf", "just=text\n")          // no provider: not a worker config
+	write("broken.conf", "provider=nonsense\n") // a config that does not load
+	if err := os.Mkdir(filepath.Join(dir, "dir.conf"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(filepath.Join(dir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &env{Cfg: c}
+	setups, notes := e.workerSetups()
+	var names []string
+	for _, s := range setups {
+		names = append(names, filepath.Base(s.Cfg.path)+"="+s.Cfg.Provider)
+	}
+	if want := "config=aws,kubevirt.conf=kubevirt,kv-etna.conf=kubevirt"; strings.Join(names, ",") != want {
+		t.Errorf("setups %v, want %s", names, want)
+	}
+	if setups[0] != e {
+		t.Error("the given setup is not first")
+	}
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "broken.conf: skipped") {
+		t.Errorf("notes %q", notes)
+	}
+	// Run from a sibling it is the same set, with that one first.
+	c2, err := LoadConfig(filepath.Join(dir, "kubevirt.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := (&env{Cfg: c2}).workerSetups()
+	names = nil
+	for _, s := range s2 {
+		names = append(names, filepath.Base(s.Cfg.path))
+	}
+	if strings.Join(names, ",") != "kubevirt.conf,config,kv-etna.conf" {
+		t.Errorf("from a sibling: %v", names)
+	}
+}
